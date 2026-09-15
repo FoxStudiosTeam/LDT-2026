@@ -1,0 +1,29 @@
+// generated from rosidl_adapter/resource/srv.idl.em
+// with input from rosbag2_interfaces/srv/Play.srv
+// generated code does not contain a copyright notice
+
+#include "builtin_interfaces/msg/Duration.idl"
+#include "builtin_interfaces/msg/Time.idl"
+
+module rosbag2_interfaces {
+  module srv {
+    @verbatim (language="comment", text=
+      "See rosbag2_transport::PlayOptions::start_offset")
+    struct Play_Request {
+      builtin_interfaces::msg::Time start_offset;
+
+      @verbatim (language="comment", text=
+        "See rosbag2_transport::PlayOptions::playback_duration")
+      builtin_interfaces::msg::Duration playback_duration;
+
+      @verbatim (language="comment", text=
+        "See rosbag2_transport::PlayOptions::playback_until_timestamp")
+      builtin_interfaces::msg::Time playback_until_timestamp;
+    };
+    @verbatim (language="comment", text=
+      "returns false when another playback execution is running, otherwise true")
+    struct Play_Response {
+      boolean success;
+    };
+  };
+};

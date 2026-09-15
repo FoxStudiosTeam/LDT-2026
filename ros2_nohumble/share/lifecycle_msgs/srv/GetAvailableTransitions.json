@@ -1,0 +1,299 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "lifecycle_msgs/srv/GetAvailableTransitions",
+      "fields": [
+        {
+          "name": "request_message",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "lifecycle_msgs/srv/GetAvailableTransitions_Request"
+          },
+          "default_value": ""
+        },
+        {
+          "name": "response_message",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "lifecycle_msgs/srv/GetAvailableTransitions_Response"
+          },
+          "default_value": ""
+        },
+        {
+          "name": "event_message",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "lifecycle_msgs/srv/GetAvailableTransitions_Event"
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": [
+      {
+        "type_name": "builtin_interfaces/msg/Time",
+        "fields": [
+          {
+            "name": "sec",
+            "type": {
+              "type_id": 6,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "nanosec",
+            "type": {
+              "type_id": 7,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "lifecycle_msgs/msg/State",
+        "fields": [
+          {
+            "name": "id",
+            "type": {
+              "type_id": 3,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "label",
+            "type": {
+              "type_id": 17,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "lifecycle_msgs/msg/Transition",
+        "fields": [
+          {
+            "name": "id",
+            "type": {
+              "type_id": 3,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "label",
+            "type": {
+              "type_id": 17,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "lifecycle_msgs/msg/TransitionDescription",
+        "fields": [
+          {
+            "name": "transition",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "lifecycle_msgs/msg/Transition"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "start_state",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "lifecycle_msgs/msg/State"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "goal_state",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "lifecycle_msgs/msg/State"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "lifecycle_msgs/srv/GetAvailableTransitions_Event",
+        "fields": [
+          {
+            "name": "info",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "service_msgs/msg/ServiceEventInfo"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "request",
+            "type": {
+              "type_id": 97,
+              "capacity": 1,
+              "string_capacity": 0,
+              "nested_type_name": "lifecycle_msgs/srv/GetAvailableTransitions_Request"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "response",
+            "type": {
+              "type_id": 97,
+              "capacity": 1,
+              "string_capacity": 0,
+              "nested_type_name": "lifecycle_msgs/srv/GetAvailableTransitions_Response"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "lifecycle_msgs/srv/GetAvailableTransitions_Request",
+        "fields": [
+          {
+            "name": "structure_needs_at_least_one_member",
+            "type": {
+              "type_id": 3,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "lifecycle_msgs/srv/GetAvailableTransitions_Response",
+        "fields": [
+          {
+            "name": "available_transitions",
+            "type": {
+              "type_id": 145,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "lifecycle_msgs/msg/TransitionDescription"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "service_msgs/msg/ServiceEventInfo",
+        "fields": [
+          {
+            "name": "event_type",
+            "type": {
+              "type_id": 3,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "stamp",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "builtin_interfaces/msg/Time"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "client_gid",
+            "type": {
+              "type_id": 51,
+              "capacity": 16,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "sequence_number",
+            "type": {
+              "type_id": 8,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      }
+    ]
+  },
+  "type_hashes": [
+    {
+      "type_name": "lifecycle_msgs/srv/GetAvailableTransitions",
+      "hash_string": "RIHS01_59b7ecefce0982a8a844b9f2c4f14764c1c4543cc55e72924e2aa4adad83e9bc"
+    },
+    {
+      "type_name": "builtin_interfaces/msg/Time",
+      "hash_string": "RIHS01_b106235e25a4c5ed35098aa0a61a3ee9c9b18d197f398b0e4206cea9acf9c197"
+    },
+    {
+      "type_name": "lifecycle_msgs/msg/State",
+      "hash_string": "RIHS01_dd2d02b82f3ebc858e53c431b1e6e91f3ffc71436fc81d0715214ac6ee2107a0"
+    },
+    {
+      "type_name": "lifecycle_msgs/msg/Transition",
+      "hash_string": "RIHS01_c65d7b31ea134cba4f54fc867b817979be799f7452035cd35fac9b7421fb3424"
+    },
+    {
+      "type_name": "lifecycle_msgs/msg/TransitionDescription",
+      "hash_string": "RIHS01_c5f1cd4bb1ad2ba0e3329d4ac7015c52a674a72c1faf7974c37a33f4f6048b28"
+    },
+    {
+      "type_name": "lifecycle_msgs/srv/GetAvailableTransitions_Event",
+      "hash_string": "RIHS01_188e7de007993da873cc247d52906151b38346fdb72a4cc5f78c407c3b5b370f"
+    },
+    {
+      "type_name": "lifecycle_msgs/srv/GetAvailableTransitions_Request",
+      "hash_string": "RIHS01_52a73c0b5d7489bee0df6ddb0aec45c41289d223ff225b58fe11d859ac8109a6"
+    },
+    {
+      "type_name": "lifecycle_msgs/srv/GetAvailableTransitions_Response",
+      "hash_string": "RIHS01_4711339461aadf02bcfff797a198de911f885074bd3f2fe9f7b677ef87f0741c"
+    },
+    {
+      "type_name": "service_msgs/msg/ServiceEventInfo",
+      "hash_string": "RIHS01_41bcbbe07a75c9b52bc96bfd5c24d7f0fc0a08c0cb7921b3373c5732345a6f45"
+    }
+  ]
+}

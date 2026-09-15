@@ -1,0 +1,522 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "turtlesim_msgs/action/RotateAbsolute",
+      "fields": [
+        {
+          "name": "goal",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "turtlesim_msgs/action/RotateAbsolute_Goal"
+          },
+          "default_value": ""
+        },
+        {
+          "name": "result",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "turtlesim_msgs/action/RotateAbsolute_Result"
+          },
+          "default_value": ""
+        },
+        {
+          "name": "feedback",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "turtlesim_msgs/action/RotateAbsolute_Feedback"
+          },
+          "default_value": ""
+        },
+        {
+          "name": "send_goal_service",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "turtlesim_msgs/action/RotateAbsolute_SendGoal"
+          },
+          "default_value": ""
+        },
+        {
+          "name": "get_result_service",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "turtlesim_msgs/action/RotateAbsolute_GetResult"
+          },
+          "default_value": ""
+        },
+        {
+          "name": "feedback_message",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "turtlesim_msgs/action/RotateAbsolute_FeedbackMessage"
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": [
+      {
+        "type_name": "builtin_interfaces/msg/Time",
+        "fields": [
+          {
+            "name": "sec",
+            "type": {
+              "type_id": 6,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "nanosec",
+            "type": {
+              "type_id": 7,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "service_msgs/msg/ServiceEventInfo",
+        "fields": [
+          {
+            "name": "event_type",
+            "type": {
+              "type_id": 3,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "stamp",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "builtin_interfaces/msg/Time"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "client_gid",
+            "type": {
+              "type_id": 51,
+              "capacity": 16,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "sequence_number",
+            "type": {
+              "type_id": 8,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "turtlesim_msgs/action/RotateAbsolute_Feedback",
+        "fields": [
+          {
+            "name": "remaining",
+            "type": {
+              "type_id": 10,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "turtlesim_msgs/action/RotateAbsolute_FeedbackMessage",
+        "fields": [
+          {
+            "name": "goal_id",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "unique_identifier_msgs/msg/UUID"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "feedback",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "turtlesim_msgs/action/RotateAbsolute_Feedback"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "turtlesim_msgs/action/RotateAbsolute_GetResult",
+        "fields": [
+          {
+            "name": "request_message",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "turtlesim_msgs/action/RotateAbsolute_GetResult_Request"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "response_message",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "turtlesim_msgs/action/RotateAbsolute_GetResult_Response"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "event_message",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "turtlesim_msgs/action/RotateAbsolute_GetResult_Event"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "turtlesim_msgs/action/RotateAbsolute_GetResult_Event",
+        "fields": [
+          {
+            "name": "info",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "service_msgs/msg/ServiceEventInfo"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "request",
+            "type": {
+              "type_id": 97,
+              "capacity": 1,
+              "string_capacity": 0,
+              "nested_type_name": "turtlesim_msgs/action/RotateAbsolute_GetResult_Request"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "response",
+            "type": {
+              "type_id": 97,
+              "capacity": 1,
+              "string_capacity": 0,
+              "nested_type_name": "turtlesim_msgs/action/RotateAbsolute_GetResult_Response"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "turtlesim_msgs/action/RotateAbsolute_GetResult_Request",
+        "fields": [
+          {
+            "name": "goal_id",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "unique_identifier_msgs/msg/UUID"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "turtlesim_msgs/action/RotateAbsolute_GetResult_Response",
+        "fields": [
+          {
+            "name": "status",
+            "type": {
+              "type_id": 2,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "result",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "turtlesim_msgs/action/RotateAbsolute_Result"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "turtlesim_msgs/action/RotateAbsolute_Goal",
+        "fields": [
+          {
+            "name": "theta",
+            "type": {
+              "type_id": 10,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "turtlesim_msgs/action/RotateAbsolute_Result",
+        "fields": [
+          {
+            "name": "delta",
+            "type": {
+              "type_id": 10,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "turtlesim_msgs/action/RotateAbsolute_SendGoal",
+        "fields": [
+          {
+            "name": "request_message",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "turtlesim_msgs/action/RotateAbsolute_SendGoal_Request"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "response_message",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "turtlesim_msgs/action/RotateAbsolute_SendGoal_Response"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "event_message",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "turtlesim_msgs/action/RotateAbsolute_SendGoal_Event"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "turtlesim_msgs/action/RotateAbsolute_SendGoal_Event",
+        "fields": [
+          {
+            "name": "info",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "service_msgs/msg/ServiceEventInfo"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "request",
+            "type": {
+              "type_id": 97,
+              "capacity": 1,
+              "string_capacity": 0,
+              "nested_type_name": "turtlesim_msgs/action/RotateAbsolute_SendGoal_Request"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "response",
+            "type": {
+              "type_id": 97,
+              "capacity": 1,
+              "string_capacity": 0,
+              "nested_type_name": "turtlesim_msgs/action/RotateAbsolute_SendGoal_Response"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "turtlesim_msgs/action/RotateAbsolute_SendGoal_Request",
+        "fields": [
+          {
+            "name": "goal_id",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "unique_identifier_msgs/msg/UUID"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "goal",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "turtlesim_msgs/action/RotateAbsolute_Goal"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "turtlesim_msgs/action/RotateAbsolute_SendGoal_Response",
+        "fields": [
+          {
+            "name": "accepted",
+            "type": {
+              "type_id": 15,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "stamp",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "builtin_interfaces/msg/Time"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "unique_identifier_msgs/msg/UUID",
+        "fields": [
+          {
+            "name": "uuid",
+            "type": {
+              "type_id": 51,
+              "capacity": 16,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      }
+    ]
+  },
+  "type_hashes": [
+    {
+      "type_name": "turtlesim_msgs/action/RotateAbsolute",
+      "hash_string": "RIHS01_18617e6b742158766b7a9a14938f06be93e499368904e91955b75e8bcc1b0fcf"
+    },
+    {
+      "type_name": "builtin_interfaces/msg/Time",
+      "hash_string": "RIHS01_b106235e25a4c5ed35098aa0a61a3ee9c9b18d197f398b0e4206cea9acf9c197"
+    },
+    {
+      "type_name": "service_msgs/msg/ServiceEventInfo",
+      "hash_string": "RIHS01_41bcbbe07a75c9b52bc96bfd5c24d7f0fc0a08c0cb7921b3373c5732345a6f45"
+    },
+    {
+      "type_name": "turtlesim_msgs/action/RotateAbsolute_Feedback",
+      "hash_string": "RIHS01_723543631aa0eb39a542d5d1a99972b4111db0640add8466ba6673f4f52289d8"
+    },
+    {
+      "type_name": "turtlesim_msgs/action/RotateAbsolute_FeedbackMessage",
+      "hash_string": "RIHS01_bef10993e1ee82b35f99f7e390bac1e6cc64e2a3090536887832e122aa71f1b5"
+    },
+    {
+      "type_name": "turtlesim_msgs/action/RotateAbsolute_GetResult",
+      "hash_string": "RIHS01_f96fd02477be2a47122fca142e960d407b24850c6eac72047872ba764473c4ef"
+    },
+    {
+      "type_name": "turtlesim_msgs/action/RotateAbsolute_GetResult_Event",
+      "hash_string": "RIHS01_4e34014b751bda9b34b921bfd0f242c31a91a5ebf378a99704d39f552e034a08"
+    },
+    {
+      "type_name": "turtlesim_msgs/action/RotateAbsolute_GetResult_Request",
+      "hash_string": "RIHS01_efccd5921a60b310f4478c72671a377435e2cbed479b9c515a8b3d855f0ed672"
+    },
+    {
+      "type_name": "turtlesim_msgs/action/RotateAbsolute_GetResult_Response",
+      "hash_string": "RIHS01_507ee2311b20d79b9a692bf4a445d09a575ea48cf3b032adc2cf050c0bf344e1"
+    },
+    {
+      "type_name": "turtlesim_msgs/action/RotateAbsolute_Goal",
+      "hash_string": "RIHS01_fd5e33ea83e08981c70c771972b70bd9b8fc70c6dcc4220f7af9bedde3322208"
+    },
+    {
+      "type_name": "turtlesim_msgs/action/RotateAbsolute_Result",
+      "hash_string": "RIHS01_5ed906c975a8755df7f9bfb5677839187d8deccfe8d24ef322aeafbe5d31aab2"
+    },
+    {
+      "type_name": "turtlesim_msgs/action/RotateAbsolute_SendGoal",
+      "hash_string": "RIHS01_3d5d3cfcbb721f88038eaedcd4af95565360a82b36f1983e3a6c7448d2d18fbe"
+    },
+    {
+      "type_name": "turtlesim_msgs/action/RotateAbsolute_SendGoal_Event",
+      "hash_string": "RIHS01_ad0e9810d681663abccd4d8c98815460f8e35429a45c6923ea05fe360750e589"
+    },
+    {
+      "type_name": "turtlesim_msgs/action/RotateAbsolute_SendGoal_Request",
+      "hash_string": "RIHS01_9367b1fe39a0185483576a14d5d467bcfabd771ae4c493a42a00d01d35b0fbde"
+    },
+    {
+      "type_name": "turtlesim_msgs/action/RotateAbsolute_SendGoal_Response",
+      "hash_string": "RIHS01_7d8bf70acfef5b46a372455f1878d51fe2278ffd4c5c99bcca4c6c4490721a64"
+    },
+    {
+      "type_name": "unique_identifier_msgs/msg/UUID",
+      "hash_string": "RIHS01_1b8e8aca958cbea28fe6ef60bf6c19b683c97a9ef60bb34752067d0f2f7ab437"
+    }
+  ]
+}

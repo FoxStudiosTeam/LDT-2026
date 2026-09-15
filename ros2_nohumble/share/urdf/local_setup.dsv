@@ -1,0 +1,4 @@
+source;share/urdf/environment/ament_prefix_path.bat
+source;share/urdf/environment/path.bat
+source;share/urdf/environment/ament_prefix_path.dsv
+source;share/urdf/environment/path.dsv

@@ -1,0 +1,36 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "visualization_msgs/msg/MeshFile",
+      "fields": [
+        {
+          "name": "filename",
+          "type": {
+            "type_id": 17,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        },
+        {
+          "name": "data",
+          "type": {
+            "type_id": 147,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": []
+  },
+  "type_hashes": [
+    {
+      "type_name": "visualization_msgs/msg/MeshFile",
+      "hash_string": "RIHS01_7710ece15a148fb7c9b546364cfb215bb06098087bd6394fe5b73a493508f8c4"
+    }
+  ]
+}

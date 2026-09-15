@@ -1,0 +1,6 @@
+source;share/composition_interfaces/environment/ament_prefix_path.bat
+source;share/composition_interfaces/environment/path.bat
+source;share/composition_interfaces/environment/pythonpath.bat
+source;share/composition_interfaces/environment/ament_prefix_path.dsv
+source;share/composition_interfaces/environment/path.dsv
+source;share/composition_interfaces/environment/pythonpath.dsv

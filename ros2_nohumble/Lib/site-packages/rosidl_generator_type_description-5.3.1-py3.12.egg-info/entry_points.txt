@@ -1,0 +1,2 @@
+[rosidl_cli.command.hash.extensions]
+type_description = rosidl_generator_type_description.cli:HashTypeDescription

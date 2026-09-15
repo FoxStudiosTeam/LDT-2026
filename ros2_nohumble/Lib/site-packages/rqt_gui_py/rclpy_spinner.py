@@ -1,0 +1,64 @@
+# Copyright (c) 2018, PickNik Consulting
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+#
+#   * Redistributions of source code must retain the above copyright
+#     notice, this list of conditions and the following disclaimer.
+#   * Redistributions in binary form must reproduce the above
+#     copyright notice, this list of conditions and the following
+#     disclaimer in the documentation and/or other materials provided
+#     with the distribution.
+#   * Neither the name of the copyright holder nor the names of its
+#     contributors may be used to endorse or promote products derived
+#     from this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+# FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+# COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+# INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+# BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+# LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+# ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
+
+from python_qt_binding.QtCore import qDebug, QThread
+import rclpy
+from rclpy.executors import MultiThreadedExecutor
+
+
+class RclpySpinner(QThread):
+
+    def __init__(self, node):
+        super().__init__()
+        self._node = node
+        self._executor = None
+        self._abort = False
+
+    def run(self):
+        qDebug('Start called on RclpySpinner, spinning ros2 node')
+        self._executor = MultiThreadedExecutor()
+        self._executor.add_node(self._node)
+        try:
+            while rclpy.ok() and not self._abort:
+                self._executor.spin_once(timeout_sec=1.0)
+        finally:
+            self._executor.remove_node(self._node)
+            self._executor = None
+
+    def quit(self):  # noqa: A003
+        qDebug('Quit called on RclpySpinner')
+        self._abort = True
+        # Interrupt any in-flight spin_once so the run loop exits immediately
+        # rather than blocking the GUI thread (which calls wait()) until the
+        # spin_once timeout elapses.
+        executor = self._executor
+        if executor is not None:
+            executor.wake()
+        super().quit()

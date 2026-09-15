@@ -1,0 +1,36 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "statistics_msgs/msg/StatisticDataPoint",
+      "fields": [
+        {
+          "name": "data_type",
+          "type": {
+            "type_id": 3,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        },
+        {
+          "name": "data",
+          "type": {
+            "type_id": 11,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": []
+  },
+  "type_hashes": [
+    {
+      "type_name": "statistics_msgs/msg/StatisticDataPoint",
+      "hash_string": "RIHS01_b7e61a407346ea912effb6954023d2d2c9adf8f7bc10f6cae576d350c445f6a5"
+    }
+  ]
+}

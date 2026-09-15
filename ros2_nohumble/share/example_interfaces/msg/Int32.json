@@ -1,0 +1,26 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "example_interfaces/msg/Int32",
+      "fields": [
+        {
+          "name": "data",
+          "type": {
+            "type_id": 6,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": []
+  },
+  "type_hashes": [
+    {
+      "type_name": "example_interfaces/msg/Int32",
+      "hash_string": "RIHS01_5cd04cd7f3adb9d6c6064c316047b24c76622eb89144f300b536d657fd55e652"
+    }
+  ]
+}

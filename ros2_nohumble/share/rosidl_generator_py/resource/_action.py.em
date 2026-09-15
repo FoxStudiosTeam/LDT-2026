@@ -1,0 +1,121 @@
+@# Included from rosidl_generator_py/resource/_idl.py.em
+@{
+from rosidl_pycommon import convert_camel_case_to_lower_case_underscore
+
+action_name = '_' + convert_camel_case_to_lower_case_underscore(action.namespaced_type.name)
+module_name = '_' + convert_camel_case_to_lower_case_underscore(interface_path.stem)
+
+type_annotations_import_statements.add(f'from {".".join(action.namespaced_type.namespaces)}.{module_name} import {action.goal.structure.namespaced_type.name}')
+type_annotations_import_statements.add(f'from {".".join(action.namespaced_type.namespaces)}.{module_name} import {action.result.structure.namespaced_type.name}')
+type_annotations_import_statements.add(f'from {".".join(action.namespaced_type.namespaces)}.{module_name} import {action.feedback.structure.namespaced_type.name}')
+
+TEMPLATE(
+    '_msg.py.em',
+    package_name=package_name, interface_path=interface_path,
+    message=action.goal, import_statements=import_statements,
+    type_annotations_import_statements=type_annotations_import_statements)
+TEMPLATE(
+    '_msg.py.em',
+    package_name=package_name, interface_path=interface_path,
+    message=action.result, import_statements=import_statements,
+    type_annotations_import_statements=type_annotations_import_statements)
+TEMPLATE(
+    '_msg.py.em',
+    package_name=package_name, interface_path=interface_path,
+    message=action.feedback, import_statements=import_statements,
+    type_annotations_import_statements=type_annotations_import_statements)
+TEMPLATE(
+    '_srv.py.em',
+    package_name=package_name, interface_path=interface_path,
+    service=action.send_goal_service, import_statements=import_statements,
+    type_annotations_import_statements=type_annotations_import_statements)
+TEMPLATE(
+    '_srv.py.em',
+    package_name=package_name, interface_path=interface_path,
+    service=action.get_result_service, import_statements=import_statements,
+    type_annotations_import_statements=type_annotations_import_statements)
+TEMPLATE(
+    '_msg.py.em',
+    package_name=package_name, interface_path=interface_path,
+    message=action.feedback_message, import_statements=import_statements,
+    type_annotations_import_statements=type_annotations_import_statements)
+}@
+
+
+class Metaclass_@(action.namespaced_type.name)(rosidl_pycommon.interface_base_classes.ActionTypeSupportMeta):
+    """Metaclass of action '@(action.namespaced_type.name)'."""
+
+    _TYPE_SUPPORT: typing.ClassVar[typing.Optional[PyCapsule]] = None
+
+    @@classmethod
+    def __import_type_support__(cls) -> None:
+        try:
+            from rosidl_generator_py import import_type_support  # type: ignore[attr-defined]
+            module = import_type_support('@(package_name)')
+        except ImportError:
+            import logging
+            import traceback
+            logger = logging.getLogger(
+                '@('.'.join(action.namespaced_type.namespaced_name()))')
+            logger.debug(
+                'Failed to import needed modules for type support:\n' +
+                traceback.format_exc())
+        else:
+            cls._TYPE_SUPPORT = module.type_support_action__@('__'.join(action.namespaced_type.namespaces[1:]))_@(action_name)
+
+            from action_msgs.msg import _goal_status_array
+            if _goal_status_array.Metaclass_GoalStatusArray._TYPE_SUPPORT is None:
+                _goal_status_array.Metaclass_GoalStatusArray.__import_type_support__()
+            from action_msgs.srv import _cancel_goal
+            if _cancel_goal.Metaclass_CancelGoal._TYPE_SUPPORT is None:
+                _cancel_goal.Metaclass_CancelGoal.__import_type_support__()
+
+            from @('.'.join(action.namespaced_type.namespaces)) import @(module_name)
+            if @(module_name).Metaclass_@(action.send_goal_service.namespaced_type.name)._TYPE_SUPPORT is None:
+                @(module_name).Metaclass_@(action.send_goal_service.namespaced_type.name).__import_type_support__()
+            if @(module_name).Metaclass_@(action.get_result_service.namespaced_type.name)._TYPE_SUPPORT is None:
+                @(module_name).Metaclass_@(action.get_result_service.namespaced_type.name).__import_type_support__()
+            if @(module_name).Metaclass_@(action.feedback_message.structure.namespaced_type.name)._TYPE_SUPPORT is None:
+                @(module_name).Metaclass_@(action.feedback_message.structure.namespaced_type.name).__import_type_support__()
+
+
+class _@(action.namespaced_type.name)_Impl(rosidl_pycommon.interface_base_classes.BaseImpl[
+        @(action.send_goal_service.namespaced_type.name),
+        @(action.get_result_service.namespaced_type.name),
+        @(action.feedback_message.structure.namespaced_type.name)
+]):
+
+    # The send_goal service using a wrapped version of the goal message as a request.
+    SendGoalService: TypeAlias = @(action.send_goal_service.namespaced_type.name)
+    # The get_result service using a wrapped version of the result message as a response.
+    GetResultService: TypeAlias = @(action.get_result_service.namespaced_type.name)
+    # The feedback message with generic fields which wraps the feedback message.
+    FeedbackMessage: TypeAlias = @(action.feedback_message.structure.namespaced_type.name)
+
+    # The generic service to cancel a goal.
+    from action_msgs.srv._cancel_goal import CancelGoal
+    CancelGoalService: TypeAlias = CancelGoal
+    # The generic message for get the status of a goal.
+    from action_msgs.msg._goal_status_array import GoalStatusArray
+    GoalStatusMessage: TypeAlias = GoalStatusArray
+
+
+class @(action.namespaced_type.name)(rosidl_pycommon.interface_base_classes.BaseAction[
+    @(action.goal.structure.namespaced_type.name),
+    @(action.result.structure.namespaced_type.name),
+    @(action.feedback.structure.namespaced_type.name),
+    _@(action.namespaced_type.name)_Impl
+], metaclass=Metaclass_@(action.namespaced_type.name)):
+
+    # The goal message defined in the action definition.
+    Goal: TypeAlias = @(action.goal.structure.namespaced_type.name)
+    # The result message defined in the action definition.
+    Result: TypeAlias = @(action.result.structure.namespaced_type.name)
+    # The feedback message defined in the action definition.
+    Feedback: TypeAlias = @(action.feedback.structure.namespaced_type.name)
+
+    Impl: TypeAlias = _@(action.namespaced_type.name)_Impl
+
+    # Should eventually be typing.NoReturn. See mypy#14044
+    def __init__(self) -> None:
+        raise NotImplementedError('Action classes can not be instantiated')

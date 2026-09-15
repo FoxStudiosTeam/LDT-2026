@@ -1,0 +1,17 @@
+// generated from rosidl_adapter/resource/srv.idl.em
+// with input from rosbag2_interfaces/srv/GetSubscribedTopics.srv
+// generated code does not contain a copyright notice
+
+
+module rosbag2_interfaces {
+  module srv {
+    struct GetSubscribedTopics_Request {
+      uint8 structure_needs_at_least_one_member;
+    };
+    @verbatim (language="comment", text=
+      "Fully qualified names of topics currently subscribed by the recorder.")
+    struct GetSubscribedTopics_Response {
+      sequence<string> topics;
+    };
+  };
+};

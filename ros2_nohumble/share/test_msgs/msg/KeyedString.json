@@ -1,0 +1,36 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "test_msgs/msg/KeyedString",
+      "fields": [
+        {
+          "name": "key",
+          "type": {
+            "type_id": 17,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        },
+        {
+          "name": "value",
+          "type": {
+            "type_id": 17,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": []
+  },
+  "type_hashes": [
+    {
+      "type_name": "test_msgs/msg/KeyedString",
+      "hash_string": "RIHS01_20c0320c41013bc51612123c18abadac81944a31db59f1caf817829e2f186043"
+    }
+  ]
+}

@@ -1,0 +1,221 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "rosbag2_test_msgdefs/srv/ComplexSrvIdl",
+      "fields": [
+        {
+          "name": "request_message",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "rosbag2_test_msgdefs/srv/ComplexSrvIdl_Request"
+          },
+          "default_value": ""
+        },
+        {
+          "name": "response_message",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "rosbag2_test_msgdefs/srv/ComplexSrvIdl_Response"
+          },
+          "default_value": ""
+        },
+        {
+          "name": "event_message",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "rosbag2_test_msgdefs/srv/ComplexSrvIdl_Event"
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": [
+      {
+        "type_name": "builtin_interfaces/msg/Time",
+        "fields": [
+          {
+            "name": "sec",
+            "type": {
+              "type_id": 6,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "nanosec",
+            "type": {
+              "type_id": 7,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "rosbag2_test_msgdefs/msg/BasicIdl",
+        "fields": [
+          {
+            "name": "x",
+            "type": {
+              "type_id": 10,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "rosbag2_test_msgdefs/srv/ComplexSrvIdl_Event",
+        "fields": [
+          {
+            "name": "info",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "service_msgs/msg/ServiceEventInfo"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "request",
+            "type": {
+              "type_id": 97,
+              "capacity": 1,
+              "string_capacity": 0,
+              "nested_type_name": "rosbag2_test_msgdefs/srv/ComplexSrvIdl_Request"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "response",
+            "type": {
+              "type_id": 97,
+              "capacity": 1,
+              "string_capacity": 0,
+              "nested_type_name": "rosbag2_test_msgdefs/srv/ComplexSrvIdl_Response"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "rosbag2_test_msgdefs/srv/ComplexSrvIdl_Request",
+        "fields": [
+          {
+            "name": "req",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "rosbag2_test_msgdefs/msg/BasicIdl"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "rosbag2_test_msgdefs/srv/ComplexSrvIdl_Response",
+        "fields": [
+          {
+            "name": "resp",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "rosbag2_test_msgdefs/msg/BasicIdl"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "service_msgs/msg/ServiceEventInfo",
+        "fields": [
+          {
+            "name": "event_type",
+            "type": {
+              "type_id": 3,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "stamp",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "builtin_interfaces/msg/Time"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "client_gid",
+            "type": {
+              "type_id": 51,
+              "capacity": 16,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "sequence_number",
+            "type": {
+              "type_id": 8,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      }
+    ]
+  },
+  "type_hashes": [
+    {
+      "type_name": "rosbag2_test_msgdefs/srv/ComplexSrvIdl",
+      "hash_string": "RIHS01_fb5d4b0b2c63bbd8b68ba0aa3e10af5974703d3a89c478cab247e0eb4f2d7fc9"
+    },
+    {
+      "type_name": "builtin_interfaces/msg/Time",
+      "hash_string": "RIHS01_b106235e25a4c5ed35098aa0a61a3ee9c9b18d197f398b0e4206cea9acf9c197"
+    },
+    {
+      "type_name": "rosbag2_test_msgdefs/msg/BasicIdl",
+      "hash_string": "RIHS01_875f81537965a21be3703be499221840558037d2c3fbc5059c40a6b0d94d675f"
+    },
+    {
+      "type_name": "rosbag2_test_msgdefs/srv/ComplexSrvIdl_Event",
+      "hash_string": "RIHS01_fc12c5df5b0f26d47648a57eedc893f3386a8dcb81826c4bc50c12ac74bdb710"
+    },
+    {
+      "type_name": "rosbag2_test_msgdefs/srv/ComplexSrvIdl_Request",
+      "hash_string": "RIHS01_e46dcbb3b7f3c89ca6eec59044da06bc934293cc48a8fdc20bb2152ce5c4ff4f"
+    },
+    {
+      "type_name": "rosbag2_test_msgdefs/srv/ComplexSrvIdl_Response",
+      "hash_string": "RIHS01_9c60cd63604faf814042894b741ba6357a164afcd99b60568b6a2d8e7170b0b1"
+    },
+    {
+      "type_name": "service_msgs/msg/ServiceEventInfo",
+      "hash_string": "RIHS01_41bcbbe07a75c9b52bc96bfd5c24d7f0fc0a08c0cb7921b3373c5732345a6f45"
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+rclcpp;rosbag2_compression;rosbag2_py;rosbag2_cpp;rosbag2_storage;rmw;rosbag2_performance_benchmarking_msgs;sensor_msgs;ament_index_python;python3-psutil;launch;launch_ros;ament_lint_auto;ament_lint_common;ros_testing;ros2launch;ros2bag;rosbag2_storage_default_plugins;rosbag2_test_common

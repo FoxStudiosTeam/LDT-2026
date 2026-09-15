@@ -1,0 +1,22 @@
+[package]
+name = "stereo_msgs"
+version = "5.10.1"
+edition = "2021"
+
+[dependencies]
+rosidl_runtime_rs = "0.6"
+serde = { version = "1", optional = true, features = ["derive"] }
+serde-big-array = { version = "0.5.1", optional = true }
+
+# ROS Dependencies
+builtin_interfaces = "*"
+geometry_msgs = "*"
+sensor_msgs = "*"
+service_msgs = "*"
+std_msgs = "*"
+
+[features]
+serde = ['dep:serde', 'dep:serde-big-array', 'rosidl_runtime_rs/serde', 'builtin_interfaces/serde', 'geometry_msgs/serde', 'sensor_msgs/serde', 'service_msgs/serde', 'std_msgs/serde']
+
+[package.metadata.ros-env]
+include = true

@@ -1,0 +1,12 @@
+// generated from rosidl_generator_cpp/resource/idl.hpp.em
+// generated code does not contain a copyright notice
+
+#ifndef LIFECYCLE_MSGS__SRV__GET_AVAILABLE_STATES_HPP_
+#define LIFECYCLE_MSGS__SRV__GET_AVAILABLE_STATES_HPP_
+
+#include "lifecycle_msgs/srv/detail/get_available_states__struct.hpp"  // IWYU pragma: export
+#include "lifecycle_msgs/srv/detail/get_available_states__builder.hpp"    // IWYU pragma: export
+#include "lifecycle_msgs/srv/detail/get_available_states__traits.hpp"    // IWYU pragma: export
+#include "lifecycle_msgs/srv/detail/get_available_states__type_support.hpp"    // IWYU pragma: export
+
+#endif  // LIFECYCLE_MSGS__SRV__GET_AVAILABLE_STATES_HPP_

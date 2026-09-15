@@ -1,0 +1,15 @@
+// generated from rosidl_adapter/resource/srv.idl.em
+// with input from rosbag2_test_msgdefs/srv/BasicSrv.srv
+// generated code does not contain a copyright notice
+
+
+module rosbag2_test_msgdefs {
+  module srv {
+    struct BasicSrv_Request {
+      string req;
+    };
+    struct BasicSrv_Response {
+      string resp;
+    };
+  };
+};

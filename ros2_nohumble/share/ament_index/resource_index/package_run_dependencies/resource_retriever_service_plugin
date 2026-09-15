@@ -1,0 +1,1 @@
+resource_retriever;resource_retriever_interfaces;rclcpp;ament_cmake_gtest;ament_cmake_gmock;ament_lint_auto;ament_lint_common

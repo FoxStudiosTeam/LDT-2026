@@ -1,0 +1,6 @@
+source;share/laser_geometry/environment/ament_prefix_path.bat
+source;share/laser_geometry/environment/path.bat
+source;share/laser_geometry/environment/pythonpath.bat
+source;share/laser_geometry/environment/ament_prefix_path.dsv
+source;share/laser_geometry/environment/path.dsv
+source;share/laser_geometry/environment/pythonpath.dsv

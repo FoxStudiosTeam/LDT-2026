@@ -1,0 +1,96 @@
+# Copyright (c) 2012, Willow Garage, Inc.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+#    * Redistributions of source code must retain the above copyright
+#      notice, this list of conditions and the following disclaimer.
+#
+#    * Redistributions in binary form must reproduce the above copyright
+#      notice, this list of conditions and the following disclaimer in the
+#      documentation and/or other materials provided with the distribution.
+#
+#    * Neither the name of the copyright holder nor the names of its
+#      contributors may be used to endorse or promote products derived from
+#      this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
+#
+# Author: Isaac Saito
+
+from packaging.version import Version
+from python_qt_binding import QT_BINDING_VERSION
+if Version(QT_BINDING_VERSION) >= Version('6.0.0'):
+    from python_qt_binding.QtCore import QRegularExpression  # noqa: F401
+else:
+    from python_qt_binding.QtCore import QRegExp  # noqa: F401
+from python_qt_binding.QtCore import Qt
+
+from rqt_console.filters.message_filter import MessageFilter
+
+
+class TextFilter(MessageFilter):
+    """
+    Provides a filtering feature for text set by set_text.
+
+    Inheriting rqt_console.filters.MessageFilter, this class provides timeout
+    effect to the input widget (eg. QLineEdit) that contains this class.
+    """
+
+    def __init__(self, qregexp=None):
+        super().__init__()
+        self._regexp = qregexp
+
+    def test_message(self, text):
+        """
+        Overridden.
+
+        :param message: the message to be tested against the filters.
+        :type message: str.
+        :rtype: bool
+        """
+        _hit = False
+
+        if (
+                self.is_enabled() and self._text != '' and
+                self._regexp is not None    # If None, init process isn't done
+                                            # yet and we can ignore the call to
+        ):                                  # this method.
+            if Version(QT_BINDING_VERSION) >= Version('6.0.0'):
+                _hit = self._regexp.match(text).hasMatch()
+            else:
+                _hit = self._regexp.indexIn(text) >= 0
+        return _hit
+
+    def get_regexp(self):
+        return self._regexp
+
+    def set_text(self, text):
+        """
+        Setter for _text.
+
+        :param text: text to set ''str''
+        :emits filter_changed_signal: If _enabled is true
+        """
+        super().set_text(text)
+
+        if Version(QT_BINDING_VERSION) >= Version('6.0.0'):
+            self._regexp = QRegularExpression(text)
+        else:
+            syntax_nr = QRegExp.RegExp
+            syntax = QRegExp.PatternSyntax(syntax_nr)
+            self._regexp = QRegExp(text, Qt.CaseSensitivity.CaseSensitive, syntax)
+        self.set_regex(self._regexp)
+
+    def get_text(self):
+        return self._text

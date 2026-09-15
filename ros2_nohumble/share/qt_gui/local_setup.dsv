@@ -1,0 +1,6 @@
+source;share/qt_gui/environment/ament_prefix_path.bat
+source;share/qt_gui/environment/path.bat
+source;share/qt_gui/environment/pythonpath.bat
+source;share/qt_gui/environment/ament_prefix_path.dsv
+source;share/qt_gui/environment/path.dsv
+source;share/qt_gui/environment/pythonpath.dsv

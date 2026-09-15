@@ -1,0 +1,42 @@
+
+#ifndef DETAIL_GZ_UTILS_LOG_VISIBLE_H
+#define DETAIL_GZ_UTILS_LOG_VISIBLE_H
+
+#ifdef GZ_UTILS_LOG_STATIC_DEFINE
+#  define DETAIL_GZ_UTILS_LOG_VISIBLE
+#  define DETAIL_GZ_UTILS_LOG_HIDDEN
+#else
+#  ifndef DETAIL_GZ_UTILS_LOG_VISIBLE
+#    ifdef gz_utils_log_EXPORTS
+        /* We are building this library */
+#      define DETAIL_GZ_UTILS_LOG_VISIBLE __declspec(dllexport)
+#    else
+        /* We are using this library */
+#      define DETAIL_GZ_UTILS_LOG_VISIBLE __declspec(dllimport)
+#    endif
+#  endif
+
+#  ifndef DETAIL_GZ_UTILS_LOG_HIDDEN
+#    define DETAIL_GZ_UTILS_LOG_HIDDEN 
+#  endif
+#endif
+
+#ifndef GZ_DEPRECATED_ALL_VERSIONS
+#  define GZ_DEPRECATED_ALL_VERSIONS __declspec(deprecated)
+#endif
+
+#ifndef GZ_DEPRECATED_ALL_VERSIONS_EXPORT
+#  define GZ_DEPRECATED_ALL_VERSIONS_EXPORT DETAIL_GZ_UTILS_LOG_VISIBLE GZ_DEPRECATED_ALL_VERSIONS
+#endif
+
+#ifndef GZ_DEPRECATED_ALL_VERSIONS_NO_EXPORT
+#  define GZ_DEPRECATED_ALL_VERSIONS_NO_EXPORT DETAIL_GZ_UTILS_LOG_HIDDEN GZ_DEPRECATED_ALL_VERSIONS
+#endif
+
+#if 0 /* DEFINE_NO_DEPRECATED */
+#  ifndef GZ_UTILS_LOG_NO_DEPRECATED
+#    define GZ_UTILS_LOG_NO_DEPRECATED
+#  endif
+#endif
+
+#endif /* DETAIL_GZ_UTILS_LOG_VISIBLE_H */

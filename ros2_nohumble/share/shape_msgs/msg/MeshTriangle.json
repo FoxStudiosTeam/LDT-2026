@@ -1,0 +1,26 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "shape_msgs/msg/MeshTriangle",
+      "fields": [
+        {
+          "name": "vertex_indices",
+          "type": {
+            "type_id": 55,
+            "capacity": 3,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": []
+  },
+  "type_hashes": [
+    {
+      "type_name": "shape_msgs/msg/MeshTriangle",
+      "hash_string": "RIHS01_618e5c073eeb729e433ef6226e72c01d995c459fb7d76348c9700409a5020bd0"
+    }
+  ]
+}

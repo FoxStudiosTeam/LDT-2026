@@ -1,0 +1,4 @@
+source;share/rosidl_typesupport_introspection_tests/environment/ament_prefix_path.bat
+source;share/rosidl_typesupport_introspection_tests/environment/path.bat
+source;share/rosidl_typesupport_introspection_tests/environment/ament_prefix_path.dsv
+source;share/rosidl_typesupport_introspection_tests/environment/path.dsv

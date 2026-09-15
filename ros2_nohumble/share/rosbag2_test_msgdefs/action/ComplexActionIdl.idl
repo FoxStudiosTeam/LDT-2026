@@ -1,0 +1,19 @@
+// generated from rosidl_adapter/resource/action.idl.em
+// with input from rosbag2_test_msgdefs/action/ComplexActionIdl.action
+// generated code does not contain a copyright notice
+
+#include "rosbag2_test_msgdefs/msg/BasicIdl.idl"
+
+module rosbag2_test_msgdefs {
+  module action {
+    struct ComplexActionIdl_Goal {
+      rosbag2_test_msgdefs::msg::BasicIdl goal;
+    };
+    struct ComplexActionIdl_Result {
+      rosbag2_test_msgdefs::msg::BasicIdl result;
+    };
+    struct ComplexActionIdl_Feedback {
+      rosbag2_test_msgdefs::msg::BasicIdl feedback;
+    };
+  };
+};

@@ -1,0 +1,26 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "example_interfaces/msg/Int8",
+      "fields": [
+        {
+          "name": "data",
+          "type": {
+            "type_id": 2,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": []
+  },
+  "type_hashes": [
+    {
+      "type_name": "example_interfaces/msg/Int8",
+      "hash_string": "RIHS01_2e9ef643d84ff37840fe787d1269aa06268960e294f4a0f5eb1e9d4eb21cbb57"
+    }
+  ]
+}

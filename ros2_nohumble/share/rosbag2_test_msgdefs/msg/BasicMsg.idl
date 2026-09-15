@@ -1,0 +1,12 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from rosbag2_test_msgdefs/msg/BasicMsg.msg
+// generated code does not contain a copyright notice
+
+
+module rosbag2_test_msgdefs {
+  module msg {
+    struct BasicMsg {
+      float c;
+    };
+  };
+};

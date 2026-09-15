@@ -1,0 +1,26 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "rmw_dds_common/msg/Gid",
+      "fields": [
+        {
+          "name": "data",
+          "type": {
+            "type_id": 51,
+            "capacity": 16,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": []
+  },
+  "type_hashes": [
+    {
+      "type_name": "rmw_dds_common/msg/Gid",
+      "hash_string": "RIHS01_ab6f21cfbb0a6dbb837161e1110c2051a2850ed9f9c53944d7115d9bcebedf71"
+    }
+  ]
+}

@@ -1,0 +1,541 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl",
+      "fields": [
+        {
+          "name": "goal",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_Goal"
+          },
+          "default_value": ""
+        },
+        {
+          "name": "result",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_Result"
+          },
+          "default_value": ""
+        },
+        {
+          "name": "feedback",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_Feedback"
+          },
+          "default_value": ""
+        },
+        {
+          "name": "send_goal_service",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_SendGoal"
+          },
+          "default_value": ""
+        },
+        {
+          "name": "get_result_service",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_GetResult"
+          },
+          "default_value": ""
+        },
+        {
+          "name": "feedback_message",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_FeedbackMessage"
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": [
+      {
+        "type_name": "builtin_interfaces/msg/Time",
+        "fields": [
+          {
+            "name": "sec",
+            "type": {
+              "type_id": 6,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "nanosec",
+            "type": {
+              "type_id": 7,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_Feedback",
+        "fields": [
+          {
+            "name": "feedback",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "rosbag2_test_msgdefs/msg/BasicIdl"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_FeedbackMessage",
+        "fields": [
+          {
+            "name": "goal_id",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "unique_identifier_msgs/msg/UUID"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "feedback",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_Feedback"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_GetResult",
+        "fields": [
+          {
+            "name": "request_message",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_GetResult_Request"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "response_message",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_GetResult_Response"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "event_message",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_GetResult_Event"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_GetResult_Event",
+        "fields": [
+          {
+            "name": "info",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "service_msgs/msg/ServiceEventInfo"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "request",
+            "type": {
+              "type_id": 97,
+              "capacity": 1,
+              "string_capacity": 0,
+              "nested_type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_GetResult_Request"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "response",
+            "type": {
+              "type_id": 97,
+              "capacity": 1,
+              "string_capacity": 0,
+              "nested_type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_GetResult_Response"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_GetResult_Request",
+        "fields": [
+          {
+            "name": "goal_id",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "unique_identifier_msgs/msg/UUID"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_GetResult_Response",
+        "fields": [
+          {
+            "name": "status",
+            "type": {
+              "type_id": 2,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "result",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_Result"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_Goal",
+        "fields": [
+          {
+            "name": "goal",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "rosbag2_test_msgdefs/msg/BasicIdl"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_Result",
+        "fields": [
+          {
+            "name": "result",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "rosbag2_test_msgdefs/msg/BasicIdl"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_SendGoal",
+        "fields": [
+          {
+            "name": "request_message",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_SendGoal_Request"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "response_message",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_SendGoal_Response"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "event_message",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_SendGoal_Event"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_SendGoal_Event",
+        "fields": [
+          {
+            "name": "info",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "service_msgs/msg/ServiceEventInfo"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "request",
+            "type": {
+              "type_id": 97,
+              "capacity": 1,
+              "string_capacity": 0,
+              "nested_type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_SendGoal_Request"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "response",
+            "type": {
+              "type_id": 97,
+              "capacity": 1,
+              "string_capacity": 0,
+              "nested_type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_SendGoal_Response"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_SendGoal_Request",
+        "fields": [
+          {
+            "name": "goal_id",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "unique_identifier_msgs/msg/UUID"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "goal",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_Goal"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_SendGoal_Response",
+        "fields": [
+          {
+            "name": "accepted",
+            "type": {
+              "type_id": 15,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "stamp",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "builtin_interfaces/msg/Time"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "rosbag2_test_msgdefs/msg/BasicIdl",
+        "fields": [
+          {
+            "name": "x",
+            "type": {
+              "type_id": 10,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "service_msgs/msg/ServiceEventInfo",
+        "fields": [
+          {
+            "name": "event_type",
+            "type": {
+              "type_id": 3,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "stamp",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "builtin_interfaces/msg/Time"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "client_gid",
+            "type": {
+              "type_id": 51,
+              "capacity": 16,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "sequence_number",
+            "type": {
+              "type_id": 8,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "unique_identifier_msgs/msg/UUID",
+        "fields": [
+          {
+            "name": "uuid",
+            "type": {
+              "type_id": 51,
+              "capacity": 16,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      }
+    ]
+  },
+  "type_hashes": [
+    {
+      "type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl",
+      "hash_string": "RIHS01_0cf5358f10e6a76bdbbd7ecefab625a0b0fbf6bcbfb1b9f436454d0c3f50d3d0"
+    },
+    {
+      "type_name": "builtin_interfaces/msg/Time",
+      "hash_string": "RIHS01_b106235e25a4c5ed35098aa0a61a3ee9c9b18d197f398b0e4206cea9acf9c197"
+    },
+    {
+      "type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_Feedback",
+      "hash_string": "RIHS01_e9fb01ff42e78bbd1270ccda544ed69eae770c57e5705ff947efc796734eb3c9"
+    },
+    {
+      "type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_FeedbackMessage",
+      "hash_string": "RIHS01_9d26b5a6e3dc48b9e79d079ea4942f1614b74eff2f846e80b64a8dc0b23ec264"
+    },
+    {
+      "type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_GetResult",
+      "hash_string": "RIHS01_4e128e33538e7867586b65afeadbdb4df7d74c39dacef415ddc2bcdfb2e5589d"
+    },
+    {
+      "type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_GetResult_Event",
+      "hash_string": "RIHS01_b7be2574ef10643df63daab46ea9af1640aac9cf4b7fc18cc75c5b9a86ddd020"
+    },
+    {
+      "type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_GetResult_Request",
+      "hash_string": "RIHS01_0009909f16e4d3e749e97e686c7c8a7665ae766113011c918a10cf95cc03353b"
+    },
+    {
+      "type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_GetResult_Response",
+      "hash_string": "RIHS01_41f1e593350c5029c71c8a5c226086a3e5613de6c14b39b25af9d3b8d9cb2b42"
+    },
+    {
+      "type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_Goal",
+      "hash_string": "RIHS01_d80d248a1238cec5ed98990ec98e9b28da3b061d3958a406f238c219182d593a"
+    },
+    {
+      "type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_Result",
+      "hash_string": "RIHS01_7eca691529a861bf0b2d3b6234158ba48121a9df272da204ffcc7164c9d4bd4e"
+    },
+    {
+      "type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_SendGoal",
+      "hash_string": "RIHS01_93df6f329ee5a39f77e5076b675bcf51f939dee96c69b370665f0534c3dd7676"
+    },
+    {
+      "type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_SendGoal_Event",
+      "hash_string": "RIHS01_3c5d1fda4a6336184ac1f766305934cc4ff5c7c6a8c4e2abcfc75be357a6bcdd"
+    },
+    {
+      "type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_SendGoal_Request",
+      "hash_string": "RIHS01_22b2b42305c95477d0a37bded62f1c6c471d5d0da2d5147763fc20298a2cb857"
+    },
+    {
+      "type_name": "rosbag2_test_msgdefs/action/ComplexActionIdl_SendGoal_Response",
+      "hash_string": "RIHS01_bf5f0f17fecf9d5cffa2dd81b6254d0d3229ca7c2e8c774f9c58134ce06e92f8"
+    },
+    {
+      "type_name": "rosbag2_test_msgdefs/msg/BasicIdl",
+      "hash_string": "RIHS01_875f81537965a21be3703be499221840558037d2c3fbc5059c40a6b0d94d675f"
+    },
+    {
+      "type_name": "service_msgs/msg/ServiceEventInfo",
+      "hash_string": "RIHS01_41bcbbe07a75c9b52bc96bfd5c24d7f0fc0a08c0cb7921b3373c5732345a6f45"
+    },
+    {
+      "type_name": "unique_identifier_msgs/msg/UUID",
+      "hash_string": "RIHS01_1b8e8aca958cbea28fe6ef60bf6c19b683c97a9ef60bb34752067d0f2f7ab437"
+    }
+  ]
+}

@@ -1,0 +1,136 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "test_msgs/msg/Strings",
+      "fields": [
+        {
+          "name": "string_value",
+          "type": {
+            "type_id": 17,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        },
+        {
+          "name": "string_value_default1",
+          "type": {
+            "type_id": 17,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": "Hello world!"
+        },
+        {
+          "name": "string_value_default2",
+          "type": {
+            "type_id": 17,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": "Hello'world!"
+        },
+        {
+          "name": "string_value_default3",
+          "type": {
+            "type_id": 17,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": "Hello\"world!"
+        },
+        {
+          "name": "string_value_default4",
+          "type": {
+            "type_id": 17,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": "Hello'world!"
+        },
+        {
+          "name": "string_value_default5",
+          "type": {
+            "type_id": 17,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": "Hello\"world!"
+        },
+        {
+          "name": "bounded_string_value",
+          "type": {
+            "type_id": 21,
+            "capacity": 0,
+            "string_capacity": 22,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        },
+        {
+          "name": "bounded_string_value_default1",
+          "type": {
+            "type_id": 21,
+            "capacity": 0,
+            "string_capacity": 22,
+            "nested_type_name": ""
+          },
+          "default_value": "Hello world!"
+        },
+        {
+          "name": "bounded_string_value_default2",
+          "type": {
+            "type_id": 21,
+            "capacity": 0,
+            "string_capacity": 22,
+            "nested_type_name": ""
+          },
+          "default_value": "Hello'world!"
+        },
+        {
+          "name": "bounded_string_value_default3",
+          "type": {
+            "type_id": 21,
+            "capacity": 0,
+            "string_capacity": 22,
+            "nested_type_name": ""
+          },
+          "default_value": "Hello\"world!"
+        },
+        {
+          "name": "bounded_string_value_default4",
+          "type": {
+            "type_id": 21,
+            "capacity": 0,
+            "string_capacity": 22,
+            "nested_type_name": ""
+          },
+          "default_value": "Hello'world!"
+        },
+        {
+          "name": "bounded_string_value_default5",
+          "type": {
+            "type_id": 21,
+            "capacity": 0,
+            "string_capacity": 22,
+            "nested_type_name": ""
+          },
+          "default_value": "Hello\"world!"
+        }
+      ]
+    },
+    "referenced_type_descriptions": []
+  },
+  "type_hashes": [
+    {
+      "type_name": "test_msgs/msg/Strings",
+      "hash_string": "RIHS01_eee55533636293ac7c94c62432eedb5777eb849847d2a17b4dcead8c4a20ab32"
+    }
+  ]
+}

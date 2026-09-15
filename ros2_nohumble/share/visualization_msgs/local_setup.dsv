@@ -1,0 +1,6 @@
+source;share/visualization_msgs/environment/ament_prefix_path.bat
+source;share/visualization_msgs/environment/path.bat
+source;share/visualization_msgs/environment/pythonpath.bat
+source;share/visualization_msgs/environment/ament_prefix_path.dsv
+source;share/visualization_msgs/environment/path.dsv
+source;share/visualization_msgs/environment/pythonpath.dsv

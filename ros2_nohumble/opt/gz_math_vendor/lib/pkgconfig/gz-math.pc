@@ -1,0 +1,12 @@
+prefix=${pcfiledir}/../../
+libdir=${prefix}/lib
+includedir=${prefix}/include/gz/math9
+
+Name: Gazebo math
+Description: A set of math classes for robot applications
+Version: 9.2.0
+Requires: gz-cmake gz-utils
+Requires.private: 
+Libs: -L${libdir} -lgz-math 
+Libs.private: 
+CFlags: -I${includedir} -std=c++17

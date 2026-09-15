@@ -1,0 +1,26 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "shape_msgs/msg/Plane",
+      "fields": [
+        {
+          "name": "coef",
+          "type": {
+            "type_id": 59,
+            "capacity": 4,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": []
+  },
+  "type_hashes": [
+    {
+      "type_name": "shape_msgs/msg/Plane",
+      "hash_string": "RIHS01_dfbfe8314689c850615d4a727af017e9aa86c10e369a606c8c851ef8f16c58c8"
+    }
+  ]
+}

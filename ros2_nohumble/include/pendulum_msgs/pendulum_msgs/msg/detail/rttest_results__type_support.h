@@ -1,0 +1,36 @@
+// generated from rosidl_generator_c/resource/idl__type_support.h.em
+// with input from pendulum_msgs:msg\RttestResults.idl
+// generated code does not contain a copyright notice
+
+// IWYU pragma: private, include "pendulum_msgs/msg/rttest_results.h"
+
+
+#ifndef PENDULUM_MSGS__MSG__DETAIL__RTTEST_RESULTS__TYPE_SUPPORT_H_
+#define PENDULUM_MSGS__MSG__DETAIL__RTTEST_RESULTS__TYPE_SUPPORT_H_
+
+#include "rosidl_typesupport_interface/macros.h"
+
+#include "pendulum_msgs/msg/rosidl_generator_c__visibility_control.h"
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
+#include "rosidl_runtime_c/message_type_support_struct.h"
+
+// Forward declare the get type support functions for this type.
+ROSIDL_GENERATOR_C_PUBLIC_pendulum_msgs
+const rosidl_message_type_support_t *
+ROSIDL_TYPESUPPORT_INTERFACE__MESSAGE_SYMBOL_NAME(
+  rosidl_typesupport_c,
+  pendulum_msgs,
+  msg,
+  RttestResults
+)(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif  // PENDULUM_MSGS__MSG__DETAIL__RTTEST_RESULTS__TYPE_SUPPORT_H_

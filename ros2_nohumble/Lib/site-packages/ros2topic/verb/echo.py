@@ -1,0 +1,330 @@
+# Copyright 2016-2017 Open Source Robotics Foundation, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import re
+from typing import Optional
+from typing import TypeVar
+
+import rclpy
+from rclpy.event_handler import SubscriptionEventCallbacks
+from rclpy.event_handler import UnsupportedEventTypeError
+from rclpy.node import Node
+from rclpy.qos import QoSProfile
+from rclpy.task import Future
+
+from ros2cli.helpers import interactive_select
+from ros2cli.helpers import unsigned_int
+from ros2cli.node.strategy import add_arguments as add_strategy_node_arguments
+from ros2cli.node.strategy import NodeStrategy
+from ros2cli.qos import add_qos_arguments
+from ros2cli.qos import choose_qos
+
+from ros2topic.api import get_msg_class
+from ros2topic.api import get_topic_names
+from ros2topic.api import positive_float
+from ros2topic.api import TopicNameCompleter
+from ros2topic.verb import VerbExtension
+
+from rosidl_runtime_py import message_to_csv
+from rosidl_runtime_py import message_to_yaml
+from rosidl_runtime_py.utilities import get_message
+
+import yaml
+
+DEFAULT_TRUNCATE_LENGTH = 128
+MsgType = TypeVar('MsgType')
+
+
+class EchoVerb(VerbExtension):
+    """Output messages from a topic."""
+
+    def add_arguments(self, parser, cli_name):
+        add_strategy_node_arguments(parser)
+
+        arg = parser.add_argument(
+            'topic_name', nargs='?',
+            help="Name of the ROS topic to listen to (e.g. '/chatter'). "
+                 'If not provided, an interactive selection will be shown.')
+        arg.completer = TopicNameCompleter(
+            include_hidden_topics_key='include_hidden_topics')
+        parser.add_argument(
+            'message_type', nargs='?',
+            help="Type of the ROS message (e.g. 'std_msgs/msg/String')")
+        add_qos_arguments(
+            parser, 'subscribe', 'sensor_data',
+            ' / compatible profile with running endpoints')
+        parser.add_argument(
+            '--csv', action='store_true',
+            help=(
+                'Output all recursive fields separated by commas (e.g. for '
+                'plotting). '
+                'If --include-message-info is also passed, the following fields are prepended: '
+                'source_timestamp, received_timestamp, publication_sequence_number,'
+                ' reception_sequence_number.'
+            )
+        )
+        parser.add_argument(
+            '--field', action='append', type=str, default=None,
+            help='Echo a selected field of a message. '
+                 "Use '.' to select sub-fields. "
+                 'For example, to echo the position field of a nav_msgs/msg/Odometry message: '
+                 "'ros2 topic echo /odom --field pose.pose.position'. "
+                 'Use the --field option multiple times to echo multiple fields. '
+                 'If the field is an array, use the syntax .[index] to select a single element.'
+        )
+        parser.add_argument(
+            '--full-length', '-f', action='store_true',
+            help='Output all elements for arrays, bytes, and string with a '
+                 "length > '--truncate-length', by default they are truncated "
+                 "after '--truncate-length' elements with '...''")
+        parser.add_argument(
+            '--truncate-length', '-l', type=unsigned_int, default=DEFAULT_TRUNCATE_LENGTH,
+            help='The length to truncate arrays, bytes, and string to '
+                 '(default: %d)' % DEFAULT_TRUNCATE_LENGTH)
+        parser.add_argument(
+            '--no-arr', action='store_true', help="Don't print array fields of messages")
+        parser.add_argument(
+            '--no-str', action='store_true', help="Don't print string fields of messages")
+        parser.add_argument(
+            '--flow-style', action='store_true',
+            help='Print collections in the block style (not available with csv format)')
+        parser.add_argument(
+            '--no-lost-messages', action='store_true', help="Don't report when a message is lost")
+        parser.add_argument(
+            '--raw', action='store_true', help='Echo the raw binary representation')
+        parser.add_argument(
+            '--filter', dest='filter_expr', help='Python expression to filter messages that '
+                                                 'are printed. Expression can use Python builtins '
+                                                 'as well as m (the message).')
+        parser.add_argument(
+            '--once', action='store_true', help='Print the first message received and then exit.')
+        parser.add_argument(
+            '--timeout', metavar='N', type=positive_float,
+            help='Set a timeout in seconds for waiting', default=None)
+        parser.add_argument(
+            '--include-message-info', '-i', action='store_true',
+            help='Shows the associated message info.')
+        parser.add_argument(
+            '--clear', '-c', action='store_true',
+            help='Clear screen before printing next message')
+        parser.add_argument(
+            '-n', '--node-name', type=str, default=None,
+            help='The name of the echoing node; by default, will be a hidden node name')
+
+    def main(self, *, args):
+
+        # If no topic name provided, launch interactive selection
+        if args.topic_name is None:
+            with NodeStrategy(args) as node:
+                topic_names = get_topic_names(
+                    node=node,
+                    include_hidden_topics=args.include_hidden_topics)
+
+            if not topic_names:
+                return 'No topics available to select from.'
+
+            selected_topic = interactive_select(
+                topic_names,
+                prompt='Select topic to echo:')
+
+            if selected_topic is None:
+                return None
+
+            args.topic_name = selected_topic
+
+        self.csv = args.csv
+
+        # Validate field selection
+        self.fields_list = []
+        if args.field:
+            for field in args.field:
+                if field is not None:
+                    field_filtered = list(filter(None, field.split('.')))
+                    self.fields_list.append(field_filtered)
+                    if not field_filtered:
+                        raise RuntimeError(f"Invalid field value '{field}'")
+
+        self.truncate_length = args.truncate_length if not args.full_length else None
+        self.no_arr = args.no_arr
+        self.no_str = args.no_str
+        self.flow_style = args.flow_style
+        self.once = args.once
+        self.clear_screen = args.clear
+
+        self.filter_fn = None
+        if args.filter_expr:
+            self.filter_fn = _expr_eval(args.filter_expr)
+
+        self.future = None
+        if args.timeout or args.once:
+            self.future = Future()
+
+        self.include_message_info = args.include_message_info
+
+        with NodeStrategy(args, node_name=args.node_name) as node:
+
+            qos_profile = choose_qos(node, topic_name=args.topic_name, qos_args=args)
+
+            if args.message_type is None:
+                message_type = get_msg_class(
+                    node, args.topic_name, include_hidden_topics=True)
+            else:
+                try:
+                    message_type = get_message(args.message_type)
+                except (AttributeError, ModuleNotFoundError, ValueError):
+                    raise RuntimeError('The passed message type is invalid')
+
+            if message_type is None:
+                raise RuntimeError(
+                    'Could not determine the type for the passed topic')
+
+            if args.timeout is not None:
+                self.timer = node.create_timer(args.timeout, self._timed_out)
+
+            self.subscribe_and_spin(
+                node,
+                args.topic_name,
+                message_type,
+                qos_profile,
+                args.no_lost_messages,
+                args.raw)
+
+    def subscribe_and_spin(
+        self,
+        node: Node,
+        topic_name: str,
+        message_type: MsgType,
+        qos_profile: QoSProfile,
+        no_report_lost_messages: bool,
+        raw: bool,
+    ) -> Optional[str]:
+        """Initialize a node with a single subscription and spin."""
+        event_callbacks = None
+        if not no_report_lost_messages:
+            event_callbacks = SubscriptionEventCallbacks(
+                message_lost=_message_lost_event_callback)
+        try:
+            node.create_subscription(
+                message_type,
+                topic_name,
+                self._subscriber_callback,
+                qos_profile,
+                event_callbacks=event_callbacks,
+                raw=raw)
+        except UnsupportedEventTypeError:
+            assert not no_report_lost_messages
+            node.create_subscription(
+                message_type,
+                topic_name,
+                self._subscriber_callback,
+                qos_profile,
+                event_callbacks=None,
+                raw=raw)
+
+        if self.future is not None:
+            rclpy.spin_until_future_complete(node, self.future)
+        else:
+            rclpy.spin(node)
+
+    def _timed_out(self):
+        self.future.set_result(True)
+
+    def _subscriber_callback(self, msg, info):
+        submsgs = []
+        if self.fields_list:
+            # Matches strings exactly in the format "[digits]" (e.g., "[123]")
+            # and captures the digits as a group
+            is_indexing = re.compile(r'^\[(\d+)\]$')
+            for fields in self.fields_list:
+                submsg = msg
+                for field in fields:
+                    match = is_indexing.match(field)
+                    try:
+                        if match is None:
+                            submsg = getattr(submsg, field)
+                        else:
+                            submsg = submsg[int(match.group(1))]
+                    except (AttributeError, IndexError, TypeError, ValueError) as ex:
+                        raise RuntimeError(f"Invalid field '{'.'.join(fields)}': {ex}")
+                submsgs.append(submsg)
+        else:
+            submsgs.append(msg)
+
+        # Evaluate the current msg against the supplied expression
+        if self.filter_fn is not None:
+            for submsg in submsgs:
+                if not self.filter_fn(submsg):
+                    submsgs.remove(submsg)
+            if not submsgs:
+                return
+
+        if self.future is not None and self.once:
+            self.future.set_result(True)
+
+        # Clear terminal screen before print
+        if self.clear_screen:
+            clear_terminal()
+
+        for i, submsg in enumerate(submsgs):
+            if i == len(submsgs)-1:
+                line_end = '---\n'
+            else:
+                line_end = ''
+            if not hasattr(submsg, '__slots__'):
+                # raw
+                if self.include_message_info:
+                    print('---Got new message, message info:---')
+                    print(info)
+                    print('---Message data:---')
+                line_end = '\n' + line_end
+                print(submsg, end=line_end)
+                continue
+
+            if self.csv:
+                to_print = message_to_csv(
+                    submsg,
+                    truncate_length=self.truncate_length,
+                    no_arr=self.no_arr,
+                    no_str=self.no_str)
+                if self.include_message_info:
+                    to_print = f'{",".join(str(x) for x in info.values())},{to_print}'
+                print(to_print)
+                continue
+            # yaml
+            if self.include_message_info:
+                print(yaml.dump(info), end=line_end)
+            print(
+                message_to_yaml(
+                    submsg, truncate_length=self.truncate_length,
+                    no_arr=self.no_arr, no_str=self.no_str, flow_style=self.flow_style),
+                end=line_end)
+
+
+def _expr_eval(expr):
+    def eval_fn(m):
+        return eval(expr)
+    return eval_fn
+
+
+def _message_lost_event_callback(message_lost_status):
+    print(
+        'A message was lost!!!\n\ttotal count change:'
+        f'{message_lost_status.total_count_change}'
+        f'\n\ttotal count: {message_lost_status.total_count}',
+        end='---\n'
+    )
+
+
+def clear_terminal():
+    print('\x1b[H\x1b[2J')

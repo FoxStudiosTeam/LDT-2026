@@ -1,0 +1,4 @@
+source;share/rosbag2_storage/environment/ament_prefix_path.bat
+source;share/rosbag2_storage/environment/path.bat
+source;share/rosbag2_storage/environment/ament_prefix_path.dsv
+source;share/rosbag2_storage/environment/path.dsv

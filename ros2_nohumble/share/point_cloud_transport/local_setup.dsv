@@ -1,0 +1,4 @@
+source;share/point_cloud_transport/environment/ament_prefix_path.bat
+source;share/point_cloud_transport/environment/path.bat
+source;share/point_cloud_transport/environment/ament_prefix_path.dsv
+source;share/point_cloud_transport/environment/path.dsv

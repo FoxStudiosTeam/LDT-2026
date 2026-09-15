@@ -1,0 +1,260 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "rcl_interfaces/srv/SetLoggerLevels",
+      "fields": [
+        {
+          "name": "request_message",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "rcl_interfaces/srv/SetLoggerLevels_Request"
+          },
+          "default_value": ""
+        },
+        {
+          "name": "response_message",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "rcl_interfaces/srv/SetLoggerLevels_Response"
+          },
+          "default_value": ""
+        },
+        {
+          "name": "event_message",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "rcl_interfaces/srv/SetLoggerLevels_Event"
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": [
+      {
+        "type_name": "builtin_interfaces/msg/Time",
+        "fields": [
+          {
+            "name": "sec",
+            "type": {
+              "type_id": 6,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "nanosec",
+            "type": {
+              "type_id": 7,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "rcl_interfaces/msg/LoggerLevel",
+        "fields": [
+          {
+            "name": "name",
+            "type": {
+              "type_id": 17,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "level",
+            "type": {
+              "type_id": 7,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "rcl_interfaces/msg/SetLoggerLevelsResult",
+        "fields": [
+          {
+            "name": "successful",
+            "type": {
+              "type_id": 15,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "reason",
+            "type": {
+              "type_id": 17,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "rcl_interfaces/srv/SetLoggerLevels_Event",
+        "fields": [
+          {
+            "name": "info",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "service_msgs/msg/ServiceEventInfo"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "request",
+            "type": {
+              "type_id": 97,
+              "capacity": 1,
+              "string_capacity": 0,
+              "nested_type_name": "rcl_interfaces/srv/SetLoggerLevels_Request"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "response",
+            "type": {
+              "type_id": 97,
+              "capacity": 1,
+              "string_capacity": 0,
+              "nested_type_name": "rcl_interfaces/srv/SetLoggerLevels_Response"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "rcl_interfaces/srv/SetLoggerLevels_Request",
+        "fields": [
+          {
+            "name": "levels",
+            "type": {
+              "type_id": 145,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "rcl_interfaces/msg/LoggerLevel"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "rcl_interfaces/srv/SetLoggerLevels_Response",
+        "fields": [
+          {
+            "name": "results",
+            "type": {
+              "type_id": 145,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "rcl_interfaces/msg/SetLoggerLevelsResult"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "service_msgs/msg/ServiceEventInfo",
+        "fields": [
+          {
+            "name": "event_type",
+            "type": {
+              "type_id": 3,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "stamp",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "builtin_interfaces/msg/Time"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "client_gid",
+            "type": {
+              "type_id": 51,
+              "capacity": 16,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "sequence_number",
+            "type": {
+              "type_id": 8,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      }
+    ]
+  },
+  "type_hashes": [
+    {
+      "type_name": "rcl_interfaces/srv/SetLoggerLevels",
+      "hash_string": "RIHS01_3ff86cb4e91fbf9abae15c234ecc874448de6ece8e193401c077cf116e4f6d78"
+    },
+    {
+      "type_name": "builtin_interfaces/msg/Time",
+      "hash_string": "RIHS01_b106235e25a4c5ed35098aa0a61a3ee9c9b18d197f398b0e4206cea9acf9c197"
+    },
+    {
+      "type_name": "rcl_interfaces/msg/LoggerLevel",
+      "hash_string": "RIHS01_95785cc42f048ab4f395af65035aeaf2181d8e1c7a44edb8ad4558445fdb43c0"
+    },
+    {
+      "type_name": "rcl_interfaces/msg/SetLoggerLevelsResult",
+      "hash_string": "RIHS01_9316e5e679a5b72d2dd7fd80c539bae9e106fa0890a06dc5da3a8177a3ff6909"
+    },
+    {
+      "type_name": "rcl_interfaces/srv/SetLoggerLevels_Event",
+      "hash_string": "RIHS01_ce7d563c54edbff5addfea9ae8f8bcb7ba755673cdc0761064ec0d4adf18b6d9"
+    },
+    {
+      "type_name": "rcl_interfaces/srv/SetLoggerLevels_Request",
+      "hash_string": "RIHS01_4e7768e0f4c749205f35bc05449f83fad18c42de52c16b1934d66c2f68ffd862"
+    },
+    {
+      "type_name": "rcl_interfaces/srv/SetLoggerLevels_Response",
+      "hash_string": "RIHS01_ba51739027e57cb9120015737f4618579684047d862b2b16a76bc399d987d6d3"
+    },
+    {
+      "type_name": "service_msgs/msg/ServiceEventInfo",
+      "hash_string": "RIHS01_41bcbbe07a75c9b52bc96bfd5c24d7f0fc0a08c0cb7921b3373c5732345a6f45"
+    }
+  ]
+}

@@ -1,0 +1,2 @@
+[console_scripts]
+rqt_publisher = rqt_publisher.main:main

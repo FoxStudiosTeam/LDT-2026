@@ -1,0 +1,105 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "test_msgs/msg/ComplexNestedKey",
+      "fields": [
+        {
+          "name": "uint32_key",
+          "type": {
+            "type_id": 7,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        },
+        {
+          "name": "nested_keys",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "test_msgs/msg/NonKeyedWithNestedKey"
+          },
+          "default_value": ""
+        },
+        {
+          "name": "float64_value",
+          "type": {
+            "type_id": 11,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": [
+      {
+        "type_name": "test_msgs/msg/KeyedString",
+        "fields": [
+          {
+            "name": "key",
+            "type": {
+              "type_id": 17,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "value",
+            "type": {
+              "type_id": 17,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "test_msgs/msg/NonKeyedWithNestedKey",
+        "fields": [
+          {
+            "name": "nested_data",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "test_msgs/msg/KeyedString"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "some_int",
+            "type": {
+              "type_id": 6,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      }
+    ]
+  },
+  "type_hashes": [
+    {
+      "type_name": "test_msgs/msg/ComplexNestedKey",
+      "hash_string": "RIHS01_67de37f251f9431ed5f2630507939ff5538ecfaaa4169849be18870c3fbe2de8"
+    },
+    {
+      "type_name": "test_msgs/msg/KeyedString",
+      "hash_string": "RIHS01_20c0320c41013bc51612123c18abadac81944a31db59f1caf817829e2f186043"
+    },
+    {
+      "type_name": "test_msgs/msg/NonKeyedWithNestedKey",
+      "hash_string": "RIHS01_36baf7e933c8647ccf6a96e27549df0db4c6d5bc0200819dab4c61e6b6d927d2"
+    }
+  ]
+}

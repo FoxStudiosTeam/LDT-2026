@@ -1,0 +1,4 @@
+quality_of_service_demo::MessageLostListener;bin/message_lost.dll
+quality_of_service_demo::MessageLostTalker;bin/message_lost.dll
+quality_of_service_demo::QosOverridesListener;bin/qos_overrides.dll
+quality_of_service_demo::QosOverridesTalker;bin/qos_overrides.dll

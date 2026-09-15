@@ -1,0 +1,5 @@
+composition::Talker;bin/talker_component.dll
+composition::Listener;bin/listener_component.dll
+composition::NodeLikeListener;bin/node_like_listener_component.dll
+composition::Server;bin/server_component.dll
+composition::Client;bin/client_component.dll

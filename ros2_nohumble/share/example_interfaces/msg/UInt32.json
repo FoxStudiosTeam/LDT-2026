@@ -1,0 +1,26 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "example_interfaces/msg/UInt32",
+      "fields": [
+        {
+          "name": "data",
+          "type": {
+            "type_id": 7,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": []
+  },
+  "type_hashes": [
+    {
+      "type_name": "example_interfaces/msg/UInt32",
+      "hash_string": "RIHS01_e86cccba586f30c16498f3ccd3550a764b255239a6142be3a4d7a2fa9a43515c"
+    }
+  ]
+}

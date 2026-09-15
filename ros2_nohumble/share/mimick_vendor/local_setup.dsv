@@ -1,0 +1,6 @@
+source;share/mimick_vendor/environment/ament_prefix_path.bat
+source;share/mimick_vendor/environment/path.bat
+source;share/mimick_vendor/environment/vendor_package.bat
+source;share/mimick_vendor/environment/ament_prefix_path.dsv
+source;share/mimick_vendor/environment/path.dsv
+source;share/mimick_vendor/environment/vendor_package.dsv

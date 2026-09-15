@@ -1,0 +1,36 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "rcl_interfaces/msg/SetLoggerLevelsResult",
+      "fields": [
+        {
+          "name": "successful",
+          "type": {
+            "type_id": 15,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        },
+        {
+          "name": "reason",
+          "type": {
+            "type_id": 17,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": []
+  },
+  "type_hashes": [
+    {
+      "type_name": "rcl_interfaces/msg/SetLoggerLevelsResult",
+      "hash_string": "RIHS01_9316e5e679a5b72d2dd7fd80c539bae9e106fa0890a06dc5da3a8177a3ff6909"
+    }
+  ]
+}

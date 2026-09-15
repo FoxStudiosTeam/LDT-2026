@@ -1,0 +1,4 @@
+source;share/ament_cmake_export_dependencies/environment/ament_prefix_path.bat
+source;share/ament_cmake_export_dependencies/environment/path.bat
+source;share/ament_cmake_export_dependencies/environment/ament_prefix_path.dsv
+source;share/ament_cmake_export_dependencies/environment/path.dsv

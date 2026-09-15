@@ -1,0 +1,105 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "example_interfaces/msg/Float64MultiArray",
+      "fields": [
+        {
+          "name": "layout",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "example_interfaces/msg/MultiArrayLayout"
+          },
+          "default_value": ""
+        },
+        {
+          "name": "data",
+          "type": {
+            "type_id": 155,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": [
+      {
+        "type_name": "example_interfaces/msg/MultiArrayDimension",
+        "fields": [
+          {
+            "name": "label",
+            "type": {
+              "type_id": 17,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "size",
+            "type": {
+              "type_id": 7,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "stride",
+            "type": {
+              "type_id": 7,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "example_interfaces/msg/MultiArrayLayout",
+        "fields": [
+          {
+            "name": "dim",
+            "type": {
+              "type_id": 145,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "example_interfaces/msg/MultiArrayDimension"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "data_offset",
+            "type": {
+              "type_id": 7,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      }
+    ]
+  },
+  "type_hashes": [
+    {
+      "type_name": "example_interfaces/msg/Float64MultiArray",
+      "hash_string": "RIHS01_62a0985e7920b7bc489d1392f08c06ba0080fff5b8eaa09b27dcac122f50ad95"
+    },
+    {
+      "type_name": "example_interfaces/msg/MultiArrayDimension",
+      "hash_string": "RIHS01_a785cb9839e177e3eb760260139a919fec87821edc3314c592f2725abbf0bfcd"
+    },
+    {
+      "type_name": "example_interfaces/msg/MultiArrayLayout",
+      "hash_string": "RIHS01_ba42ea30074e5826a1e91f70f3660dda2996937169487f877fc20a8a402e2c27"
+    }
+  ]
+}

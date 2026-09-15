@@ -1,0 +1,18 @@
+// generated from rosidl_adapter/resource/action.idl.em
+// with input from rosbag2_test_msgdefs/action/BasicAction.action
+// generated code does not contain a copyright notice
+
+
+module rosbag2_test_msgdefs {
+  module action {
+    struct BasicAction_Goal {
+      string goal;
+    };
+    struct BasicAction_Result {
+      string result;
+    };
+    struct BasicAction_Feedback {
+      string feedback;
+    };
+  };
+};

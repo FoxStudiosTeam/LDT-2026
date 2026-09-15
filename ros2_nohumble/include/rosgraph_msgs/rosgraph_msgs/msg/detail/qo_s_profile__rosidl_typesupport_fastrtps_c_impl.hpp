@@ -1,0 +1,675 @@
+// generated from rosidl_typesupport_fastrtps_c/resource/idl__type_support_c_impl.hpp.em
+// with input from rosgraph_msgs:msg\QoSProfile.idl
+// generated code does not contain a copyright notice
+
+#ifndef ROSGRAPH_MSGS__MSG__DETAIL__QO_S_PROFILE__ROSIDL_TYPESUPPORT_FASTRTPS_C_IMPL_HPP_
+#define ROSGRAPH_MSGS__MSG__DETAIL__QO_S_PROFILE__ROSIDL_TYPESUPPORT_FASTRTPS_C_IMPL_HPP_
+
+
+#include <cassert>
+#include <cstddef>
+#include <limits>
+#include <string>
+#include <vector>
+#include "rosidl_typesupport_fastrtps_c/serialization_helpers.hpp"
+#include "rosidl_typesupport_fastrtps_cpp/message_type_support.h"
+#include "rosgraph_msgs/msg/detail/qo_s_profile__struct.h"
+#include "rosgraph_msgs/msg/detail/qo_s_profile__functions.h"
+#include "rosgraph_msgs/msg/detail/qo_s_profile__rosidl_typesupport_fastrtps_c.h"
+#include "fastcdr/Cdr.h"
+
+#include "builtin_interfaces/msg/detail/duration__functions.h"  // deadline, lifespan, liveliness_lease_duration
+
+// Include the inline (de)serialization headers of nested message types so
+// their bodies are visible here and can be fully inlined by the compiler.
+#include "builtin_interfaces/msg/detail/duration__rosidl_typesupport_fastrtps_c_impl.hpp"
+
+#if defined(__cplusplus)
+extern "C"
+{
+#endif
+
+using _QoSProfile__ros_msg_type = rosgraph_msgs__msg__QoSProfile;
+
+
+inline
+bool impl_cdr_serialize_rosgraph_msgs__msg__QoSProfile(
+  const rosgraph_msgs__msg__QoSProfile * ros_message,
+  eprosima::fastcdr::Cdr & cdr)
+{
+  // Field name: depth
+  {
+    cdr << ros_message->depth;
+  }
+
+  // Field name: deadline
+  {
+    impl_cdr_serialize_builtin_interfaces__msg__Duration(
+      &ros_message->deadline, cdr);
+  }
+
+  // Field name: lifespan
+  {
+    impl_cdr_serialize_builtin_interfaces__msg__Duration(
+      &ros_message->lifespan, cdr);
+  }
+
+  // Field name: history
+  {
+    cdr << ros_message->history;
+  }
+
+  // Field name: reliability
+  {
+    cdr << ros_message->reliability;
+  }
+
+  // Field name: durability
+  {
+    cdr << ros_message->durability;
+  }
+
+  // Field name: liveliness
+  {
+    cdr << ros_message->liveliness;
+  }
+
+  // Field name: liveliness_lease_duration
+  {
+    impl_cdr_serialize_builtin_interfaces__msg__Duration(
+      &ros_message->liveliness_lease_duration, cdr);
+  }
+
+  return true;
+}
+
+inline
+bool impl_cdr_deserialize_rosgraph_msgs__msg__QoSProfile(
+  eprosima::fastcdr::Cdr & cdr,
+  rosgraph_msgs__msg__QoSProfile * ros_message)
+{
+  // Field name: depth
+  {
+    cdr >> ros_message->depth;
+  }
+
+  // Field name: deadline
+  {
+    impl_cdr_deserialize_builtin_interfaces__msg__Duration(cdr, &ros_message->deadline);
+  }
+
+  // Field name: lifespan
+  {
+    impl_cdr_deserialize_builtin_interfaces__msg__Duration(cdr, &ros_message->lifespan);
+  }
+
+  // Field name: history
+  {
+    cdr >> ros_message->history;
+  }
+
+  // Field name: reliability
+  {
+    cdr >> ros_message->reliability;
+  }
+
+  // Field name: durability
+  {
+    cdr >> ros_message->durability;
+  }
+
+  // Field name: liveliness
+  {
+    cdr >> ros_message->liveliness;
+  }
+
+  // Field name: liveliness_lease_duration
+  {
+    impl_cdr_deserialize_builtin_interfaces__msg__Duration(cdr, &ros_message->liveliness_lease_duration);
+  }
+
+  return true;
+}  // NOLINT(readability/fn_size)
+
+
+inline
+size_t impl_get_serialized_size_rosgraph_msgs__msg__QoSProfile(
+  const void * untyped_ros_message,
+  size_t current_alignment)
+{
+  const _QoSProfile__ros_msg_type * ros_message = static_cast<const _QoSProfile__ros_msg_type *>(untyped_ros_message);
+  (void)ros_message;
+  size_t initial_alignment = current_alignment;
+
+  const size_t padding = 4;
+  const size_t wchar_size = 4;
+  (void)padding;
+  (void)wchar_size;
+
+  // Field name: depth
+  {
+    size_t item_size = sizeof(ros_message->depth);
+    current_alignment += item_size +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
+  }
+
+  // Field name: deadline
+  current_alignment += impl_get_serialized_size_builtin_interfaces__msg__Duration(
+    &(ros_message->deadline), current_alignment);
+
+  // Field name: lifespan
+  current_alignment += impl_get_serialized_size_builtin_interfaces__msg__Duration(
+    &(ros_message->lifespan), current_alignment);
+
+  // Field name: history
+  {
+    size_t item_size = sizeof(ros_message->history);
+    current_alignment += item_size +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
+  }
+
+  // Field name: reliability
+  {
+    size_t item_size = sizeof(ros_message->reliability);
+    current_alignment += item_size +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
+  }
+
+  // Field name: durability
+  {
+    size_t item_size = sizeof(ros_message->durability);
+    current_alignment += item_size +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
+  }
+
+  // Field name: liveliness
+  {
+    size_t item_size = sizeof(ros_message->liveliness);
+    current_alignment += item_size +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
+  }
+
+  // Field name: liveliness_lease_duration
+  current_alignment += impl_get_serialized_size_builtin_interfaces__msg__Duration(
+    &(ros_message->liveliness_lease_duration), current_alignment);
+
+  return current_alignment - initial_alignment;
+}
+
+
+inline
+size_t impl_max_serialized_size_rosgraph_msgs__msg__QoSProfile(
+  bool & full_bounded,
+  bool & is_plain,
+  size_t current_alignment)
+{
+  size_t initial_alignment = current_alignment;
+
+  const size_t padding = 4;
+  const size_t wchar_size = 4;
+  size_t last_member_size = 0;
+  (void)last_member_size;
+  (void)padding;
+  (void)wchar_size;
+
+  full_bounded = true;
+  is_plain = true;
+
+  // Field name: depth
+  {
+    size_t array_size = 1;
+    last_member_size = array_size * sizeof(uint32_t);
+    current_alignment += array_size * sizeof(uint32_t) +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, sizeof(uint32_t));
+  }
+
+  // Field name: deadline
+  {
+    size_t array_size = 1;
+    last_member_size = 0;
+    for (size_t index = 0; index < array_size; ++index) {
+      bool inner_full_bounded;
+      bool inner_is_plain;
+      size_t inner_size;
+      inner_size =
+        impl_max_serialized_size_builtin_interfaces__msg__Duration(
+        inner_full_bounded, inner_is_plain, current_alignment);
+      last_member_size += inner_size;
+      current_alignment += inner_size;
+      full_bounded &= inner_full_bounded;
+      is_plain &= inner_is_plain;
+    }
+  }
+
+  // Field name: lifespan
+  {
+    size_t array_size = 1;
+    last_member_size = 0;
+    for (size_t index = 0; index < array_size; ++index) {
+      bool inner_full_bounded;
+      bool inner_is_plain;
+      size_t inner_size;
+      inner_size =
+        impl_max_serialized_size_builtin_interfaces__msg__Duration(
+        inner_full_bounded, inner_is_plain, current_alignment);
+      last_member_size += inner_size;
+      current_alignment += inner_size;
+      full_bounded &= inner_full_bounded;
+      is_plain &= inner_is_plain;
+    }
+  }
+
+  // Field name: history
+  {
+    size_t array_size = 1;
+    last_member_size = array_size * sizeof(uint8_t);
+    current_alignment += array_size * sizeof(uint8_t);
+  }
+
+  // Field name: reliability
+  {
+    size_t array_size = 1;
+    last_member_size = array_size * sizeof(uint8_t);
+    current_alignment += array_size * sizeof(uint8_t);
+  }
+
+  // Field name: durability
+  {
+    size_t array_size = 1;
+    last_member_size = array_size * sizeof(uint8_t);
+    current_alignment += array_size * sizeof(uint8_t);
+  }
+
+  // Field name: liveliness
+  {
+    size_t array_size = 1;
+    last_member_size = array_size * sizeof(uint8_t);
+    current_alignment += array_size * sizeof(uint8_t);
+  }
+
+  // Field name: liveliness_lease_duration
+  {
+    size_t array_size = 1;
+    last_member_size = 0;
+    for (size_t index = 0; index < array_size; ++index) {
+      bool inner_full_bounded;
+      bool inner_is_plain;
+      size_t inner_size;
+      inner_size =
+        impl_max_serialized_size_builtin_interfaces__msg__Duration(
+        inner_full_bounded, inner_is_plain, current_alignment);
+      last_member_size += inner_size;
+      current_alignment += inner_size;
+      full_bounded &= inner_full_bounded;
+      is_plain &= inner_is_plain;
+    }
+  }
+
+
+  size_t ret_val = current_alignment - initial_alignment;
+  if (is_plain) {
+    // All members are plain, and type is not empty.
+    // We still need to check that the in-memory alignment
+    // is the same as the CDR mandated alignment.
+    using DataType = rosgraph_msgs__msg__QoSProfile;
+    is_plain =
+      (
+      offsetof(DataType, liveliness_lease_duration) +
+      last_member_size
+      ) == ret_val;
+  }
+  return ret_val;
+}
+
+inline
+bool impl_cdr_serialize_key_rosgraph_msgs__msg__QoSProfile(
+  const rosgraph_msgs__msg__QoSProfile * ros_message,
+  eprosima::fastcdr::Cdr & cdr)
+{
+  // Field name: depth
+  {
+    cdr << ros_message->depth;
+  }
+
+  // Field name: deadline
+  {
+    impl_cdr_serialize_key_builtin_interfaces__msg__Duration(
+      &ros_message->deadline, cdr);
+  }
+
+  // Field name: lifespan
+  {
+    impl_cdr_serialize_key_builtin_interfaces__msg__Duration(
+      &ros_message->lifespan, cdr);
+  }
+
+  // Field name: history
+  {
+    cdr << ros_message->history;
+  }
+
+  // Field name: reliability
+  {
+    cdr << ros_message->reliability;
+  }
+
+  // Field name: durability
+  {
+    cdr << ros_message->durability;
+  }
+
+  // Field name: liveliness
+  {
+    cdr << ros_message->liveliness;
+  }
+
+  // Field name: liveliness_lease_duration
+  {
+    impl_cdr_serialize_key_builtin_interfaces__msg__Duration(
+      &ros_message->liveliness_lease_duration, cdr);
+  }
+
+  return true;
+}
+
+inline
+size_t impl_get_serialized_size_key_rosgraph_msgs__msg__QoSProfile(
+  const void * untyped_ros_message,
+  size_t current_alignment)
+{
+  const _QoSProfile__ros_msg_type * ros_message = static_cast<const _QoSProfile__ros_msg_type *>(untyped_ros_message);
+  (void)ros_message;
+
+  size_t initial_alignment = current_alignment;
+
+  const size_t padding = 4;
+  const size_t wchar_size = 4;
+  (void)padding;
+  (void)wchar_size;
+
+  // Field name: depth
+  {
+    size_t item_size = sizeof(ros_message->depth);
+    current_alignment += item_size +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
+  }
+
+  // Field name: deadline
+  current_alignment += impl_get_serialized_size_key_builtin_interfaces__msg__Duration(
+    &(ros_message->deadline), current_alignment);
+
+  // Field name: lifespan
+  current_alignment += impl_get_serialized_size_key_builtin_interfaces__msg__Duration(
+    &(ros_message->lifespan), current_alignment);
+
+  // Field name: history
+  {
+    size_t item_size = sizeof(ros_message->history);
+    current_alignment += item_size +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
+  }
+
+  // Field name: reliability
+  {
+    size_t item_size = sizeof(ros_message->reliability);
+    current_alignment += item_size +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
+  }
+
+  // Field name: durability
+  {
+    size_t item_size = sizeof(ros_message->durability);
+    current_alignment += item_size +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
+  }
+
+  // Field name: liveliness
+  {
+    size_t item_size = sizeof(ros_message->liveliness);
+    current_alignment += item_size +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
+  }
+
+  // Field name: liveliness_lease_duration
+  current_alignment += impl_get_serialized_size_key_builtin_interfaces__msg__Duration(
+    &(ros_message->liveliness_lease_duration), current_alignment);
+
+  return current_alignment - initial_alignment;
+}
+
+inline
+size_t impl_max_serialized_size_key_rosgraph_msgs__msg__QoSProfile(
+  bool & full_bounded,
+  bool & is_plain,
+  size_t current_alignment)
+{
+  size_t initial_alignment = current_alignment;
+
+  const size_t padding = 4;
+  const size_t wchar_size = 4;
+  size_t last_member_size = 0;
+  (void)last_member_size;
+  (void)padding;
+  (void)wchar_size;
+
+  full_bounded = true;
+  is_plain = true;
+  // Field name: depth
+  {
+    size_t array_size = 1;
+    last_member_size = array_size * sizeof(uint32_t);
+    current_alignment += array_size * sizeof(uint32_t) +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, sizeof(uint32_t));
+  }
+
+  // Field name: deadline
+  {
+    size_t array_size = 1;
+    last_member_size = 0;
+    for (size_t index = 0; index < array_size; ++index) {
+      bool inner_full_bounded;
+      bool inner_is_plain;
+      size_t inner_size;
+      inner_size =
+        impl_max_serialized_size_key_builtin_interfaces__msg__Duration(
+        inner_full_bounded, inner_is_plain, current_alignment);
+      last_member_size += inner_size;
+      current_alignment += inner_size;
+      full_bounded &= inner_full_bounded;
+      is_plain &= inner_is_plain;
+    }
+  }
+
+  // Field name: lifespan
+  {
+    size_t array_size = 1;
+    last_member_size = 0;
+    for (size_t index = 0; index < array_size; ++index) {
+      bool inner_full_bounded;
+      bool inner_is_plain;
+      size_t inner_size;
+      inner_size =
+        impl_max_serialized_size_key_builtin_interfaces__msg__Duration(
+        inner_full_bounded, inner_is_plain, current_alignment);
+      last_member_size += inner_size;
+      current_alignment += inner_size;
+      full_bounded &= inner_full_bounded;
+      is_plain &= inner_is_plain;
+    }
+  }
+
+  // Field name: history
+  {
+    size_t array_size = 1;
+    last_member_size = array_size * sizeof(uint8_t);
+    current_alignment += array_size * sizeof(uint8_t);
+  }
+
+  // Field name: reliability
+  {
+    size_t array_size = 1;
+    last_member_size = array_size * sizeof(uint8_t);
+    current_alignment += array_size * sizeof(uint8_t);
+  }
+
+  // Field name: durability
+  {
+    size_t array_size = 1;
+    last_member_size = array_size * sizeof(uint8_t);
+    current_alignment += array_size * sizeof(uint8_t);
+  }
+
+  // Field name: liveliness
+  {
+    size_t array_size = 1;
+    last_member_size = array_size * sizeof(uint8_t);
+    current_alignment += array_size * sizeof(uint8_t);
+  }
+
+  // Field name: liveliness_lease_duration
+  {
+    size_t array_size = 1;
+    last_member_size = 0;
+    for (size_t index = 0; index < array_size; ++index) {
+      bool inner_full_bounded;
+      bool inner_is_plain;
+      size_t inner_size;
+      inner_size =
+        impl_max_serialized_size_key_builtin_interfaces__msg__Duration(
+        inner_full_bounded, inner_is_plain, current_alignment);
+      last_member_size += inner_size;
+      current_alignment += inner_size;
+      full_bounded &= inner_full_bounded;
+      is_plain &= inner_is_plain;
+    }
+  }
+
+  size_t ret_val = current_alignment - initial_alignment;
+  if (is_plain) {
+    // All members are plain, and type is not empty.
+    // We still need to check that the in-memory alignment
+    // is the same as the CDR mandated alignment.
+    using DataType = rosgraph_msgs__msg__QoSProfile;
+    is_plain =
+      (
+      offsetof(DataType, liveliness_lease_duration) +
+      last_member_size
+      ) == ret_val;
+  }
+  return ret_val;
+}
+
+inline
+bool impl_cdr_serialize_with_endpoint_rosgraph_msgs__msg__QoSProfile(
+  const rosgraph_msgs__msg__QoSProfile * ros_message,
+  eprosima::fastcdr::Cdr & cdr,
+  const rmw_topic_endpoint_info_t & endpoint_info,
+  const rosidl_typesupport_fastrtps_cpp::BufferSerializationContext & serialization_context)
+{
+  (void)ros_message;
+  (void)endpoint_info;
+  (void)serialization_context;
+  // Field name: depth
+  {
+    cdr << ros_message->depth;
+  }
+
+  // Field name: deadline
+  {
+    impl_cdr_serialize_with_endpoint_builtin_interfaces__msg__Duration(
+      &ros_message->deadline, cdr, endpoint_info, serialization_context);
+  }
+
+  // Field name: lifespan
+  {
+    impl_cdr_serialize_with_endpoint_builtin_interfaces__msg__Duration(
+      &ros_message->lifespan, cdr, endpoint_info, serialization_context);
+  }
+
+  // Field name: history
+  {
+    cdr << ros_message->history;
+  }
+
+  // Field name: reliability
+  {
+    cdr << ros_message->reliability;
+  }
+
+  // Field name: durability
+  {
+    cdr << ros_message->durability;
+  }
+
+  // Field name: liveliness
+  {
+    cdr << ros_message->liveliness;
+  }
+
+  // Field name: liveliness_lease_duration
+  {
+    impl_cdr_serialize_with_endpoint_builtin_interfaces__msg__Duration(
+      &ros_message->liveliness_lease_duration, cdr, endpoint_info, serialization_context);
+  }
+
+  return true;
+}
+
+inline
+bool impl_cdr_deserialize_with_endpoint_rosgraph_msgs__msg__QoSProfile(
+  eprosima::fastcdr::Cdr & cdr,
+  rosgraph_msgs__msg__QoSProfile * ros_message,
+  const rmw_topic_endpoint_info_t & endpoint_info,
+  const rosidl_typesupport_fastrtps_cpp::BufferSerializationContext & serialization_context)
+{
+  (void)ros_message;
+  (void)endpoint_info;
+  (void)serialization_context;
+  // Field name: depth
+  {
+    cdr >> ros_message->depth;
+  }
+
+  // Field name: deadline
+  {
+    impl_cdr_deserialize_with_endpoint_builtin_interfaces__msg__Duration(cdr, &ros_message->deadline, endpoint_info, serialization_context);
+  }
+
+  // Field name: lifespan
+  {
+    impl_cdr_deserialize_with_endpoint_builtin_interfaces__msg__Duration(cdr, &ros_message->lifespan, endpoint_info, serialization_context);
+  }
+
+  // Field name: history
+  {
+    cdr >> ros_message->history;
+  }
+
+  // Field name: reliability
+  {
+    cdr >> ros_message->reliability;
+  }
+
+  // Field name: durability
+  {
+    cdr >> ros_message->durability;
+  }
+
+  // Field name: liveliness
+  {
+    cdr >> ros_message->liveliness;
+  }
+
+  // Field name: liveliness_lease_duration
+  {
+    impl_cdr_deserialize_with_endpoint_builtin_interfaces__msg__Duration(cdr, &ros_message->liveliness_lease_duration, endpoint_info, serialization_context);
+  }
+
+  return true;
+}  // NOLINT(readability/fn_size)
+
+#if defined(__cplusplus)
+}
+#endif
+
+#endif  // ROSGRAPH_MSGS__MSG__DETAIL__QO_S_PROFILE__ROSIDL_TYPESUPPORT_FASTRTPS_C_IMPL_HPP_

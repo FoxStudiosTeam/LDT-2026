@@ -1,0 +1,4 @@
+source;share/rcl_lifecycle/environment/ament_prefix_path.bat
+source;share/rcl_lifecycle/environment/path.bat
+source;share/rcl_lifecycle/environment/ament_prefix_path.dsv
+source;share/rcl_lifecycle/environment/path.dsv

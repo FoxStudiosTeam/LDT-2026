@@ -1,0 +1,4 @@
+source;share/zenoh_security_tools/environment/ament_prefix_path.bat
+source;share/zenoh_security_tools/environment/path.bat
+source;share/zenoh_security_tools/environment/ament_prefix_path.dsv
+source;share/zenoh_security_tools/environment/path.dsv

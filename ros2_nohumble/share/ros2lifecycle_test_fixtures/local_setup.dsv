@@ -1,0 +1,4 @@
+source;share/ros2lifecycle_test_fixtures/environment/ament_prefix_path.bat
+source;share/ros2lifecycle_test_fixtures/environment/path.bat
+source;share/ros2lifecycle_test_fixtures/environment/ament_prefix_path.dsv
+source;share/ros2lifecycle_test_fixtures/environment/path.dsv

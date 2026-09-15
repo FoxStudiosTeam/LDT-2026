@@ -1,0 +1,6 @@
+source;share/logging_demo/environment/ament_prefix_path.bat
+source;share/logging_demo/environment/path.bat
+source;share/logging_demo/environment/pythonpath.bat
+source;share/logging_demo/environment/ament_prefix_path.dsv
+source;share/logging_demo/environment/path.dsv
+source;share/logging_demo/environment/pythonpath.dsv

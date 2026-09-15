@@ -1,0 +1,6 @@
+source;share/rosidl_typesupport_cpp/environment/ament_prefix_path.bat
+source;share/rosidl_typesupport_cpp/environment/path.bat
+source;share/rosidl_typesupport_cpp/environment/pythonpath.bat
+source;share/rosidl_typesupport_cpp/environment/ament_prefix_path.dsv
+source;share/rosidl_typesupport_cpp/environment/path.dsv
+source;share/rosidl_typesupport_cpp/environment/pythonpath.dsv

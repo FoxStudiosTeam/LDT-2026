@@ -1,0 +1,6 @@
+source;share/python_qt_binding/environment/ament_prefix_path.bat
+source;share/python_qt_binding/environment/path.bat
+source;share/python_qt_binding/environment/pythonpath.bat
+source;share/python_qt_binding/environment/ament_prefix_path.dsv
+source;share/python_qt_binding/environment/path.dsv
+source;share/python_qt_binding/environment/pythonpath.dsv

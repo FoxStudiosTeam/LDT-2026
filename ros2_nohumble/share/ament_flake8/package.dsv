@@ -1,0 +1,12 @@
+source;ros_domain_id.txt
+source;share\ament_flake8\hook\pythonpath.ps1
+source;share\ament_flake8\hook\pythonpath.bat
+source;share\ament_flake8\hook\pythonpath.dsv
+source;ros_domain_id.txt
+source;share\ament_flake8\hook\pythonscriptspath.ps1
+source;share\ament_flake8\hook\pythonscriptspath.bat
+source;share\ament_flake8\hook\pythonscriptspath.dsv
+source;ros_domain_id.txt
+source;share\ament_flake8\hook\ament_prefix_path.ps1
+source;share\ament_flake8\hook\ament_prefix_path.bat
+source;share\ament_flake8\hook\ament_prefix_path.dsv

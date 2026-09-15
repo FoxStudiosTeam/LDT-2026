@@ -1,0 +1,355 @@
+// generated from rosidl_typesupport_fastrtps_c/resource/idl__type_support_c_impl.hpp.em
+// with input from rcl_interfaces:msg\IntegerRange.idl
+// generated code does not contain a copyright notice
+
+#ifndef RCL_INTERFACES__MSG__DETAIL__INTEGER_RANGE__ROSIDL_TYPESUPPORT_FASTRTPS_C_IMPL_HPP_
+#define RCL_INTERFACES__MSG__DETAIL__INTEGER_RANGE__ROSIDL_TYPESUPPORT_FASTRTPS_C_IMPL_HPP_
+
+
+#include <cassert>
+#include <cstddef>
+#include <limits>
+#include <string>
+#include <vector>
+#include "rosidl_typesupport_fastrtps_c/serialization_helpers.hpp"
+#include "rosidl_typesupport_fastrtps_cpp/message_type_support.h"
+#include "rcl_interfaces/msg/detail/integer_range__struct.h"
+#include "rcl_interfaces/msg/detail/integer_range__functions.h"
+#include "rcl_interfaces/msg/detail/integer_range__rosidl_typesupport_fastrtps_c.h"
+#include "fastcdr/Cdr.h"
+
+
+// Include the inline (de)serialization headers of nested message types so
+// their bodies are visible here and can be fully inlined by the compiler.
+
+#if defined(__cplusplus)
+extern "C"
+{
+#endif
+
+using _IntegerRange__ros_msg_type = rcl_interfaces__msg__IntegerRange;
+
+
+inline
+bool impl_cdr_serialize_rcl_interfaces__msg__IntegerRange(
+  const rcl_interfaces__msg__IntegerRange * ros_message,
+  eprosima::fastcdr::Cdr & cdr)
+{
+  // Field name: from_value
+  {
+    cdr << ros_message->from_value;
+  }
+
+  // Field name: to_value
+  {
+    cdr << ros_message->to_value;
+  }
+
+  // Field name: step
+  {
+    cdr << ros_message->step;
+  }
+
+  return true;
+}
+
+inline
+bool impl_cdr_deserialize_rcl_interfaces__msg__IntegerRange(
+  eprosima::fastcdr::Cdr & cdr,
+  rcl_interfaces__msg__IntegerRange * ros_message)
+{
+  // Field name: from_value
+  {
+    cdr >> ros_message->from_value;
+  }
+
+  // Field name: to_value
+  {
+    cdr >> ros_message->to_value;
+  }
+
+  // Field name: step
+  {
+    cdr >> ros_message->step;
+  }
+
+  return true;
+}  // NOLINT(readability/fn_size)
+
+
+inline
+size_t impl_get_serialized_size_rcl_interfaces__msg__IntegerRange(
+  const void * untyped_ros_message,
+  size_t current_alignment)
+{
+  const _IntegerRange__ros_msg_type * ros_message = static_cast<const _IntegerRange__ros_msg_type *>(untyped_ros_message);
+  (void)ros_message;
+  size_t initial_alignment = current_alignment;
+
+  const size_t padding = 4;
+  const size_t wchar_size = 4;
+  (void)padding;
+  (void)wchar_size;
+
+  // Field name: from_value
+  {
+    size_t item_size = sizeof(ros_message->from_value);
+    current_alignment += item_size +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
+  }
+
+  // Field name: to_value
+  {
+    size_t item_size = sizeof(ros_message->to_value);
+    current_alignment += item_size +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
+  }
+
+  // Field name: step
+  {
+    size_t item_size = sizeof(ros_message->step);
+    current_alignment += item_size +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
+  }
+
+  return current_alignment - initial_alignment;
+}
+
+
+inline
+size_t impl_max_serialized_size_rcl_interfaces__msg__IntegerRange(
+  bool & full_bounded,
+  bool & is_plain,
+  size_t current_alignment)
+{
+  size_t initial_alignment = current_alignment;
+
+  const size_t padding = 4;
+  const size_t wchar_size = 4;
+  size_t last_member_size = 0;
+  (void)last_member_size;
+  (void)padding;
+  (void)wchar_size;
+
+  full_bounded = true;
+  is_plain = true;
+
+  // Field name: from_value
+  {
+    size_t array_size = 1;
+    last_member_size = array_size * sizeof(uint64_t);
+    current_alignment += array_size * sizeof(uint64_t) +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, sizeof(uint64_t));
+  }
+
+  // Field name: to_value
+  {
+    size_t array_size = 1;
+    last_member_size = array_size * sizeof(uint64_t);
+    current_alignment += array_size * sizeof(uint64_t) +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, sizeof(uint64_t));
+  }
+
+  // Field name: step
+  {
+    size_t array_size = 1;
+    last_member_size = array_size * sizeof(uint64_t);
+    current_alignment += array_size * sizeof(uint64_t) +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, sizeof(uint64_t));
+  }
+
+
+  size_t ret_val = current_alignment - initial_alignment;
+  if (is_plain) {
+    // All members are plain, and type is not empty.
+    // We still need to check that the in-memory alignment
+    // is the same as the CDR mandated alignment.
+    using DataType = rcl_interfaces__msg__IntegerRange;
+    is_plain =
+      (
+      offsetof(DataType, step) +
+      last_member_size
+      ) == ret_val;
+  }
+  return ret_val;
+}
+
+inline
+bool impl_cdr_serialize_key_rcl_interfaces__msg__IntegerRange(
+  const rcl_interfaces__msg__IntegerRange * ros_message,
+  eprosima::fastcdr::Cdr & cdr)
+{
+  // Field name: from_value
+  {
+    cdr << ros_message->from_value;
+  }
+
+  // Field name: to_value
+  {
+    cdr << ros_message->to_value;
+  }
+
+  // Field name: step
+  {
+    cdr << ros_message->step;
+  }
+
+  return true;
+}
+
+inline
+size_t impl_get_serialized_size_key_rcl_interfaces__msg__IntegerRange(
+  const void * untyped_ros_message,
+  size_t current_alignment)
+{
+  const _IntegerRange__ros_msg_type * ros_message = static_cast<const _IntegerRange__ros_msg_type *>(untyped_ros_message);
+  (void)ros_message;
+
+  size_t initial_alignment = current_alignment;
+
+  const size_t padding = 4;
+  const size_t wchar_size = 4;
+  (void)padding;
+  (void)wchar_size;
+
+  // Field name: from_value
+  {
+    size_t item_size = sizeof(ros_message->from_value);
+    current_alignment += item_size +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
+  }
+
+  // Field name: to_value
+  {
+    size_t item_size = sizeof(ros_message->to_value);
+    current_alignment += item_size +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
+  }
+
+  // Field name: step
+  {
+    size_t item_size = sizeof(ros_message->step);
+    current_alignment += item_size +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, item_size);
+  }
+
+  return current_alignment - initial_alignment;
+}
+
+inline
+size_t impl_max_serialized_size_key_rcl_interfaces__msg__IntegerRange(
+  bool & full_bounded,
+  bool & is_plain,
+  size_t current_alignment)
+{
+  size_t initial_alignment = current_alignment;
+
+  const size_t padding = 4;
+  const size_t wchar_size = 4;
+  size_t last_member_size = 0;
+  (void)last_member_size;
+  (void)padding;
+  (void)wchar_size;
+
+  full_bounded = true;
+  is_plain = true;
+  // Field name: from_value
+  {
+    size_t array_size = 1;
+    last_member_size = array_size * sizeof(uint64_t);
+    current_alignment += array_size * sizeof(uint64_t) +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, sizeof(uint64_t));
+  }
+
+  // Field name: to_value
+  {
+    size_t array_size = 1;
+    last_member_size = array_size * sizeof(uint64_t);
+    current_alignment += array_size * sizeof(uint64_t) +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, sizeof(uint64_t));
+  }
+
+  // Field name: step
+  {
+    size_t array_size = 1;
+    last_member_size = array_size * sizeof(uint64_t);
+    current_alignment += array_size * sizeof(uint64_t) +
+      eprosima::fastcdr::Cdr::alignment(current_alignment, sizeof(uint64_t));
+  }
+
+  size_t ret_val = current_alignment - initial_alignment;
+  if (is_plain) {
+    // All members are plain, and type is not empty.
+    // We still need to check that the in-memory alignment
+    // is the same as the CDR mandated alignment.
+    using DataType = rcl_interfaces__msg__IntegerRange;
+    is_plain =
+      (
+      offsetof(DataType, step) +
+      last_member_size
+      ) == ret_val;
+  }
+  return ret_val;
+}
+
+inline
+bool impl_cdr_serialize_with_endpoint_rcl_interfaces__msg__IntegerRange(
+  const rcl_interfaces__msg__IntegerRange * ros_message,
+  eprosima::fastcdr::Cdr & cdr,
+  const rmw_topic_endpoint_info_t & endpoint_info,
+  const rosidl_typesupport_fastrtps_cpp::BufferSerializationContext & serialization_context)
+{
+  (void)ros_message;
+  (void)endpoint_info;
+  (void)serialization_context;
+  // Field name: from_value
+  {
+    cdr << ros_message->from_value;
+  }
+
+  // Field name: to_value
+  {
+    cdr << ros_message->to_value;
+  }
+
+  // Field name: step
+  {
+    cdr << ros_message->step;
+  }
+
+  return true;
+}
+
+inline
+bool impl_cdr_deserialize_with_endpoint_rcl_interfaces__msg__IntegerRange(
+  eprosima::fastcdr::Cdr & cdr,
+  rcl_interfaces__msg__IntegerRange * ros_message,
+  const rmw_topic_endpoint_info_t & endpoint_info,
+  const rosidl_typesupport_fastrtps_cpp::BufferSerializationContext & serialization_context)
+{
+  (void)ros_message;
+  (void)endpoint_info;
+  (void)serialization_context;
+  // Field name: from_value
+  {
+    cdr >> ros_message->from_value;
+  }
+
+  // Field name: to_value
+  {
+    cdr >> ros_message->to_value;
+  }
+
+  // Field name: step
+  {
+    cdr >> ros_message->step;
+  }
+
+  return true;
+}  // NOLINT(readability/fn_size)
+
+#if defined(__cplusplus)
+}
+#endif
+
+#endif  // RCL_INTERFACES__MSG__DETAIL__INTEGER_RANGE__ROSIDL_TYPESUPPORT_FASTRTPS_C_IMPL_HPP_

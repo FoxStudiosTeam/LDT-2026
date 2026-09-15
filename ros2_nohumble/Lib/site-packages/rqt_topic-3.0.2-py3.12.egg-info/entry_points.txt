@@ -1,0 +1,2 @@
+[console_scripts]
+rqt_topic = rqt_topic.main:main

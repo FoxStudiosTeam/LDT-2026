@@ -1,0 +1,76 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "rmw_dds_common/msg/NodeEntitiesInfo",
+      "fields": [
+        {
+          "name": "node_namespace",
+          "type": {
+            "type_id": 21,
+            "capacity": 0,
+            "string_capacity": 256,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        },
+        {
+          "name": "node_name",
+          "type": {
+            "type_id": 21,
+            "capacity": 0,
+            "string_capacity": 256,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        },
+        {
+          "name": "reader_gid_seq",
+          "type": {
+            "type_id": 145,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "rmw_dds_common/msg/Gid"
+          },
+          "default_value": ""
+        },
+        {
+          "name": "writer_gid_seq",
+          "type": {
+            "type_id": 145,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "rmw_dds_common/msg/Gid"
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": [
+      {
+        "type_name": "rmw_dds_common/msg/Gid",
+        "fields": [
+          {
+            "name": "data",
+            "type": {
+              "type_id": 51,
+              "capacity": 16,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      }
+    ]
+  },
+  "type_hashes": [
+    {
+      "type_name": "rmw_dds_common/msg/NodeEntitiesInfo",
+      "hash_string": "RIHS01_8ffef65ee2d088c63b1e8fcd31e800ba9fc8dbe0ee15ca60d1676de5218087a7"
+    },
+    {
+      "type_name": "rmw_dds_common/msg/Gid",
+      "hash_string": "RIHS01_ab6f21cfbb0a6dbb837161e1110c2051a2850ed9f9c53944d7115d9bcebedf71"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+msg/DiagnosticArray.idl
+msg/DiagnosticArray.msg
+msg/DiagnosticStatus.idl
+msg/DiagnosticStatus.msg
+msg/KeyValue.idl
+msg/KeyValue.msg
+srv/AddDiagnostics.idl
+srv/AddDiagnostics.srv
+srv/SelfTest.idl
+srv/SelfTest.srv

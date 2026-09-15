@@ -1,0 +1,24 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from test_rosidl_buffer/msg/TestBufferDescriptor.msg
+// generated code does not contain a copyright notice
+
+
+module test_rosidl_buffer {
+  module msg {
+    @verbatim (language="comment", text=
+      "Wire descriptor used by the in-tree test buffer backend.")
+    struct TestBufferDescriptor {
+      @verbatim (language="comment", text=
+        "number of elements in the original buffer")
+      uint64 size;
+
+      @verbatim (language="comment", text=
+        "FNV-1a hash of the element bytes")
+      uint64 data_hash;
+
+      @verbatim (language="comment", text=
+        "raw element bytes (size * sizeof(T))")
+      sequence<uint8> data;
+    };
+  };
+};

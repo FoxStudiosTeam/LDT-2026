@@ -1,0 +1,567 @@
+# Copyright 2018 Open Source Robotics Foundation, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+from __future__ import annotations
+
+import array
+from collections.abc import Sequence
+from enum import IntEnum
+from typing import Any
+from typing import cast
+from typing import Dict
+from typing import Final
+from typing import Generic
+from typing import List
+from typing import Literal
+from typing import Optional
+from typing import overload
+from typing import TypeVar
+from typing import Union
+
+from rcl_interfaces.msg import Parameter as ParameterMsg
+from rcl_interfaces.msg import ParameterType
+from rcl_interfaces.msg import ParameterValue
+import yaml
+
+PARAMETER_SEPARATOR_STRING: Final = '.'
+
+AllowableParameterValue = Union[None, bool, int, float, str,
+                                Sequence[bytes],
+                                Sequence[bool],
+                                Sequence[int],
+                                Sequence[float],
+                                Sequence[str]]
+
+AllowableParameterValueT = TypeVar('AllowableParameterValueT')
+
+
+class Parameter(Generic[AllowableParameterValueT]):
+
+    class Type(IntEnum):
+        NOT_SET = ParameterType.PARAMETER_NOT_SET
+        BOOL = ParameterType.PARAMETER_BOOL
+        INTEGER = ParameterType.PARAMETER_INTEGER
+        DOUBLE = ParameterType.PARAMETER_DOUBLE
+        STRING = ParameterType.PARAMETER_STRING
+        BYTE_ARRAY = ParameterType.PARAMETER_BYTE_ARRAY
+        BOOL_ARRAY = ParameterType.PARAMETER_BOOL_ARRAY
+        INTEGER_ARRAY = ParameterType.PARAMETER_INTEGER_ARRAY
+        DOUBLE_ARRAY = ParameterType.PARAMETER_DOUBLE_ARRAY
+        STRING_ARRAY = ParameterType.PARAMETER_STRING_ARRAY
+
+        @classmethod
+        def from_parameter_value(cls,
+                                 parameter_value: AllowableParameterValue
+                                 ) -> Parameter.Type:
+            """
+            Get a Parameter.Type from a given variable.
+
+            :return: A Parameter.Type corresponding to the instance type of the given value.
+            :raises: TypeError if the conversion to a type was not possible.
+            """
+            if parameter_value is None:
+                return Parameter.Type.NOT_SET
+            elif isinstance(parameter_value, bool):
+                return Parameter.Type.BOOL
+            elif isinstance(parameter_value, int):
+                return Parameter.Type.INTEGER
+            elif isinstance(parameter_value, float):
+                return Parameter.Type.DOUBLE
+            elif isinstance(parameter_value, str):
+                return Parameter.Type.STRING
+            elif isinstance(parameter_value, (list, tuple, array.array)):
+                if all(isinstance(v, bytes) for v in parameter_value):
+                    return Parameter.Type.BYTE_ARRAY
+                elif all(isinstance(v, bool) for v in parameter_value):
+                    return Parameter.Type.BOOL_ARRAY
+                elif all(isinstance(v, int) for v in parameter_value):
+                    return Parameter.Type.INTEGER_ARRAY
+                elif all(isinstance(v, float) for v in parameter_value):
+                    return Parameter.Type.DOUBLE_ARRAY
+                elif all(isinstance(v, str) for v in parameter_value):
+                    return Parameter.Type.STRING_ARRAY
+                else:
+                    raise TypeError(
+                        'The given value is not a list of one of the allowed types'
+                        f" '{parameter_value}'.")
+            else:
+                raise TypeError(
+                    f"The given value is not one of the allowed types '{parameter_value}'.")
+
+        def check(self, parameter_value: AllowableParameterValue) -> bool:
+            if Parameter.Type.NOT_SET == self:
+                return parameter_value is None
+            if Parameter.Type.BOOL == self:
+                return isinstance(parameter_value, bool)
+            if Parameter.Type.INTEGER == self:
+                return isinstance(parameter_value, int)
+            if Parameter.Type.DOUBLE == self:
+                return isinstance(parameter_value, float)
+            if Parameter.Type.STRING == self:
+                return isinstance(parameter_value, str)
+            if Parameter.Type.BYTE_ARRAY == self:
+                return isinstance(parameter_value, (list, tuple)) and \
+                    all(isinstance(v, bytes) and len(v) == 1 for v in parameter_value)
+            if Parameter.Type.BOOL_ARRAY == self:
+                return isinstance(parameter_value, (list, tuple)) and \
+                    all(isinstance(v, bool) for v in parameter_value)
+            if Parameter.Type.INTEGER_ARRAY == self:
+                return isinstance(parameter_value, (list, tuple, array.array)) and \
+                    all(isinstance(v, int) for v in parameter_value)
+            if Parameter.Type.DOUBLE_ARRAY == self:
+                return isinstance(parameter_value, (list, tuple, array.array)) and \
+                    all(isinstance(v, float) for v in parameter_value)
+            if Parameter.Type.STRING_ARRAY == self:
+                return isinstance(parameter_value, (list, tuple)) and \
+                    all(isinstance(v, str) for v in parameter_value)
+            return False
+
+    @classmethod
+    def from_parameter_msg(cls, param_msg: ParameterMsg) -> Parameter[Any]:
+        value: AllowableParameterValue = None
+        type_ = Parameter.Type(value=param_msg.value.type)
+        if Parameter.Type.BOOL == type_:
+            value = param_msg.value.bool_value
+        elif Parameter.Type.INTEGER == type_:
+            value = param_msg.value.integer_value
+        elif Parameter.Type.DOUBLE == type_:
+            value = param_msg.value.double_value
+        elif Parameter.Type.STRING == type_:
+            value = param_msg.value.string_value
+        elif Parameter.Type.BYTE_ARRAY == type_:
+            value = param_msg.value.byte_array_value
+        elif Parameter.Type.BOOL_ARRAY == type_:
+            value = param_msg.value.bool_array_value
+        elif Parameter.Type.INTEGER_ARRAY == type_:
+            value = param_msg.value.integer_array_value
+        elif Parameter.Type.DOUBLE_ARRAY == type_:
+            value = param_msg.value.double_array_value
+        elif Parameter.Type.STRING_ARRAY == type_:
+            value = param_msg.value.string_array_value
+        return cls(param_msg.name, type_, value)
+
+    @overload
+    def __init__(self: Parameter[None], name: str) -> None: ...
+
+    @overload
+    def __init__(self: Parameter[None], name: str, type_: Literal[Parameter.Type.NOT_SET]
+                 ) -> None: ...
+
+    @overload
+    def __init__(self: Parameter[bool], name: str, type_: Literal[Parameter.Type.BOOL]
+                 ) -> None: ...
+
+    @overload
+    def __init__(self: Parameter[int], name: str, type_: Literal[Parameter.Type.INTEGER]
+                 ) -> None: ...
+
+    @overload
+    def __init__(self: Parameter[float], name: str, type_: Literal[Parameter.Type.DOUBLE]
+                 ) -> None: ...
+
+    @overload
+    def __init__(self: Parameter[str], name: str, type_: Literal[Parameter.Type.STRING]
+                 ) -> None: ...
+
+    @overload
+    def __init__(self: Parameter[Sequence[bytes]],
+                 name: str,
+                 type_: Literal[Parameter.Type.BYTE_ARRAY]) -> None: ...
+
+    @overload
+    def __init__(self: Parameter[Sequence[bool]],
+                 name: str,
+                 type_: Literal[Parameter.Type.BOOL_ARRAY]) -> None: ...
+
+    @overload
+    def __init__(self: Parameter[Sequence[int]],
+                 name: str,
+                 type_: Literal[Parameter.Type.INTEGER_ARRAY]) -> None: ...
+
+    @overload
+    def __init__(self: Parameter[Sequence[float]],
+                 name: str,
+                 type_: Literal[Parameter.Type.DOUBLE_ARRAY]) -> None: ...
+
+    @overload
+    def __init__(self: Parameter[Sequence[str]],
+                 name: str,
+                 type_: Literal[Parameter.Type.STRING_ARRAY]) -> None: ...
+
+    @overload
+    def __init__(self, name: str, *, value: AllowableParameterValueT) -> None: ...
+
+    @overload
+    def __init__(self, name: str, type_: Optional[Parameter.Type] = None,
+                 value: None = None) -> None: ...
+
+    @overload
+    def __init__(self, name: str, type_: Parameter.Type,
+                 value: AllowableParameterValueT) -> None: ...
+
+    # See mypy #3737
+    def __init__(self, name: str, type_: Optional[Parameter.Type] = None,
+                 value: Any = None) -> None:
+        if type_ is None:
+            # This will raise a TypeError if it is not possible to get a type from the value.
+            type_ = Parameter.Type.from_parameter_value(value)
+
+        if not isinstance(type_, Parameter.Type):
+            raise TypeError("type must be an instance of '{}'".format(repr(Parameter.Type)))
+
+        if not type_.check(value):
+            raise ValueError("Type '{}' and value '{}' do not agree".format(type_, value))
+
+        self._type_ = type_
+        self._name = name
+        self._value = value
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def type_(self) -> 'Parameter.Type':
+        return self._type_
+
+    @property
+    def value(self) -> AllowableParameterValueT:
+        return cast(AllowableParameterValueT, self._value)
+
+    def get_parameter_value(self) -> ParameterValue:
+        parameter_value = ParameterValue(type=self.type_.value)
+        if Parameter.Type.BOOL == self.type_:
+            parameter_value.bool_value = cast(bool, self.value)
+        elif Parameter.Type.INTEGER == self.type_:
+            parameter_value.integer_value = cast(int, self.value)
+        elif Parameter.Type.DOUBLE == self.type_:
+            parameter_value.double_value = cast(float, self.value)
+        elif Parameter.Type.STRING == self.type_:
+            parameter_value.string_value = cast(str, self.value)
+        elif Parameter.Type.BYTE_ARRAY == self.type_:
+            parameter_value.byte_array_value = cast(Sequence[bytes], self.value)
+        elif Parameter.Type.BOOL_ARRAY == self.type_:
+            parameter_value.bool_array_value = cast(Sequence[bool], self.value)
+        elif Parameter.Type.INTEGER_ARRAY == self.type_:
+            parameter_value.integer_array_value = cast(Sequence[int], self.value)
+        elif Parameter.Type.DOUBLE_ARRAY == self.type_:
+            parameter_value.double_array_value = cast(Sequence[float], self.value)
+        elif Parameter.Type.STRING_ARRAY == self.type_:
+            parameter_value.string_array_value = cast(Sequence[str], self.value)
+        return parameter_value
+
+    def to_parameter_msg(self) -> ParameterMsg:
+        return ParameterMsg(name=self.name, value=self.get_parameter_value())
+
+
+def get_parameter_value(string_value: str) -> ParameterValue:
+    """
+    Guess the desired type of the parameter based on the string value.
+
+    :param string_value: The string value to be converted to a ParameterValue.
+    :return: The ParameterValue.
+    """
+    value = ParameterValue()
+    try:
+        yaml_value = yaml.safe_load(string_value)
+    except yaml.parser.ParserError:
+        yaml_value = string_value
+
+    if isinstance(yaml_value, bool):
+        value.type = ParameterType.PARAMETER_BOOL
+        value.bool_value = yaml_value
+    elif isinstance(yaml_value, int):
+        value.type = ParameterType.PARAMETER_INTEGER
+        value.integer_value = yaml_value
+    elif isinstance(yaml_value, float):
+        value.type = ParameterType.PARAMETER_DOUBLE
+        value.double_value = yaml_value
+    elif isinstance(yaml_value, list):
+        if all((isinstance(v, bool) for v in yaml_value)):
+            value.type = ParameterType.PARAMETER_BOOL_ARRAY
+            value.bool_array_value = yaml_value
+        elif all((isinstance(v, int) for v in yaml_value)):
+            value.type = ParameterType.PARAMETER_INTEGER_ARRAY
+            value.integer_array_value = yaml_value
+        elif all((isinstance(v, float) for v in yaml_value)):
+            value.type = ParameterType.PARAMETER_DOUBLE_ARRAY
+            value.double_array_value = yaml_value
+        elif all((isinstance(v, str) for v in yaml_value)):
+            value.type = ParameterType.PARAMETER_STRING_ARRAY
+            value.string_array_value = yaml_value
+        else:
+            value.type = ParameterType.PARAMETER_STRING
+            value.string_value = string_value
+    else:
+        value.type = ParameterType.PARAMETER_STRING
+        value.string_value = yaml_value if yaml_value is not None else string_value
+    return value
+
+
+def parameter_value_to_python(parameter_value: ParameterValue) -> AllowableParameterValue:
+    """
+    Get the value for the Python builtin type from a rcl_interfaces/msg/ParameterValue object.
+
+    Returns the value member of the message based on the ``type`` member.
+    Returns ``None`` if the parameter is "NOT_SET".
+
+    :param parameter_value: The message to get the value from.
+    :raises RuntimeError: if the member ``type`` has an unexpected value.
+    """
+    if parameter_value.type == ParameterType.PARAMETER_BOOL:
+        return parameter_value.bool_value
+    elif parameter_value.type == ParameterType.PARAMETER_INTEGER:
+        return parameter_value.integer_value
+    elif parameter_value.type == ParameterType.PARAMETER_DOUBLE:
+        return parameter_value.double_value
+    elif parameter_value.type == ParameterType.PARAMETER_STRING:
+        return parameter_value.string_value
+    elif parameter_value.type == ParameterType.PARAMETER_BYTE_ARRAY:
+        return list(parameter_value.byte_array_value)
+    elif parameter_value.type == ParameterType.PARAMETER_BOOL_ARRAY:
+        return list(parameter_value.bool_array_value)
+    elif parameter_value.type == ParameterType.PARAMETER_INTEGER_ARRAY:
+        return list(parameter_value.integer_array_value)
+    elif parameter_value.type == ParameterType.PARAMETER_DOUBLE_ARRAY:
+        return list(parameter_value.double_array_value)
+    elif parameter_value.type == ParameterType.PARAMETER_STRING_ARRAY:
+        return list(parameter_value.string_array_value)
+    elif parameter_value.type == ParameterType.PARAMETER_NOT_SET:
+        return None
+    else:
+        raise RuntimeError(f'unexpected parameter type {parameter_value.type}')
+
+
+def parameter_dict_from_yaml_file(
+    parameter_file: str,
+    use_wildcard: bool = False,
+    target_nodes: Optional[List[str]] = None,
+    namespace: str = ''
+) -> Dict[str, ParameterMsg]:
+    """
+    Build a dict of parameters from a YAML file.
+
+    Will load all parameters if ``target_nodes`` is None or empty.
+
+    :raises RuntimeError: if a target node is not in the file
+    :raises RuntimeError: if the is not a valid ROS parameter file
+
+    :param parameter_file: Path to the YAML file to load parameters from.
+    :param use_wildcard: Use wildcard matching for the target nodes.
+    :param target_nodes: List of nodes in the YAML file to load parameters from.
+    :param namespace: Namespace to prepend to all parameters.
+    :return: A dict of Parameter messages keyed by the parameter names
+    """
+    with open(parameter_file, 'r') as f:
+        param_file = yaml.safe_load(f)
+        param_dict = {}
+
+        # check and add if wildcard is available in 1st keys
+        # wildcard key must go to the front of param_keys so that
+        # node-namespaced parameters will override the wildcard parameters
+        if use_wildcard:
+            if '/**' in param_file:
+                value = param_file['/**']
+                if not isinstance(value, dict) or 'ros__parameters' not in value:
+                    raise RuntimeError(
+                        'YAML file is not a valid ROS parameter file for wildcard(/**)')
+                param_dict.update(value['ros__parameters'])
+
+            # If target_nodes is None or empty, parse '/*' and '/**/node_name' wildcards
+            if not target_nodes:
+                # /*
+                #   node_name:
+                #     ros__parameters:
+                #       ...
+                if '/*' in param_file:
+                    value = param_file['/*']
+                    if not isinstance(value, dict):
+                        raise RuntimeError(
+                            'YAML file is not a valid ROS parameter file for wildcard(/*)')
+                    # add all node_name under wildcard /*
+                    for node_name, node_value in value.items():
+                        if not isinstance(node_value, dict) or 'ros__parameters' not in node_value:
+                            raise RuntimeError(
+                                f'YAML file is not a valid ROS parameter file for wildcard(/*) '
+                                f'node {node_name}')
+                        param_dict.update(node_value['ros__parameters'])
+
+                # /**/node_name
+                #   ros__parameters:
+                #     ...
+                for k, v in param_file.items():
+                    if k.startswith('/**/'):
+                        value = v
+                        if not isinstance(value, dict) or 'ros__parameters' not in value:
+                            raise RuntimeError(
+                                f'YAML file is not a valid ROS parameter file for wildcard {k}')
+                        param_dict.update(value['ros__parameters'])
+
+        # parse parameter yaml file based on target node namespace and name
+        if target_nodes:
+            for n in target_nodes:
+                abs_name = _get_absolute_node_name(n)
+                if abs_name is None:
+                    continue
+
+                # target node is '/node_name' without namespace
+                if '/' not in abs_name[1:]:
+                    # Match definition in param file
+                    # /node_name:
+                    #   ros__parameters:
+                    #     ...
+                    if abs_name in param_file:
+                        value = param_file[abs_name]
+                        if (not isinstance(value, dict) or 'ros__parameters' not in value):
+                            raise RuntimeError(
+                                f'YAML file is not a valid ROS parameter file for node {n}')
+                        param_dict.update(value['ros__parameters'])
+                    # Match definition in param file
+                    # node_name:
+                    #   ros__parameters:
+                    #     ...
+                    if abs_name[1:] in param_file:
+                        value = param_file[abs_name[1:]]
+                        if (not isinstance(value, dict) or 'ros__parameters' not in value):
+                            raise RuntimeError(
+                                f'YAML file is not a valid ROS parameter file for node {n}')
+                        param_dict.update(value['ros__parameters'])
+                    continue
+
+                # target node include namespaces, e.g. /namespace/node_name
+                # Matched definition in param file
+                # /namespace
+                #   node_name:
+                #     ros__parameters:
+                #       ...
+                # or
+                # /namespace/node_name:
+                #   ros__parameters:
+                #     ...
+                ns, node_basename = abs_name.rsplit('/', 1)
+
+                # If ns is single level namespace and wildcard is true
+                # Match definition in param file
+                # /*
+                #   node_name:
+                #     ros__parameters:
+                #       ...
+                if use_wildcard and '/' not in ns[1:] and '/*' in param_file:
+                    if not isinstance(param_file['/*'], dict):
+                        raise RuntimeError(
+                            'YAML file is not a valid ROS parameter file for namespace "/*"')
+
+                    if node_basename in param_file['/*']:
+                        value = param_file['/*'][node_basename]
+                        if not isinstance(value, dict) or 'ros__parameters' not in value:
+                            raise RuntimeError(
+                                f'YAML file is not a valid ROS parameter file for node {n}')
+                        param_dict.update(value['ros__parameters'])
+
+                # If 'ns' in target node is single level or multi level namespace and
+                # wildcard is true,
+                # Match definition in param file
+                # /**/node_name:
+                #   ros__parameters:
+                #     ...
+                if use_wildcard and '/**/' + node_basename in param_file:
+                    value = param_file['/**/' + node_basename]
+                    if not isinstance(value, dict) or 'ros__parameters' not in value:
+                        raise RuntimeError(
+                            f'YAML file is not a valid ROS parameter file for node {n}')
+                    param_dict.update(value['ros__parameters'])
+
+                # If 'ns' in target node is single level or multi level namespace,
+                # Match definition in param file.
+                # /namespace
+                #   node_name:
+                #     ros__parameters:
+                #       ...
+                if ns in param_file and isinstance(param_file[ns], dict):
+                    if node_basename in param_file[ns]:
+                        value = param_file[ns][node_basename]
+                        if not isinstance(value, dict) or 'ros__parameters' not in value:
+                            raise RuntimeError(
+                                f'YAML file is not a valid ROS parameter file for node {n}')
+                        param_dict.update(value['ros__parameters'])
+
+                # If 'ns' in target node is single level or multi level namespace,
+                # Match definition in param file.
+                # /namespace/node_name:
+                #   ros__parameters:
+                #     ...
+                if abs_name in param_file:
+                    value = param_file[abs_name]
+                    if not isinstance(value, dict) or 'ros__parameters' not in value:
+                        raise RuntimeError(
+                            f'YAML file is not a valid ROS parameter file for node {n}')
+                    param_dict.update(value['ros__parameters'])
+        else:
+            # Except the wildcard key, add all other keys
+            for k, v in param_file.items():
+                if k == '/**' or k == '/*' or k.startswith('/**/'):
+                    continue
+                if isinstance(v, dict):
+                    # k is node_name or /node_name or /namespace/node_name
+                    if 'ros__parameters' in v:
+                        param_dict.update(v['ros__parameters'])
+                        continue
+                    # k is namespace
+                    for node_name, node_value in v.items():
+                        if isinstance(node_value, dict) and 'ros__parameters' in node_value:
+                            param_dict.update(node_value['ros__parameters'])
+                        else:
+                            raise RuntimeError(
+                                f'YAML file is not a valid ROS parameter file for node'
+                                f'{k}/{node_name}')
+                else:
+                    raise RuntimeError(
+                        f'YAML file is not a valid ROS parameter file for node {k}')
+
+        if not param_dict:
+            raise RuntimeError('Param file does not contain any valid parameters')
+
+        return _unpack_parameter_dict(namespace, param_dict)
+
+
+def _get_absolute_node_name(node_name: str) -> Optional[str]:
+    if not node_name:
+        return None
+    if node_name[0] != '/':
+        node_name = '/' + node_name
+    return node_name
+
+
+def _unpack_parameter_dict(namespace: str,
+                           parameter_dict: Dict[str, ParameterMsg]) -> Dict[str, ParameterMsg]:
+    """
+    Flatten a parameter dictionary recursively.
+
+    :param namespace: The namespace to prepend to the parameter names.
+    :param parameter_dict: A dictionary of parameters keyed by the parameter names
+    :return: A dict of Parameter objects keyed by the parameter names
+    """
+    parameters: Dict[str, ParameterMsg] = {}
+    for param_name, param_value in parameter_dict.items():
+        full_param_name = namespace + param_name
+        # Unroll nested parameters
+        if isinstance(param_value, dict):
+            parameters.update(_unpack_parameter_dict(
+                    namespace=full_param_name + PARAMETER_SEPARATOR_STRING,
+                    parameter_dict=param_value))
+        else:
+            parameter = ParameterMsg()
+            parameter.name = full_param_name
+            parameter.value = get_parameter_value(str(param_value))
+            parameters[full_param_name] = parameter
+    return parameters

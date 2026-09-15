@@ -1,0 +1,6 @@
+srv/ListNodes.idl
+srv/ListNodes.srv
+srv/LoadNode.idl
+srv/LoadNode.srv
+srv/UnloadNode.idl
+srv/UnloadNode.srv

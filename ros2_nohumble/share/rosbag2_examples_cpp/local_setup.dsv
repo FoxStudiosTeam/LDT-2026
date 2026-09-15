@@ -1,0 +1,4 @@
+source;share/rosbag2_examples_cpp/environment/ament_prefix_path.bat
+source;share/rosbag2_examples_cpp/environment/path.bat
+source;share/rosbag2_examples_cpp/environment/ament_prefix_path.dsv
+source;share/rosbag2_examples_cpp/environment/path.dsv

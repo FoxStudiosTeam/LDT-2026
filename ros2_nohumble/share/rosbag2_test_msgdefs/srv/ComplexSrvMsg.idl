@@ -1,0 +1,16 @@
+// generated from rosidl_adapter/resource/srv.idl.em
+// with input from rosbag2_test_msgdefs/srv/ComplexSrvMsg.srv
+// generated code does not contain a copyright notice
+
+#include "rosbag2_test_msgdefs/msg/BasicMsg.idl"
+
+module rosbag2_test_msgdefs {
+  module srv {
+    struct ComplexSrvMsg_Request {
+      rosbag2_test_msgdefs::msg::BasicMsg req;
+    };
+    struct ComplexSrvMsg_Response {
+      rosbag2_test_msgdefs::msg::BasicMsg resp;
+    };
+  };
+};

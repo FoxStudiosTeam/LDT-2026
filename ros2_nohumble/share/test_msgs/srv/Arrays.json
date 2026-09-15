@@ -1,0 +1,1099 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "test_msgs/srv/Arrays",
+      "fields": [
+        {
+          "name": "request_message",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "test_msgs/srv/Arrays_Request"
+          },
+          "default_value": ""
+        },
+        {
+          "name": "response_message",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "test_msgs/srv/Arrays_Response"
+          },
+          "default_value": ""
+        },
+        {
+          "name": "event_message",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "test_msgs/srv/Arrays_Event"
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": [
+      {
+        "type_name": "builtin_interfaces/msg/Time",
+        "fields": [
+          {
+            "name": "sec",
+            "type": {
+              "type_id": 6,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "nanosec",
+            "type": {
+              "type_id": 7,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "service_msgs/msg/ServiceEventInfo",
+        "fields": [
+          {
+            "name": "event_type",
+            "type": {
+              "type_id": 3,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "stamp",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "builtin_interfaces/msg/Time"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "client_gid",
+            "type": {
+              "type_id": 51,
+              "capacity": 16,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "sequence_number",
+            "type": {
+              "type_id": 8,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "test_msgs/msg/BasicTypes",
+        "fields": [
+          {
+            "name": "bool_value",
+            "type": {
+              "type_id": 15,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "byte_value",
+            "type": {
+              "type_id": 16,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "char_value",
+            "type": {
+              "type_id": 3,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "float32_value",
+            "type": {
+              "type_id": 10,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "float64_value",
+            "type": {
+              "type_id": 11,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "int8_value",
+            "type": {
+              "type_id": 2,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "uint8_value",
+            "type": {
+              "type_id": 3,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "int16_value",
+            "type": {
+              "type_id": 4,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "uint16_value",
+            "type": {
+              "type_id": 5,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "int32_value",
+            "type": {
+              "type_id": 6,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "uint32_value",
+            "type": {
+              "type_id": 7,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "int64_value",
+            "type": {
+              "type_id": 8,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "uint64_value",
+            "type": {
+              "type_id": 9,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "test_msgs/msg/Constants",
+        "fields": [
+          {
+            "name": "structure_needs_at_least_one_member",
+            "type": {
+              "type_id": 3,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "test_msgs/msg/Defaults",
+        "fields": [
+          {
+            "name": "bool_value",
+            "type": {
+              "type_id": 15,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "True"
+          },
+          {
+            "name": "byte_value",
+            "type": {
+              "type_id": 16,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "50"
+          },
+          {
+            "name": "char_value",
+            "type": {
+              "type_id": 3,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "100"
+          },
+          {
+            "name": "float32_value",
+            "type": {
+              "type_id": 10,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "1.125"
+          },
+          {
+            "name": "float64_value",
+            "type": {
+              "type_id": 11,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "1.125"
+          },
+          {
+            "name": "int8_value",
+            "type": {
+              "type_id": 2,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "-50"
+          },
+          {
+            "name": "uint8_value",
+            "type": {
+              "type_id": 3,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "200"
+          },
+          {
+            "name": "int16_value",
+            "type": {
+              "type_id": 4,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "-1000"
+          },
+          {
+            "name": "uint16_value",
+            "type": {
+              "type_id": 5,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "2000"
+          },
+          {
+            "name": "int32_value",
+            "type": {
+              "type_id": 6,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "-30000"
+          },
+          {
+            "name": "uint32_value",
+            "type": {
+              "type_id": 7,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "60000"
+          },
+          {
+            "name": "int64_value",
+            "type": {
+              "type_id": 8,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "-40000000"
+          },
+          {
+            "name": "uint64_value",
+            "type": {
+              "type_id": 9,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "50000000"
+          }
+        ]
+      },
+      {
+        "type_name": "test_msgs/srv/Arrays_Event",
+        "fields": [
+          {
+            "name": "info",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "service_msgs/msg/ServiceEventInfo"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "request",
+            "type": {
+              "type_id": 97,
+              "capacity": 1,
+              "string_capacity": 0,
+              "nested_type_name": "test_msgs/srv/Arrays_Request"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "response",
+            "type": {
+              "type_id": 97,
+              "capacity": 1,
+              "string_capacity": 0,
+              "nested_type_name": "test_msgs/srv/Arrays_Response"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "test_msgs/srv/Arrays_Request",
+        "fields": [
+          {
+            "name": "bool_values",
+            "type": {
+              "type_id": 63,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "byte_values",
+            "type": {
+              "type_id": 64,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "char_values",
+            "type": {
+              "type_id": 51,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "float32_values",
+            "type": {
+              "type_id": 58,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "float64_values",
+            "type": {
+              "type_id": 59,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "int8_values",
+            "type": {
+              "type_id": 50,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "uint8_values",
+            "type": {
+              "type_id": 51,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "int16_values",
+            "type": {
+              "type_id": 52,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "uint16_values",
+            "type": {
+              "type_id": 53,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "int32_values",
+            "type": {
+              "type_id": 54,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "uint32_values",
+            "type": {
+              "type_id": 55,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "int64_values",
+            "type": {
+              "type_id": 56,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "uint64_values",
+            "type": {
+              "type_id": 57,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "string_values",
+            "type": {
+              "type_id": 65,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "basic_types_values",
+            "type": {
+              "type_id": 49,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": "test_msgs/msg/BasicTypes"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "constants_values",
+            "type": {
+              "type_id": 49,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": "test_msgs/msg/Constants"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "defaults_values",
+            "type": {
+              "type_id": 49,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": "test_msgs/msg/Defaults"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "bool_values_default",
+            "type": {
+              "type_id": 63,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "(False, True, False)"
+          },
+          {
+            "name": "byte_values_default",
+            "type": {
+              "type_id": 64,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "(0, 1, 255)"
+          },
+          {
+            "name": "char_values_default",
+            "type": {
+              "type_id": 51,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "(0, 1, 127)"
+          },
+          {
+            "name": "float32_values_default",
+            "type": {
+              "type_id": 58,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "(1.125, 0.0, -1.125)"
+          },
+          {
+            "name": "float64_values_default",
+            "type": {
+              "type_id": 59,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "(3.1415, 0.0, -3.1415)"
+          },
+          {
+            "name": "int8_values_default",
+            "type": {
+              "type_id": 50,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "(0, 127, -128)"
+          },
+          {
+            "name": "uint8_values_default",
+            "type": {
+              "type_id": 51,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "(0, 1, 255)"
+          },
+          {
+            "name": "int16_values_default",
+            "type": {
+              "type_id": 52,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "(0, 32767, -32768)"
+          },
+          {
+            "name": "uint16_values_default",
+            "type": {
+              "type_id": 53,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "(0, 1, 65535)"
+          },
+          {
+            "name": "int32_values_default",
+            "type": {
+              "type_id": 54,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "(0, 2147483647, -2147483648)"
+          },
+          {
+            "name": "uint32_values_default",
+            "type": {
+              "type_id": 55,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "(0, 1, 4294967295)"
+          },
+          {
+            "name": "int64_values_default",
+            "type": {
+              "type_id": 56,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "(0, 9223372036854775807, -9223372036854775808)"
+          },
+          {
+            "name": "uint64_values_default",
+            "type": {
+              "type_id": 57,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "(0, 1, 18446744073709551615)"
+          },
+          {
+            "name": "string_values_default",
+            "type": {
+              "type_id": 65,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "('', 'max value', 'min value')"
+          }
+        ]
+      },
+      {
+        "type_name": "test_msgs/srv/Arrays_Response",
+        "fields": [
+          {
+            "name": "bool_values",
+            "type": {
+              "type_id": 63,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "byte_values",
+            "type": {
+              "type_id": 64,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "char_values",
+            "type": {
+              "type_id": 51,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "float32_values",
+            "type": {
+              "type_id": 58,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "float64_values",
+            "type": {
+              "type_id": 59,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "int8_values",
+            "type": {
+              "type_id": 50,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "uint8_values",
+            "type": {
+              "type_id": 51,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "int16_values",
+            "type": {
+              "type_id": 52,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "uint16_values",
+            "type": {
+              "type_id": 53,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "int32_values",
+            "type": {
+              "type_id": 54,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "uint32_values",
+            "type": {
+              "type_id": 55,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "int64_values",
+            "type": {
+              "type_id": 56,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "uint64_values",
+            "type": {
+              "type_id": 57,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "string_values",
+            "type": {
+              "type_id": 65,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "basic_types_values",
+            "type": {
+              "type_id": 49,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": "test_msgs/msg/BasicTypes"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "constants_values",
+            "type": {
+              "type_id": 49,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": "test_msgs/msg/Constants"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "defaults_values",
+            "type": {
+              "type_id": 49,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": "test_msgs/msg/Defaults"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "bool_values_default",
+            "type": {
+              "type_id": 63,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "(False, True, False)"
+          },
+          {
+            "name": "byte_values_default",
+            "type": {
+              "type_id": 64,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "(0, 1, 255)"
+          },
+          {
+            "name": "char_values_default",
+            "type": {
+              "type_id": 51,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "(0, 1, 127)"
+          },
+          {
+            "name": "float32_values_default",
+            "type": {
+              "type_id": 58,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "(1.125, 0.0, -1.125)"
+          },
+          {
+            "name": "float64_values_default",
+            "type": {
+              "type_id": 59,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "(3.1415, 0.0, -3.1415)"
+          },
+          {
+            "name": "int8_values_default",
+            "type": {
+              "type_id": 50,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "(0, 127, -128)"
+          },
+          {
+            "name": "uint8_values_default",
+            "type": {
+              "type_id": 51,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "(0, 1, 255)"
+          },
+          {
+            "name": "int16_values_default",
+            "type": {
+              "type_id": 52,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "(0, 32767, -32768)"
+          },
+          {
+            "name": "uint16_values_default",
+            "type": {
+              "type_id": 53,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "(0, 1, 65535)"
+          },
+          {
+            "name": "int32_values_default",
+            "type": {
+              "type_id": 54,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "(0, 2147483647, -2147483648)"
+          },
+          {
+            "name": "uint32_values_default",
+            "type": {
+              "type_id": 55,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "(0, 1, 4294967295)"
+          },
+          {
+            "name": "int64_values_default",
+            "type": {
+              "type_id": 56,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "(0, 9223372036854775807, -9223372036854775808)"
+          },
+          {
+            "name": "uint64_values_default",
+            "type": {
+              "type_id": 57,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "(0, 1, 18446744073709551615)"
+          },
+          {
+            "name": "string_values_default",
+            "type": {
+              "type_id": 65,
+              "capacity": 3,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "('', 'max value', 'min value')"
+          }
+        ]
+      }
+    ]
+  },
+  "type_hashes": [
+    {
+      "type_name": "test_msgs/srv/Arrays",
+      "hash_string": "RIHS01_ae66e13b3ad1520bcd9fa5751c4a4521222bf27c2f845d79de0c76e4cbb41080"
+    },
+    {
+      "type_name": "builtin_interfaces/msg/Time",
+      "hash_string": "RIHS01_b106235e25a4c5ed35098aa0a61a3ee9c9b18d197f398b0e4206cea9acf9c197"
+    },
+    {
+      "type_name": "service_msgs/msg/ServiceEventInfo",
+      "hash_string": "RIHS01_41bcbbe07a75c9b52bc96bfd5c24d7f0fc0a08c0cb7921b3373c5732345a6f45"
+    },
+    {
+      "type_name": "test_msgs/msg/BasicTypes",
+      "hash_string": "RIHS01_7c300afd4e796798d49bdd6cdaa0fa87fa0ed2ba3217d977e1faa87070d797ab"
+    },
+    {
+      "type_name": "test_msgs/msg/Constants",
+      "hash_string": "RIHS01_983e7ae7099d65b3030c31c2890b0ec2b332484fae9f28c68e01340c8f61edcf"
+    },
+    {
+      "type_name": "test_msgs/msg/Defaults",
+      "hash_string": "RIHS01_a725ee02bf25a224cb7d14015a0245b6654ff591ae1ac277e2a2673f013ea6d2"
+    },
+    {
+      "type_name": "test_msgs/srv/Arrays_Event",
+      "hash_string": "RIHS01_41be0bc3daa6dbbd6d1198678b362bd4b43a08cb75fe0a4f434fe79bad31f19e"
+    },
+    {
+      "type_name": "test_msgs/srv/Arrays_Request",
+      "hash_string": "RIHS01_69e1d277b2efd1d2760e545a4057f11f62f7c6395c5faa17e50599399b4fb5d8"
+    },
+    {
+      "type_name": "test_msgs/srv/Arrays_Response",
+      "hash_string": "RIHS01_e0f59d6bd84546ebfb5ad76a0afe77f9fee9bd6f1fc8f8fca37890feaf27ee69"
+    }
+  ]
+}

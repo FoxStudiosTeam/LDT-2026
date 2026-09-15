@@ -1,0 +1,6 @@
+source;share/lttngpy/environment/ament_prefix_path.bat
+source;share/lttngpy/environment/path.bat
+source;share/lttngpy/environment/pythonpath.bat
+source;share/lttngpy/environment/ament_prefix_path.dsv
+source;share/lttngpy/environment/path.dsv
+source;share/lttngpy/environment/pythonpath.dsv

@@ -1,0 +1,1 @@
+qt-base-dev;geometry_msgs;pluginlib;rclcpp;resource_retriever;rviz_ogre_vendor;rviz_rendering;sensor_msgs;std_msgs;std_srvs;tf2;tf2_ros;message_filters;tinyxml2;yaml_cpp_vendor;ament_cmake_ros_core;libqtcore;libqtgui;libqtopengl;libqtsvg;libqtwidgets;ament_lint_common;ament_cmake_gmock;ament_cmake_gtest;ament_lint_auto

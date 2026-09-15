@@ -1,0 +1,36 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "visualization_msgs/msg/UVCoordinate",
+      "fields": [
+        {
+          "name": "u",
+          "type": {
+            "type_id": 10,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        },
+        {
+          "name": "v",
+          "type": {
+            "type_id": 10,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": []
+  },
+  "type_hashes": [
+    {
+      "type_name": "visualization_msgs/msg/UVCoordinate",
+      "hash_string": "RIHS01_f27f7ed21fe360c6066944f856b801a0c0d1e94e815b6886444b42d90b196a26"
+    }
+  ]
+}

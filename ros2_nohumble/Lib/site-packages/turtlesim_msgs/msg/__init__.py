@@ -1,0 +1,2 @@
+from turtlesim_msgs.msg._color import Color as Color  # noqa: F401
+from turtlesim_msgs.msg._pose import Pose as Pose  # noqa: F401

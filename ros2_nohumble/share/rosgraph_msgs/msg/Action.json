@@ -1,0 +1,351 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "rosgraph_msgs/msg/Action",
+      "fields": [
+        {
+          "name": "name",
+          "type": {
+            "type_id": 17,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        },
+        {
+          "name": "send_goal",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "rosgraph_msgs/msg/Service"
+          },
+          "default_value": ""
+        },
+        {
+          "name": "get_result",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "rosgraph_msgs/msg/Service"
+          },
+          "default_value": ""
+        },
+        {
+          "name": "cancel_goal",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "rosgraph_msgs/msg/Service"
+          },
+          "default_value": ""
+        },
+        {
+          "name": "feedback",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "rosgraph_msgs/msg/Topic"
+          },
+          "default_value": ""
+        },
+        {
+          "name": "status",
+          "type": {
+            "type_id": 1,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "rosgraph_msgs/msg/Topic"
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": [
+      {
+        "type_name": "builtin_interfaces/msg/Duration",
+        "fields": [
+          {
+            "name": "sec",
+            "type": {
+              "type_id": 6,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "nanosec",
+            "type": {
+              "type_id": 7,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "rosgraph_msgs/msg/InterfaceType",
+        "fields": [
+          {
+            "name": "name",
+            "type": {
+              "type_id": 17,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "hash",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "rosgraph_msgs/msg/TypeHash"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "rosgraph_msgs/msg/QoSProfile",
+        "fields": [
+          {
+            "name": "depth",
+            "type": {
+              "type_id": 7,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "deadline",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "builtin_interfaces/msg/Duration"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "lifespan",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "builtin_interfaces/msg/Duration"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "history",
+            "type": {
+              "type_id": 3,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "reliability",
+            "type": {
+              "type_id": 3,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "durability",
+            "type": {
+              "type_id": 3,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "liveliness",
+            "type": {
+              "type_id": 3,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "liveliness_lease_duration",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "builtin_interfaces/msg/Duration"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "rosgraph_msgs/msg/Service",
+        "fields": [
+          {
+            "name": "name",
+            "type": {
+              "type_id": 17,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "request_type",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "rosgraph_msgs/msg/InterfaceType"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "request_qos",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "rosgraph_msgs/msg/QoSProfile"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "response_type",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "rosgraph_msgs/msg/InterfaceType"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "response_qos",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "rosgraph_msgs/msg/QoSProfile"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "rosgraph_msgs/msg/Topic",
+        "fields": [
+          {
+            "name": "name",
+            "type": {
+              "type_id": 17,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "type",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "rosgraph_msgs/msg/InterfaceType"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "qos",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "rosgraph_msgs/msg/QoSProfile"
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "rosgraph_msgs/msg/TypeHash",
+        "fields": [
+          {
+            "name": "version",
+            "type": {
+              "type_id": 3,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "1"
+          },
+          {
+            "name": "value",
+            "type": {
+              "type_id": 51,
+              "capacity": 32,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      }
+    ]
+  },
+  "type_hashes": [
+    {
+      "type_name": "rosgraph_msgs/msg/Action",
+      "hash_string": "RIHS01_221c3b8d63470add1ea70231a2c5c3488bd0a11fab7f4b87bbf06ad341062e39"
+    },
+    {
+      "type_name": "builtin_interfaces/msg/Duration",
+      "hash_string": "RIHS01_e8d009f659816f758b75334ee1a9ca5b5c0b859843261f14c7f937349599d93b"
+    },
+    {
+      "type_name": "rosgraph_msgs/msg/InterfaceType",
+      "hash_string": "RIHS01_08e222a0b6950d275c45c2924b6bb6b79b7fdede9c90cdf5d6952dc6f197916c"
+    },
+    {
+      "type_name": "rosgraph_msgs/msg/QoSProfile",
+      "hash_string": "RIHS01_0c83305c2c647eecbf3a0ad549c121d6cf12606d902915a28e904d8f2aba42ee"
+    },
+    {
+      "type_name": "rosgraph_msgs/msg/Service",
+      "hash_string": "RIHS01_01a80e1dc066d6f37846e00029710c39cfdfd8c807be16f8f6181f5834f5c679"
+    },
+    {
+      "type_name": "rosgraph_msgs/msg/Topic",
+      "hash_string": "RIHS01_e378dfc444e3e04c76ffdda3caa997f107b6f2d9ba059fcf09b2f39433a149e4"
+    },
+    {
+      "type_name": "rosgraph_msgs/msg/TypeHash",
+      "hash_string": "RIHS01_b57248b9d4ea0964bd583c53ae3b94354e599b8183a135af48826287bef3c1f6"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+source;share/gz_utils_vendor/environment/ament_prefix_path.bat
+source;share/gz_utils_vendor/environment/path.bat
+source;share/gz_utils_vendor/environment/vendor_package.bat
+source;share/gz_utils_vendor/environment/vendor_package_cmake_prefix.bat
+source;share/gz_utils_vendor/environment/ament_prefix_path.dsv
+source;share/gz_utils_vendor/environment/gz_utils_vendor.dsv
+source;share/gz_utils_vendor/environment/gz_utils_vendor_pythonpath.dsv
+source;share/gz_utils_vendor/environment/path.dsv
+source;share/gz_utils_vendor/environment/vendor_package.dsv
+source;share/gz_utils_vendor/environment/vendor_package_cmake_prefix.dsv

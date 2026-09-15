@@ -1,0 +1,6 @@
+source;share/rosgraph_msgs/environment/ament_prefix_path.bat
+source;share/rosgraph_msgs/environment/path.bat
+source;share/rosgraph_msgs/environment/pythonpath.bat
+source;share/rosgraph_msgs/environment/ament_prefix_path.dsv
+source;share/rosgraph_msgs/environment/path.dsv
+source;share/rosgraph_msgs/environment/pythonpath.dsv

@@ -1,0 +1,4 @@
+source;share/resource_retriever_service/environment/ament_prefix_path.bat
+source;share/resource_retriever_service/environment/path.bat
+source;share/resource_retriever_service/environment/ament_prefix_path.dsv
+source;share/resource_retriever_service/environment/path.dsv

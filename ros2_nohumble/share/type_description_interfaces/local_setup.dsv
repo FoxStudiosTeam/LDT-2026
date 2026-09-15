@@ -1,0 +1,6 @@
+source;share/type_description_interfaces/environment/ament_prefix_path.bat
+source;share/type_description_interfaces/environment/path.bat
+source;share/type_description_interfaces/environment/pythonpath.bat
+source;share/type_description_interfaces/environment/ament_prefix_path.dsv
+source;share/type_description_interfaces/environment/path.dsv
+source;share/type_description_interfaces/environment/pythonpath.dsv

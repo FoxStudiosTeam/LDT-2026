@@ -1,0 +1,6 @@
+source;share/test_rosidl_buffer/environment/ament_prefix_path.bat
+source;share/test_rosidl_buffer/environment/path.bat
+source;share/test_rosidl_buffer/environment/pythonpath.bat
+source;share/test_rosidl_buffer/environment/ament_prefix_path.dsv
+source;share/test_rosidl_buffer/environment/path.dsv
+source;share/test_rosidl_buffer/environment/pythonpath.dsv

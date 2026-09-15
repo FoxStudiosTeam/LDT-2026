@@ -1,0 +1,4 @@
+source;share/topic_statistics_demo/environment/ament_prefix_path.bat
+source;share/topic_statistics_demo/environment/path.bat
+source;share/topic_statistics_demo/environment/ament_prefix_path.dsv
+source;share/topic_statistics_demo/environment/path.dsv

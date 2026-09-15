@@ -1,0 +1,8 @@
+setuptools
+ament_index_python
+launch
+osrf_pycommon
+pyyaml
+
+[test]
+pytest

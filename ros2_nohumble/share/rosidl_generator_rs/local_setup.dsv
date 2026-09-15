@@ -1,0 +1,6 @@
+source;share/rosidl_generator_rs/environment/ament_prefix_path.bat
+source;share/rosidl_generator_rs/environment/path.bat
+source;share/rosidl_generator_rs/environment/pythonpath.bat
+source;share/rosidl_generator_rs/environment/ament_prefix_path.dsv
+source;share/rosidl_generator_rs/environment/path.dsv
+source;share/rosidl_generator_rs/environment/pythonpath.dsv

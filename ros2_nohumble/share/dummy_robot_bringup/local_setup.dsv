@@ -1,0 +1,4 @@
+source;share/dummy_robot_bringup/environment/ament_prefix_path.bat
+source;share/dummy_robot_bringup/environment/path.bat
+source;share/dummy_robot_bringup/environment/ament_prefix_path.dsv
+source;share/dummy_robot_bringup/environment/path.dsv

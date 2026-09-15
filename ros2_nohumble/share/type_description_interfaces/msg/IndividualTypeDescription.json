@@ -1,0 +1,125 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "type_description_interfaces/msg/IndividualTypeDescription",
+      "fields": [
+        {
+          "name": "type_name",
+          "type": {
+            "type_id": 21,
+            "capacity": 0,
+            "string_capacity": 255,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        },
+        {
+          "name": "fields",
+          "type": {
+            "type_id": 145,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": "type_description_interfaces/msg/Field"
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": [
+      {
+        "type_name": "type_description_interfaces/msg/Field",
+        "fields": [
+          {
+            "name": "name",
+            "type": {
+              "type_id": 17,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "type",
+            "type": {
+              "type_id": 1,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": "type_description_interfaces/msg/FieldType"
+            },
+            "default_value": ""
+          },
+          {
+            "name": "default_value",
+            "type": {
+              "type_id": 17,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      },
+      {
+        "type_name": "type_description_interfaces/msg/FieldType",
+        "fields": [
+          {
+            "name": "type_id",
+            "type": {
+              "type_id": 3,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": "0"
+          },
+          {
+            "name": "capacity",
+            "type": {
+              "type_id": 9,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "string_capacity",
+            "type": {
+              "type_id": 9,
+              "capacity": 0,
+              "string_capacity": 0,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          },
+          {
+            "name": "nested_type_name",
+            "type": {
+              "type_id": 21,
+              "capacity": 0,
+              "string_capacity": 255,
+              "nested_type_name": ""
+            },
+            "default_value": ""
+          }
+        ]
+      }
+    ]
+  },
+  "type_hashes": [
+    {
+      "type_name": "type_description_interfaces/msg/IndividualTypeDescription",
+      "hash_string": "RIHS01_55c827d86c3c141bdd318fe6c22e11190e4d3b37c8f4f9751a084aa05ce96560"
+    },
+    {
+      "type_name": "type_description_interfaces/msg/Field",
+      "hash_string": "RIHS01_c0b01379cd4226281285ccaf6be46653968f855f7c5e41614ff5d7a854efef7c"
+    },
+    {
+      "type_name": "type_description_interfaces/msg/FieldType",
+      "hash_string": "RIHS01_a70b6dd919645a03a3586f7f821defbc886ea3e531a1d95cc0f380a3973ccaa6"
+    }
+  ]
+}

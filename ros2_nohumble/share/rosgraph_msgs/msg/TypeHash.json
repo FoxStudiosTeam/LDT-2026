@@ -1,0 +1,36 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "rosgraph_msgs/msg/TypeHash",
+      "fields": [
+        {
+          "name": "version",
+          "type": {
+            "type_id": 3,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": "1"
+        },
+        {
+          "name": "value",
+          "type": {
+            "type_id": 51,
+            "capacity": 32,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": []
+  },
+  "type_hashes": [
+    {
+      "type_name": "rosgraph_msgs/msg/TypeHash",
+      "hash_string": "RIHS01_b57248b9d4ea0964bd583c53ae3b94354e599b8183a135af48826287bef3c1f6"
+    }
+  ]
+}

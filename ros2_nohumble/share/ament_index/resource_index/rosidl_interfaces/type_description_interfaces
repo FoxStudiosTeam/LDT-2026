@@ -1,0 +1,14 @@
+msg/Field.idl
+msg/Field.msg
+msg/FieldType.idl
+msg/FieldType.msg
+msg/IndividualTypeDescription.idl
+msg/IndividualTypeDescription.msg
+msg/KeyValue.idl
+msg/KeyValue.msg
+msg/TypeDescription.idl
+msg/TypeDescription.msg
+msg/TypeSource.idl
+msg/TypeSource.msg
+srv/GetTypeDescription.idl
+srv/GetTypeDescription.srv

@@ -1,0 +1,16 @@
+msg/State.idl
+msg/State.msg
+msg/Transition.idl
+msg/Transition.msg
+msg/TransitionDescription.idl
+msg/TransitionDescription.msg
+msg/TransitionEvent.idl
+msg/TransitionEvent.msg
+srv/ChangeState.idl
+srv/ChangeState.srv
+srv/GetAvailableStates.idl
+srv/GetAvailableStates.srv
+srv/GetAvailableTransitions.idl
+srv/GetAvailableTransitions.srv
+srv/GetState.idl
+srv/GetState.srv

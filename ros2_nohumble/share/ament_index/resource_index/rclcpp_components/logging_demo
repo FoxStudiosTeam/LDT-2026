@@ -1,0 +1,2 @@
+logging_demo::LoggerConfig;bin/logger_config_component.dll
+logging_demo::LoggerUsage;bin/logger_usage_component.dll

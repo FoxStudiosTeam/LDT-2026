@@ -1,0 +1,13 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from rosbag2_test_msgdefs/msg/ComplexMsg.msg
+// generated code does not contain a copyright notice
+
+#include "rosbag2_test_msgdefs/msg/BasicMsg.idl"
+
+module rosbag2_test_msgdefs {
+  module msg {
+    struct ComplexMsg {
+      rosbag2_test_msgdefs::msg::BasicMsg b;
+    };
+  };
+};
