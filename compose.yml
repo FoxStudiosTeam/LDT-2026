@@ -1,42 +1,47 @@
+version: '3.8'
+
 services:
-  # 1. Сервис, который крутит датасет в фоне
+  # 1. Сервис плеера
   ros2_dataset_player:
-    image: ros:humble
+    build:
+      context: .
+      dockerfile: ./dataset/Dockerfile
     container_name: ros2_dataset_player
-    networks:
-      - ros_network
+    # ВЫПИЛИЛИ networks
+    network_mode: "host" # <--- ПУСКАЕМ СЕТЬ НАПРЯМУЮ ЧЕРЕЗ ХОСТ
+    ipc: "host"          
+    shm_size: '2gb'
+    ulimits:
+      nofile:
+        soft: 1024
+        hard: 65535
     environment:
       - ROS_DOMAIN_ID=42
+      - ROS_LOCALHOST_ONLY=1 # <--- Запрещаем DDS улетать в твой роутер/Wi-Fi
     volumes:
       - ./dataset:/app/dataset:ro
     command: >
-      /bin/bash -c "
-        apt-get update && apt-get install -y ros-humble-rosbag2 ros-humble-rosbag2-storage-mcap &&
-        source /opt/ros/humble/setup.bash &&
+      bash -c "
         echo '► [DATASET] Поехали!' &&
-        ros2 bag play /app/dataset/doubleT_obstacle --loop
+        ros2 bag play /app/dataset/doubleT_obstacle --loop --read-ahead-queue-size 10
       "
 
-  # 2. Твое Rust-приложение (Вьювер-обработчик)
+  # 2. Твое Rust-приложение
   rust_viewer:
     build:
       context: ./rust_listener
       dockerfile: Dockerfile
     container_name: rust_viewer
-    networks:
-      - ros_network
-    # Прокидываем порты наружу, чтобы контейнер мог дышать во внешнюю сеть
-    ports:
-      - "9876:9876"
-    # Добавляем шлюз, чтобы host.docker.internal точно разрешался в IP твоей Windows
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    # ВЫПИЛИЛИ networks и ports (порт 9876 теперь автоматом слушается на твоем localhost)
+    network_mode: "host" # <--- И СЮДА ТОЖЕ ХОСТОВУЮ СЕТЬ
+    ipc: "host"          
+    shm_size: '2gb'
+    ulimits:
+      nofile:
+        soft: 1024
+        hard: 65535
     environment:
       - ROS_DOMAIN_ID=42
+      - ROS_LOCALHOST_ONLY=1 # <--- И здесь закрываем контур локалхостом
     depends_on:
       - ros2_dataset_player
-
-# Создаем изолированную сеть, внутри которой DDS мультикаст работает без блокировок Windows
-networks:
-  ros_network:
-    driver: bridge
