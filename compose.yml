@@ -1,0 +1,42 @@
+services:
+  # 1. Сервис, который крутит датасет в фоне
+  ros2_dataset_player:
+    image: ros:humble
+    container_name: ros2_dataset_player
+    networks:
+      - ros_network
+    environment:
+      - ROS_DOMAIN_ID=42
+    volumes:
+      - ./dataset:/app/dataset:ro
+    command: >
+      /bin/bash -c "
+        apt-get update && apt-get install -y ros-humble-rosbag2 ros-humble-rosbag2-storage-mcap &&
+        source /opt/ros/humble/setup.bash &&
+        echo '► [DATASET] Поехали!' &&
+        ros2 bag play /app/dataset/doubleT_obstacle --loop
+      "
+
+  # 2. Твое Rust-приложение (Вьювер-обработчик)
+  rust_viewer:
+    build:
+      context: ./rust_listener
+      dockerfile: Dockerfile
+    container_name: rust_viewer
+    networks:
+      - ros_network
+    # Прокидываем порты наружу, чтобы контейнер мог дышать во внешнюю сеть
+    ports:
+      - "9876:9876"
+    # Добавляем шлюз, чтобы host.docker.internal точно разрешался в IP твоей Windows
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - ROS_DOMAIN_ID=42
+    depends_on:
+      - ros2_dataset_player
+
+# Создаем изолированную сеть, внутри которой DDS мультикаст работает без блокировок Windows
+networks:
+  ros_network:
+    driver: bridge

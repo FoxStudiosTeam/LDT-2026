@@ -1,3 +1,6 @@
 dataset/*
-!dataset/.gitkeep
 viewer/venv
+ros2/*
+!.gitkeep
+fix.ps1
+target

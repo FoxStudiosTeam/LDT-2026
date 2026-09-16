@@ -1,0 +1,11 @@
+{
+  "rust-analyzer.cargo.extraEnv": {
+    "ROS_DISTRO": "humble",
+    "AMENT_PREFIX_PATH": "R:\\prog\\LDT-2026\\ros2",
+    "PATH": "R:\\prog\\LDT-2026\\ros2\\bin;${env:PATH}"
+  },
+  "rust-analyzer.runnables.extraEnv": {
+    "ROS_DISTRO": "humble",
+    "AMENT_PREFIX_PATH": "R:\\prog\\LDT-2026\\ros2"
+  }
+}
