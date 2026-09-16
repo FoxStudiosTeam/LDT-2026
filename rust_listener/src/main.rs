@@ -23,7 +23,7 @@ use tokio::task;
 
 const LIDAR_TOPIC: &str = "/sensing/lidar/hesai128/pointcloud";
 // Полный gRPC-URI viewer'а, как просит сам Rerun при старте
-const RERUN_ADDR: &str = "rerun+http://192.168.0.100:9876/proxy";
+const RERUN_ADDR: &str = "rerun+http://host.docker.internal:9876/proxy";
 const NODE_SPIN_INTERVAL_MS: u64 = 1;
 
 // ─── Точка входа ──────────────────────────────────────────────────────────────
@@ -73,18 +73,19 @@ async fn main() -> Result<()> {
 // ─── Инициализация Rerun ──────────────────────────────────────────────────────
 
 fn init_rerun() -> Result<rerun::RecordingStream> {
-    println!("[Rerun] Подключение к {RERUN_ADDR}...");
+    println!("[Rerun] Подключение по TCP/WebSocket к {RERUN_ADDR}...");
 
-    let rec = RecordingStreamBuilder::new("rerun_example_grpc_drop_test")
-        .connect_grpc_opts(RERUN_ADDR) // <-- один аргумент — строка-URL
+    // Используем .connect(), который работает через стандартный TCP сокет без лимитов gRPC
+    let rec = RecordingStreamBuilder::new("ros2_lidar_viewer")
+        .connect_grpc_opts(RERUN_ADDR)
         .unwrap();
 
-    println!("[Rerun] Подключено!\n");
+    println!("[Rerun] Подключено по TCP-каналу!\n");
     Ok(rec)
 }
 
 // ─── Обработка одного фрейма ──────────────────────────────────────────────────
-
+// Это место нужно сделать RT, со строгим контрактом и кастрацию за аллокацию в рантайме, на вход и выход поставить двунаправленый буффер.
 fn process_frame(
     rec: &rerun::RecordingStream,
     msg: &PointCloud2,
