@@ -1,3 +1,0 @@
-WaitSetSubscriber;bin/wait_set_subscriber_library.dll
-StaticWaitSetSubscriber;bin/wait_set_subscriber_library.dll
-TimeTriggeredWaitSetSubscriber;bin/wait_set_subscriber_library.dll

@@ -1,6 +1,0 @@
-source;share/rosidl_cmake/environment/ament_prefix_path.bat
-source;share/rosidl_cmake/environment/path.bat
-source;share/rosidl_cmake/environment/pythonpath.bat
-source;share/rosidl_cmake/environment/ament_prefix_path.dsv
-source;share/rosidl_cmake/environment/path.dsv
-source;share/rosidl_cmake/environment/pythonpath.dsv

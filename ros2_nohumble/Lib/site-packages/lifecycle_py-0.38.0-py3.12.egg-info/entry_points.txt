@@ -1,2 +1,0 @@
-[console_scripts]
-lifecycle_talker = lifecycle_py.talker:main

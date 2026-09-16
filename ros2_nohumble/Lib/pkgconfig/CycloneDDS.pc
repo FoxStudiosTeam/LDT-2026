@@ -1,9 +1,0 @@
-prefix=C:/ci/ws/install
-includedir=${prefix}/include/CycloneDDS
-libdir=${prefix}/lib
-
-Name: CycloneDDS
-Description: Eclipse Cyclone DDS library
-Version: 11.0.1
-Libs: -L${libdir} -lddsc
-Cflags: -I${includedir}

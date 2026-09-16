@@ -1,6 +1,0 @@
-source;share/resource_retriever_interfaces/environment/ament_prefix_path.bat
-source;share/resource_retriever_interfaces/environment/path.bat
-source;share/resource_retriever_interfaces/environment/pythonpath.bat
-source;share/resource_retriever_interfaces/environment/ament_prefix_path.dsv
-source;share/resource_retriever_interfaces/environment/path.dsv
-source;share/resource_retriever_interfaces/environment/pythonpath.dsv

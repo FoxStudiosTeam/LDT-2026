@@ -1,4 +1,0 @@
-source;share/robot_state_publisher/environment/ament_prefix_path.bat
-source;share/robot_state_publisher/environment/path.bat
-source;share/robot_state_publisher/environment/ament_prefix_path.dsv
-source;share/robot_state_publisher/environment/path.dsv

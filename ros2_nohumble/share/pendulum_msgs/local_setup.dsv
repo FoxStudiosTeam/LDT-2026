@@ -1,6 +1,0 @@
-source;share/pendulum_msgs/environment/ament_prefix_path.bat
-source;share/pendulum_msgs/environment/path.bat
-source;share/pendulum_msgs/environment/pythonpath.bat
-source;share/pendulum_msgs/environment/ament_prefix_path.dsv
-source;share/pendulum_msgs/environment/path.dsv
-source;share/pendulum_msgs/environment/pythonpath.dsv

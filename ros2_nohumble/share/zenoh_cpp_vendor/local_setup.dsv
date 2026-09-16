@@ -1,6 +1,0 @@
-source;share/zenoh_cpp_vendor/environment/ament_prefix_path.bat
-source;share/zenoh_cpp_vendor/environment/path.bat
-source;share/zenoh_cpp_vendor/environment/vendor_package.bat
-source;share/zenoh_cpp_vendor/environment/ament_prefix_path.dsv
-source;share/zenoh_cpp_vendor/environment/path.dsv
-source;share/zenoh_cpp_vendor/environment/vendor_package.dsv

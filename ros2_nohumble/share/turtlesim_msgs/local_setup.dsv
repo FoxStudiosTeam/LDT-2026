@@ -1,6 +1,0 @@
-source;share/turtlesim_msgs/environment/ament_prefix_path.bat
-source;share/turtlesim_msgs/environment/path.bat
-source;share/turtlesim_msgs/environment/pythonpath.bat
-source;share/turtlesim_msgs/environment/ament_prefix_path.dsv
-source;share/turtlesim_msgs/environment/path.dsv
-source;share/turtlesim_msgs/environment/pythonpath.dsv

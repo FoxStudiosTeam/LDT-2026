@@ -1,1 +1,0 @@
-ament_cmake_pytest;ament_cmake_ros_core;ament_lint_auto;ament_lint_common;launch;launch_testing;launch_testing_ament_cmake;launch_testing_ros;rcl_interfaces;rclcpp;rclpy;rmw_test_fixture_implementation;test_msgs

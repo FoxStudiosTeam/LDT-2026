@@ -1,4 +1,0 @@
-source;share/rclcpp/environment/ament_prefix_path.bat
-source;share/rclcpp/environment/path.bat
-source;share/rclcpp/environment/ament_prefix_path.dsv
-source;share/rclcpp/environment/path.dsv

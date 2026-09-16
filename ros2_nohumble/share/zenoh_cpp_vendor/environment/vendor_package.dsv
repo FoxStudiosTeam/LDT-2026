@@ -1,3 +1,0 @@
-prepend-non-duplicate-if-exists;PATH;opt/zenoh_cpp_vendor/bin
-prepend-non-duplicate-if-exists;PATH;opt/zenoh_cpp_vendor/lib
-prepend-non-duplicate-if-exists;PATH;opt/zenoh_cpp_vendor/lib64

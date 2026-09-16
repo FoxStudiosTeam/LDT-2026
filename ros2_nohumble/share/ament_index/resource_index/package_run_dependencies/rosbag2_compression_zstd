@@ -1,1 +1,0 @@
-pluginlib;rcutils;rosbag2_compression;zstd_cmake_module;ament_cmake_gmock;ament_lint_auto;ament_lint_common;rclcpp;rosbag2_test_common

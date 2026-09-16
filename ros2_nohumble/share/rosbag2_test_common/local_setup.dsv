@@ -1,6 +1,0 @@
-source;share/rosbag2_test_common/environment/ament_prefix_path.bat
-source;share/rosbag2_test_common/environment/path.bat
-source;share/rosbag2_test_common/environment/pythonpath.bat
-source;share/rosbag2_test_common/environment/ament_prefix_path.dsv
-source;share/rosbag2_test_common/environment/path.dsv
-source;share/rosbag2_test_common/environment/pythonpath.dsv

@@ -1,6 +1,0 @@
-source;share/ament_cmake_google_benchmark/environment/ament_prefix_path.bat
-source;share/ament_cmake_google_benchmark/environment/path.bat
-source;share/ament_cmake_google_benchmark/environment/pythonpath.bat
-source;share/ament_cmake_google_benchmark/environment/ament_prefix_path.dsv
-source;share/ament_cmake_google_benchmark/environment/path.dsv
-source;share/ament_cmake_google_benchmark/environment/pythonpath.dsv

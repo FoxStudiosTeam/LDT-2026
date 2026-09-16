@@ -1,6 +1,0 @@
-source;share/rclpy/environment/ament_prefix_path.bat
-source;share/rclpy/environment/path.bat
-source;share/rclpy/environment/pythonpath.bat
-source;share/rclpy/environment/ament_prefix_path.dsv
-source;share/rclpy/environment/path.dsv
-source;share/rclpy/environment/pythonpath.dsv

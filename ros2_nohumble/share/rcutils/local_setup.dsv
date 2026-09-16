@@ -1,4 +1,0 @@
-source;share/rcutils/environment/ament_prefix_path.bat
-source;share/rcutils/environment/path.bat
-source;share/rcutils/environment/ament_prefix_path.dsv
-source;share/rcutils/environment/path.dsv

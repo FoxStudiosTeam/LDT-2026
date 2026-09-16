@@ -1,4 +1,0 @@
-source;share/rmw_test_fixture/environment/ament_prefix_path.bat
-source;share/rmw_test_fixture/environment/path.bat
-source;share/rmw_test_fixture/environment/ament_prefix_path.dsv
-source;share/rmw_test_fixture/environment/path.dsv

@@ -1,6 +1,0 @@
-source;share/rmw_dds_common/environment/ament_prefix_path.bat
-source;share/rmw_dds_common/environment/path.bat
-source;share/rmw_dds_common/environment/pythonpath.bat
-source;share/rmw_dds_common/environment/ament_prefix_path.dsv
-source;share/rmw_dds_common/environment/path.dsv
-source;share/rmw_dds_common/environment/pythonpath.dsv

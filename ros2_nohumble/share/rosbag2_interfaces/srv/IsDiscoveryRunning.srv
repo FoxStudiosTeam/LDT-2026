@@ -1,4 +1,0 @@
----
-# True if discovery is running, false otherwise
-bool running
-

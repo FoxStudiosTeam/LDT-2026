@@ -1,4 +1,0 @@
-source;share/rmw_zenoh_cpp/environment/ament_prefix_path.bat
-source;share/rmw_zenoh_cpp/environment/path.bat
-source;share/rmw_zenoh_cpp/environment/ament_prefix_path.dsv
-source;share/rmw_zenoh_cpp/environment/path.dsv

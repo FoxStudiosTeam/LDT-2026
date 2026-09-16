@@ -1,1 +1,0 @@
-ament_cmake_ros_core;geometry_msgs;libqtcore;libqtgui;libqtopengl;libqtsvg;libqtwidgets;message_filters;pluginlib;qt-base-dev;rclcpp;resource_retriever;rviz_ogre_vendor;rviz_rendering;sensor_msgs;std_msgs;std_srvs;tf2;tf2_ros;tinyxml2;yaml_cpp_vendor

@@ -1,8 +1,0 @@
-source;share/gz_cmake_vendor/environment/ament_prefix_path.bat
-source;share/gz_cmake_vendor/environment/path.bat
-source;share/gz_cmake_vendor/environment/vendor_package.bat
-source;share/gz_cmake_vendor/environment/vendor_package_cmake_prefix.bat
-source;share/gz_cmake_vendor/environment/ament_prefix_path.dsv
-source;share/gz_cmake_vendor/environment/path.dsv
-source;share/gz_cmake_vendor/environment/vendor_package.dsv
-source;share/gz_cmake_vendor/environment/vendor_package_cmake_prefix.dsv

@@ -1,1 +1,0 @@
-rosbag2_compression;rosbag2_cpp;rosbag2_storage;rosbag2_transport;rclpy;rpyutils;ament_lint_auto;ament_lint_common;python3-pytest;rcl_interfaces;rosbag2_compression_zstd;rosbag2_storage_default_plugins;rosbag2_test_common;rosidl_runtime_py;std_msgs;rosbag2_test_msgdefs

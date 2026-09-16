@@ -1,2 +1,0 @@
-.*using network interface \w+ \(.*\) selected arbitrarily from:.*
-.*system rmem_max \([0-9]+\) is lower than the recommended minimum.*
