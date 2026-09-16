@@ -1,7 +1,9 @@
 services:
   # 1. Сервис, который крутит датасет в фоне
   ros2_dataset_player:
-    image: ros:humble
+    build:
+      context: ./dataset
+      dockerfile: Dockerfile
     container_name: ros2_dataset_player
     networks:
       - ros_network
@@ -9,18 +11,11 @@ services:
       - ROS_DOMAIN_ID=42
     volumes:
       - ./dataset:/app/dataset:ro
-    command: >
-      /bin/bash -c "
-        apt-get update && apt-get install -y ros-humble-rosbag2 ros-humble-rosbag2-storage-mcap &&
-        source /opt/ros/humble/setup.bash &&
-        echo '► [DATASET] Поехали!' &&
-        ros2 bag play /app/dataset/doubleT_obstacle --loop
-      "
 
   # 2. Твое Rust-приложение (Вьювер-обработчик)
   rust_viewer:
     build:
-      context: ./rust_listener
+      context: ./data-extraction
       dockerfile: Dockerfile
     container_name: rust_viewer
     networks:

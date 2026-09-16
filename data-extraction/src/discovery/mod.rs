@@ -1,24 +1,40 @@
-use ros2_client::Context;
+use ros2_client::MessageTypeName;
+use ros2_client::rustdds::{DomainParticipantStatusEvent, QosPolicies};
 
-pub struct Topic {
+
+const POINTCLOUD2_TYPE: &str =
+    "PointCloud2";
+
+#[derive(Debug, Clone)]
+pub struct DiscoveredTopic {
     pub name: String,
-    pub msg_type: String,
+    pub msg_type: MessageTypeName,
+    pub qos: QosPolicies
 }
 
-pub fn discover_topics(context: &Context) -> Result<Vec<Topic>, String> {
-    let raw_topics = context.discovered_topics();
+pub fn find_pointcloud_topic(
+    event: DomainParticipantStatusEvent,
+) -> Option<DiscoveredTopic> {
+    match event {
+        DomainParticipantStatusEvent::WriterDetected { writer }
+        if writer.type_name.contains("PointCloud2") =>
+            {
+                let message_type: Vec<&str> = writer.type_name.split("::").collect();
 
-    let topics: Vec<Topic> = raw_topics.into_iter()
-        // .filter(|r| r.type_name().contains("2"))
-        .map(|raw_topic| {
-            Topic {
-                name: raw_topic.topic_name().to_string(),
-                msg_type: raw_topic.type_name().to_string()
+                let topic_name = writer.topic_name.strip_prefix("rt").unwrap().into();
+
+                println!("ROS name: {:}", topic_name);
+
+                Some(DiscoveredTopic {
+                    name: topic_name,
+                    msg_type: MessageTypeName::new(
+                        message_type.first().unwrap(),
+                        message_type.last().unwrap().trim_end_matches("_"),
+                    ),
+                    qos: writer.qos,
+                })
             }
-        }).collect();
 
-    if topics.is_empty() {
-        return Err("No topics found.".to_string())
+        _ => None,
     }
-    Ok(topics)
 }
