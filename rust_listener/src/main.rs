@@ -54,7 +54,7 @@ async fn main() -> Result<()> {
 
     // Основной цикл обработки сообщений
     let mut frame_id: u64 = 0;
-    let mut point_cloud : &mut AppPointCloud = &mut AppPointCloud::new();
+    let mut point_cloud: Box<AppPointCloud> = Box::new(AppPointCloud::new());
 
     while let Some(msg) = sub.next().await {
         frame_id += 1;
@@ -101,6 +101,8 @@ fn process_frame(
         eprintln!("[FRAME {:4}] Пустое облако точек, пропускаем.", frame_id);
         return Ok(());
     }
+
+    println!("[FRAME SIZE] {}", point_cloud.length);
 
     let stats = point_cloud.compute_stats();
 

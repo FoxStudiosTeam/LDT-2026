@@ -31,7 +31,7 @@ impl CloudStats {
     }
 }
 
-pub type AppPointCloud = PointCloud<1024>;
+pub type AppPointCloud = PointCloud<2_000_000>;
 
 pub struct PointCloud<const SIZE: usize> {
     pub x: [f32; SIZE],
@@ -107,37 +107,59 @@ impl<'a, const SIZE : usize> PointCloud<SIZE> {
     }
 
     pub fn parse_ros2_msg(&mut self, ros2_msg: &r2r::sensor_msgs::msg::PointCloud2) {
+        let step = ros2_msg.point_step as usize;
+        if step != 0 {
+            // Считаем, сколько РЕАЛЬНО точек прислал ROS2 в этом кадре
+            let real_points_count = ros2_msg.data.len() / step;
+            println!("🔥 ROS2 MSG ACTUAL POINTS: {}", real_points_count);
+        }
+        
         self.length = 0;
 
         if ros2_msg.data.is_empty() || ros2_msg.point_step == 0 {
             return;
         }
 
-        let mut x_off = None;
-        let mut y_off = None;
-        let mut z_off = None;
-        let mut int_off = None;
+        // Будем искать не только offset, но и datatype для каждой координаты
+        let mut x_info = None;
+        let mut y_info = None;
+        let mut z_info = None;
 
         for f in &ros2_msg.fields {
+            let info = (f.offset as usize, f.datatype as u8);
             match f.name.as_str() {
-                "x" => x_off = Some(f.offset as usize),
-                "y" => y_off = Some(f.offset as usize),
-                "z" => z_off = Some(f.offset as usize),
-                "intensity" => int_off = Some(f.offset as usize),
+                "x" => x_info = Some(info),
+                "y" => y_info = Some(info),
+                "z" => z_info = Some(info),
                 _ => {}
             }
         }
 
-        let (x_off, y_off, z_off) = match (x_off, y_off, z_off) {
+        let (x_info, y_info, z_info) = match (x_info, y_info, z_info) {
             (Some(x), Some(y), Some(z)) => (x, y, z),
-            _ => return,
+            _ => return, // Нет базовых полей — выходим
         };
-        
-        let int_off: usize = int_off.unwrap_or(0);
 
         let step = ros2_msg.point_step as usize;
         let n_points = ros2_msg.data.len() / step;
         let data = &ros2_msg.data;
+
+        // Вспомогательная функция, которая умеет безопасно читать и f32 (тип 7), и f64 (тип 8)
+        let read_cast_f32 = |base_offset: usize, info: (usize, u8), buffer: &[u8]| -> Option<f32> {
+            let (offset, datatype) = info;
+            let start = base_offset + offset;
+
+            match datatype {
+                8 => { // FLOAT64 (double) — занимает 8 байт
+                    let bytes: [u8; 8] = buffer.get(start..start + 8)?.try_into().ok()?;
+                    Some(f64::from_le_bytes(bytes) as f32) // кастуем double в f32
+                }
+                7 | _ => { // FLOAT32 (стандартный float) — занимает 4 байта
+                    let bytes: [u8; 4] = buffer.get(start..start + 4)?.try_into().ok()?;
+                    Some(f32::from_le_bytes(bytes))
+                }
+            }
+        };
 
         for i in 0..n_points {
             if self.length >= SIZE {
@@ -146,21 +168,16 @@ impl<'a, const SIZE : usize> PointCloud<SIZE> {
 
             let base = i * step;
 
-            if base + z_off + 4 > data.len() || base + int_off + 4 > data.len() {
-                break;
-            }
-
-            let x = f32::from_le_bytes(data[base + x_off..base + x_off + 4].try_into().unwrap_or([0; 4]));
-            let y = f32::from_le_bytes(data[base + y_off..base + y_off + 4].try_into().unwrap_or([0; 4]));
-            let z = f32::from_le_bytes(data[base + z_off..base + z_off + 4].try_into().unwrap_or([0; 4]));
-            let intensity = f32::from_le_bytes(data[base + int_off..base + int_off + 4].try_into().unwrap_or([0; 4]));
+            // Читаем координаты с авто-приведением типов. Если буфер кадра обрезался — выходим (как старый `?`)
+            let x = match read_cast_f32(base, x_info, data) { Some(v) => v, None => return };
+            let y = match read_cast_f32(base, y_info, data) { Some(v) => v, None => return };
+            let z = match read_cast_f32(base, z_info, data) { Some(v) => v, None => return };
 
             if x.is_finite() && y.is_finite() && z.is_finite() {
                 let idx = self.length;
                 self.x[idx] = x;
                 self.y[idx] = y;
                 self.z[idx] = z;
-                self.intensity[idx] = intensity;
                 self.length += 1;
             }
         }
