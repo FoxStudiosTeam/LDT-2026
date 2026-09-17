@@ -1,4 +1,4 @@
-use std::error::Error;
+use crate::error::Error;
 use ros2_client::{Context, Node};
 
 mod context;
@@ -7,10 +7,9 @@ pub struct Ros {
     context: Context,
     node: Node,
 }
-
 impl Ros {
-    pub fn new() -> Result<Self, Box<dyn Error>> {
-        let context = context::create_context().expect("Failed to create context");
+    pub fn new() -> Result<Self,Error> {
+        let context = context::create_context()?;
         let mut node = node::create_node(&context)?;
         
         node::start_spinner(&mut node);

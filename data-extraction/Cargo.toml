@@ -1,14 +1,10 @@
 [package]
-name = "data-extraction"
+name = "ros2_data_extraction"
 version = "0.1.0"
 edition = "2024"
-
-[[bin]]
-name = "ros2_data_extraction"
-path = "src/main.rs"
 
 [dependencies]
 futures = "0.3.34"
 ros2-client = { version = "0.10.0", features = ["jazzy"] }
 ros2-interfaces-jazzy-serde = { version = "0.0.5", features = ["sensor_msgs"] }
-tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread","time"] }
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread","time","sync"] }
