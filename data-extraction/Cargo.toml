@@ -3,13 +3,9 @@ name = "data-extraction"
 version = "0.1.0"
 edition = "2024"
 
-[[bin]]
-name = "ros2_data_extraction"
-path = "src/main.rs"
-
 [dependencies]
 futures = "0.3.34"
-ros2-client = { version = "0.10.1", features = ["jazzy"] }
-ros2-interfaces-jazzy-serde = { version =  "*", features = ["sensor_msgs"] }
+ros2-client = { version = "0.10.1", features = ["humble"] }
+ros2-interfaces-humble = { version =  "*", features = ["sensor_msgs"] }
 serde = "1.0.229"
 tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread","time"] }

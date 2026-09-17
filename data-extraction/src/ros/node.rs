@@ -1,6 +1,6 @@
 use std::error::Error;
 use ros2_client::{Context, Name, Node, NodeName, NodeOptions, Subscription};
-use ros2_interfaces_jazzy_serde::sensor_msgs::msg::PointCloud2;
+use ros2_interfaces_humble::sensor_msgs::msg::PointCloud2;
 use crate::discovery::DiscoveredTopic;
 
 pub fn create_node(context: &Context) -> Result<Node, ros2_client::NodeCreateError> {
