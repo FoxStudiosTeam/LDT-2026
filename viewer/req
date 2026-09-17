@@ -2,3 +2,8 @@ textual>=7.2,<8
 numpy
 rerun-sdk
 rosbags
+open3d
+pickle
+scipy
+matplotlib
+opencv-python

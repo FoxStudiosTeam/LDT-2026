@@ -1,3 +1,5 @@
 [workspace]
-members = ["rust_listener"]
+members = ["lidar_debug"]
 resolver = "2"
+
+[workspace.dependencies]
