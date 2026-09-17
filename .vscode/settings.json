@@ -7,5 +7,6 @@
   "rust-analyzer.runnables.extraEnv": {
     "ROS_DISTRO": "humble",
     "AMENT_PREFIX_PATH": "R:\\prog\\LDT-2026\\ros2"
-  }
+  },
+  "cmake.sourceDirectory": "C:/Users/AgniaEndie/Desktop/hacks/trait-ldt/cuda-lib"
 }

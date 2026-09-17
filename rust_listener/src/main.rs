@@ -4,7 +4,7 @@
 //!   source /opt/ros/humble/setup.bash
 //!   cargo run --bin ros2_debug_viewer
 //!
-//! Требует работающего Rerun viewer на 192.168.0.100:9876 (Windows host).
+//! Требует работающего Rerun viewer на host.docker.internal:9876 (Windows host).
 //! Требует запущенного `ros2 bag play <path>` или реального ROS2 сенсора.
 
 mod debug_viz;
