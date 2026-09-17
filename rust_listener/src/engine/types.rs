@@ -107,14 +107,12 @@ impl<'a, const SIZE : usize> PointCloud<SIZE> {
     }
 
     pub fn parse_ros2_msg(&mut self, ros2_msg: &r2r::sensor_msgs::msg::PointCloud2) {
-        // 1. Сбрасываем длину
         self.length = 0;
 
         if ros2_msg.data.is_empty() || ros2_msg.point_step == 0 {
             return;
         }
 
-        // 2. Вытаскиваем смещения полей (делаем безопасно, без HashMap, чтобы не аллоцировать в куче!)
         let mut x_off = None;
         let mut y_off = None;
         let mut z_off = None;
@@ -130,40 +128,33 @@ impl<'a, const SIZE : usize> PointCloud<SIZE> {
             }
         }
 
-        // Если базовых координат нет — выходим, ловить нечего
         let (x_off, y_off, z_off) = match (x_off, y_off, z_off) {
             (Some(x), Some(y), Some(z)) => (x, y, z),
             _ => return,
         };
         
-        // Интенсивность опциональна: если её нет, смещение будет 0
-        let int_off = int_off.unwrap_or(0);
+        let int_off: usize = int_off.unwrap_or(0);
 
         let step = ros2_msg.point_step as usize;
         let n_points = ros2_msg.data.len() / step;
         let data = &ros2_msg.data;
 
-        // 3. Твой идеальный плоский цикл без лесенок (Guard Clause)
         for i in 0..n_points {
-            // Проверка на жесткий лимит статического буфера
             if self.length >= SIZE {
                 break;
             }
 
             let base = i * step;
 
-            // Безопасность границ бинарного массива (как в старом коде)
             if base + z_off + 4 > data.len() || base + int_off + 4 > data.len() {
                 break;
             }
 
-            // Парсим строго в Little Endian через копирование среза байт (ноль unsafe!)
             let x = f32::from_le_bytes(data[base + x_off..base + x_off + 4].try_into().unwrap_or([0; 4]));
             let y = f32::from_le_bytes(data[base + y_off..base + y_off + 4].try_into().unwrap_or([0; 4]));
             let z = f32::from_le_bytes(data[base + z_off..base + z_off + 4].try_into().unwrap_or([0; 4]));
             let intensity = f32::from_le_bytes(data[base + int_off..base + int_off + 4].try_into().unwrap_or([0; 4]));
 
-            // Сохраняем спасительную проверку на валидность чисел (NaN / Inf)
             if x.is_finite() && y.is_finite() && z.is_finite() {
                 let idx = self.length;
                 self.x[idx] = x;
@@ -176,9 +167,7 @@ impl<'a, const SIZE : usize> PointCloud<SIZE> {
     }
 
     pub fn to_rerun(&self) -> impl Iterator<Item = [f32; 3]> + '_ {
-        // Просто перебираем индексы от 0 до length
         (0..self.length).map(move |i| {
-            // Возвращаем массив f32. Компилятор сам сделает из него Position3D
             [self.x[i], self.y[i], self.z[i]]
         })
     }
