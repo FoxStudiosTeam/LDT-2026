@@ -29,8 +29,8 @@ services:
   # 2. Твое Rust-приложение
   rust_viewer:
     build:
-      context: ./rust_listener
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: rust_listener/Dockerfile
     container_name: rust_viewer
     # ВЫПИЛИЛИ networks и ports (порт 9876 теперь автоматом слушается на твоем localhost)
     network_mode: "host" # <--- И СЮДА ТОЖЕ ХОСТОВУЮ СЕТЬ
@@ -45,3 +45,10 @@ services:
       - ROS_LOCALHOST_ONLY=1 # <--- И здесь закрываем контур локалхостом
     depends_on:
       - ros2_dataset_player
+    deploy:
+        resources:
+          reservations:
+            devices:
+              - driver: nvidia
+                count: all
+                capabilities: [gpu]

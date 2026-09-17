@@ -1,3 +1,10 @@
 [workspace]
-members = ["data-extraction"]
+members = ["cuda-pipeline", "rust_listener"]
 resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+cuda-pipeline = { path = "cuda-pipeline" }

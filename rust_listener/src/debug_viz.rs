@@ -3,23 +3,23 @@
 use anyhow::Result;
 use rerun::{Color, LineStrips3D, Points3D, Radius, RecordingStream};
 
-use crate::pointcloud::CloudStats;
+use crate::{engine::types::{AppPointCloud, CloudStats}};
 
 // ─── Пороги ───────────────────────────────────────────────────────────────────
 const NEAR_RANGE_M: f32 = 1.0; // точки ближе этого — "опасные"
 const HIGH_Z_M: f32 = 2.0; // точки выше этого — "верхний слой"
 
 /// Логируем всё облако точек в rerun
-pub fn log_raw_cloud(rec: &RecordingStream, points: &[[f32; 3]]) -> Result<()> {
-    if points.is_empty() {
+pub fn log_raw_cloud(rec: &RecordingStream, point_cloud : &AppPointCloud) -> Result<()> {
+    if point_cloud.is_empty() {
         return Ok(());
     }
 
     rec.log(
         "lidar/raw",
-        &Points3D::new(points)
-            .with_colors(vec![Color::from_rgb(160, 185, 220); points.len()])
-            .with_radii(vec![Radius::new_ui_points(1.2); points.len()]),
+        &Points3D::new(point_cloud.to_rerun())
+            .with_colors([Color::from_rgb(160, 185, 220)])
+            .with_radii([Radius::new_ui_points(1.2)]),
     )?;
 
     Ok(())
@@ -28,7 +28,7 @@ pub fn log_raw_cloud(rec: &RecordingStream, points: &[[f32; 3]]) -> Result<()> {
 /// Логируем отладочные оверлеи
 pub fn log_debug_overlays(
     rec: &RecordingStream,
-    points: &[[f32; 3]],
+    point_cloud: &AppPointCloud,
     stats: &CloudStats,
 ) -> Result<()> {
     // 1. Центр масс
@@ -38,20 +38,19 @@ pub fn log_debug_overlays(
     log_bbox(rec, stats)?;
 
     // 3. Близкие точки (< NEAR_RANGE_M)
-    log_near_points(rec, points)?;
+    log_near_points(rec, point_cloud)?;
 
     // 4. Высокие точки (Z > HIGH_Z_M)
-    log_high_points(rec, points)?;
+    log_high_points(rec, point_cloud)?;
 
     Ok(())
 }
 
 /// Центр масс — одна большая зелёная точка
 fn log_centroid(rec: &RecordingStream, stats: &CloudStats) -> Result<()> {
-    let c = stats.centroid;
     rec.log(
         "lidar/debug/centroid",
-        &Points3D::new([c])
+        &Points3D::new(&[[stats.centroid_x,stats.centroid_y, stats.centroid_z]])
             .with_colors([Color::from_rgb(50, 255, 80)])
             .with_radii([Radius::new_scene_units(0.25)])
             .with_labels(["centroid"]),
@@ -61,8 +60,13 @@ fn log_centroid(rec: &RecordingStream, stats: &CloudStats) -> Result<()> {
 
 /// Wireframe bounding box — 12 рёбер жёлтым
 fn log_bbox(rec: &RecordingStream, stats: &CloudStats) -> Result<()> {
-    let [x0, y0, z0] = stats.min;
-    let [x1, y1, z1] = stats.max;
+    let x0 = stats.min_x;
+    let y0 = stats.min_y;
+    let z0 = stats.min_z;
+
+    let x1 = stats.max_x;
+    let y1 = stats.max_y;
+    let z1 = stats.max_z;
 
     // 12 рёбер куба (каждое ребро — отдельная полилиния из 2 точек)
     let edges: Vec<Vec<[f32; 3]>> = vec![
@@ -94,14 +98,20 @@ fn log_bbox(rec: &RecordingStream, stats: &CloudStats) -> Result<()> {
 }
 
 /// Точки ближе NEAR_RANGE_M к началу координат — красным
-fn log_near_points(rec: &RecordingStream, points: &[[f32; 3]]) -> Result<()> {
-    let near: Vec<[f32; 3]> = points
+fn log_near_points(rec: &RecordingStream, point_cloud: &AppPointCloud) -> Result<()> {
+   let near: Vec<[f32; 3]> = point_cloud
         .iter()
+        // Принимаем p (это ссылка на твой кортеж)
         .filter(|p| {
-            let dist2 = p[0] * p[0] + p[1] * p[1] + p[2] * p[2];
+            // Достаем ссылки &f32 через точку и разыменовываем их звездочкой
+            let x = *p.0;
+            let y = *p.1;
+            let z = *p.2;
+            let dist2 = x * x + y * y + z * z;
             dist2 < NEAR_RANGE_M * NEAR_RANGE_M
         })
-        .copied()
+        // В map приходит сам кортеж по значению, достаем элементы так же
+        .map(|p| [*p.0, *p.1, *p.2])
         .collect();
 
     if near.is_empty() {
@@ -124,8 +134,13 @@ fn log_near_points(rec: &RecordingStream, points: &[[f32; 3]]) -> Result<()> {
 }
 
 /// Точки выше HIGH_Z_M — бирюзовым
-fn log_high_points(rec: &RecordingStream, points: &[[f32; 3]]) -> Result<()> {
-    let high: Vec<[f32; 3]> = points.iter().filter(|p| p[2] > HIGH_Z_M).copied().collect();
+fn log_high_points(rec: &RecordingStream, point_cloud: &AppPointCloud) -> Result<()> {
+    let high: Vec<[f32; 3]> = point_cloud
+    .iter()
+    .filter(|&(_, _, &z, _)| z > HIGH_Z_M) 
+    .map(|(&x, &y, &z, _)| [x, y, z])
+    .collect();
+
 
     if high.is_empty() {
         rec.log("lidar/debug/high_z", &Points3D::new([] as [[f32; 3]; 0]))?;

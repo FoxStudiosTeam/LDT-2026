@@ -4,20 +4,21 @@
 //!   source /opt/ros/humble/setup.bash
 //!   cargo run --bin ros2_debug_viewer
 //!
-//! Требует работающего Rerun viewer на 192.168.0.100:9876 (Windows host).
+//! Требует работающего Rerun viewer на host.docker.internal:9876 (Windows host).
 //! Требует запущенного `ros2 bag play <path>` или реального ROS2 сенсора.
 
 mod debug_viz;
-mod pointcloud;
+mod engine;
 
 use anyhow::Result;
 use futures::StreamExt;
 use r2r::sensor_msgs::msg::PointCloud2;
 use r2r::{Context, QosProfile};
 use rerun::RecordingStreamBuilder;
-use std::net::SocketAddrV4;
 use std::time::Duration;
 use tokio::task;
+
+use crate::engine::types::{AppPointCloud, CloudStats};
 
 // ─── Конфигурация ─────────────────────────────────────────────────────────────
 
@@ -53,6 +54,7 @@ async fn main() -> Result<()> {
 
     // Основной цикл обработки сообщений
     let mut frame_id: u64 = 0;
+    let mut point_cloud: Box<AppPointCloud> = Box::new(AppPointCloud::new());
 
     while let Some(msg) = sub.next().await {
         frame_id += 1;
@@ -60,7 +62,7 @@ async fn main() -> Result<()> {
         let timestamp_ns: i64 =
             msg.header.stamp.sec as i64 * 1_000_000_000 + msg.header.stamp.nanosec as i64;
 
-        match process_frame(&rec, &msg, frame_id, timestamp_ns) {
+        match process_frame(&rec, &msg, frame_id, timestamp_ns, &mut point_cloud) {
             Ok(()) => {}
             Err(e) => eprintln!("[FRAME {:4}] Ошибка обработки: {e}", frame_id),
         }
@@ -91,16 +93,18 @@ fn process_frame(
     msg: &PointCloud2,
     frame_id: u64,
     timestamp_ns: i64,
+    point_cloud: &mut AppPointCloud
 ) -> Result<()> {
     // Парсим облако точек
-    let points = pointcloud::parse(msg)?;
-    if points.is_empty() {
+    point_cloud.parse_ros2_msg(msg);
+    if point_cloud.is_empty() {
         eprintln!("[FRAME {:4}] Пустое облако точек, пропускаем.", frame_id);
         return Ok(());
     }
 
-    // Вычисляем статистику
-    let stats = pointcloud::compute_stats(&points);
+    println!("[FRAME SIZE] {}", point_cloud.length);
+
+    let stats = point_cloud.compute_stats();
 
     // Выводим в stdout
     print_frame_info(frame_id, timestamp_ns, &stats);
@@ -113,26 +117,23 @@ fn process_frame(
     rec.set_time_sequence("frame", frame_id as i64);
 
     // Логируем исходное облако
-    debug_viz::log_raw_cloud(rec, &points)?;
+    debug_viz::log_raw_cloud(rec, &point_cloud)?;
 
     // Логируем отладочные оверлеи
-    debug_viz::log_debug_overlays(rec, &points, &stats)?;
+    debug_viz::log_debug_overlays(rec, &point_cloud, &stats)?;
 
     Ok(())
 }
 
 // ─── Вывод в stdout ───────────────────────────────────────────────────────────
 
-fn print_frame_info(frame_id: u64, timestamp_ns: i64, stats: &pointcloud::CloudStats) {
-    let [cx, cy, cz] = stats.centroid;
-    let [xmin, ymin, zmin] = stats.min;
-    let [xmax, ymax, zmax] = stats.max;
+fn print_frame_info(frame_id: u64, timestamp_ns: i64, stats: &CloudStats) {
 
     println!(
         "[FRAME {:4}] pts={:6} | t={} ns | \
          bbox x=[{:6.1},{:6.1}] y=[{:6.1},{:6.1}] z=[{:5.1},{:5.1}] | \
          centroid=({:.2},{:.2},{:.2})",
-        frame_id, stats.n_points, timestamp_ns, xmin, xmax, ymin, ymax, zmin, zmax, cx, cy, cz,
+        frame_id, stats.n_points, timestamp_ns, stats.min_x, stats.max_x, stats.min_y, stats.max_y, stats.min_z, stats.max_z, stats.centroid_x, stats.centroid_y, stats.centroid_z,
     );
 }
 
