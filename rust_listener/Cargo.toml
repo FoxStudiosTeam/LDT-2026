@@ -13,3 +13,5 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 futures = "0.3"
 anyhow = "1"
 rerun = "0.37.2"
+
+cuda-pipeline = { workspace = true }

@@ -1,0 +1,10 @@
+[package]
+name = "cuda-pipeline"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Пусто
+
+[build-dependencies]
+cmake = "0.1"

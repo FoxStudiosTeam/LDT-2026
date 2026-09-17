@@ -5,3 +5,41 @@ ros2/*
 fix.ps1
 target
 !dataset/Dockerfile
+# --- Rust/Cargo ---
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# --- CMake & Нативные сборки ---
+# Если ты запускал cmake вручную внутри cuda-lib/
+/cuda-lib/build/
+/cuda-lib/.cmake/
+
+# Временные файлы компиляции (на случай, если запустил сборку в корне)
+/build/
+CMakeFiles/
+CMakeCache.txt
+CMakeCompilerIdC/
+CMakeCompilerIdCXX/
+CMakeCompilerIdCUDA/
+cmake_install.cmake
+Makefile
+
+# --- Артефакты компиляторов и линковщиков MSVC (Windows) ---
+*.exe
+*.dll
+*.lib
+*.pdb
+*.obj
+*.suo
+*.user
+*.sln
+*.vcxproj
+*.filters
+
+# --- IDE (Редакторы кода) ---
+. those/
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
