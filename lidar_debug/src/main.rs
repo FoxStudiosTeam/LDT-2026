@@ -48,7 +48,6 @@ fn train_shapecast(rec: &rerun::RecordingStream, points: &[[f32; 3]]) {
                 None => return,
             };
 
-            log_box(rec, &hit.center, &y_box_size, col_first);
             log_points(rec, &hit.points, col_first);
 
             // let top_pos = origin + direction * hit.dist + bottom_hit_offset();
@@ -97,7 +96,6 @@ fn train_shapecast_fast(rec: &rerun::RecordingStream, points: &[[f32; 3]]) {
                 None => continue,
             };
 
-            log_box(rec, &hit.center, &box_size, col_first);
             log_points(rec, &hit.points, col_first);
         }
     });
@@ -134,6 +132,40 @@ fn train_shapecast_superfast(rec: &rerun::RecordingStream, points: &[[f32; 3]]) 
         candidates.sort_unstable_by(|a, b| b[2].total_cmp(&a[2]));
 
         if let Some(point) = candidates.first() {
+            // первый point по глубине
+            log_points(rec, &[*point], col_first);
+        }
+    });
+}
+
+fn train_shapecast_superfast2(rec: &rerun::RecordingStream, points: &[[f32; 3]]) {
+    timed("train_shapecast_superfast2", || {
+        let col_first = [255u8, 230, 230];
+        let step = 5.0f32;
+        let total_dist = step * 30.0;
+
+        let _t = Timer::new("Train Shapecast");
+
+        let origin = Vector3::new(-0.9f32, -5.0, 1.0);
+        let direction = Vector3::new(0.0f32, 0.0, -1.0);
+        let box_size = Vector3::new(0.3f32, 5.0, 0.2);
+
+        let aabb_min = origin - box_size;
+        let aabb_max = origin + box_size + direction * total_dist;
+
+        let hit = points
+            .par_iter()
+            .filter(|p| {
+                aabb_min.x <= p[0]
+                    && p[0] <= aabb_max.x
+                    && aabb_min.y <= p[1]
+                    && p[1] <= aabb_max.y
+                    && aabb_min.z <= p[2]
+                    && p[2] <= aabb_max.z
+            })
+            .max_by(|a, b| a[2].total_cmp(&b[2]));
+
+        if let Some(point) = hit {
             // первый point по глубине
             log_points(rec, &[*point], col_first);
         }
@@ -218,6 +250,7 @@ fn main() -> Result<()> {
     train_shapecast(&rec, &points);
     train_shapecast_fast(&rec, &points);
     train_shapecast_superfast(&rec, &points);
+    train_shapecast_superfast2(&rec, &points);
 
     Ok(())
 }
