@@ -7,6 +7,7 @@ use anyhow::Result;
 use nalgebra::Vector3;
 use rand::Rng;
 
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use utils::{cache_entire_bag, perform_boxcast, perform_boxcast_fast, timed, CachedReplay, Timer};
 
 const DB3_PATH: &str = "dataset/roundT_doubleT/roundT_doubleT_0.db3";
@@ -50,21 +51,21 @@ fn train_shapecast(rec: &rerun::RecordingStream, points: &[[f32; 3]]) {
             log_box(rec, &hit.center, &y_box_size, col_first);
             log_points(rec, &hit.points, col_first);
 
-            let top_pos = origin + direction * hit.dist + bottom_hit_offset();
-            let mut left_pos = top_pos - Vector3::new(-0.25, 0.0, 0.12);
+            // let top_pos = origin + direction * hit.dist + bottom_hit_offset();
+            // let mut left_pos = top_pos - Vector3::new(-0.25, 0.0, 0.12);
 
-            direction = Vector3::new(-1.0, 0.0, 0.0);
-            let hit2 = match perform_boxcast(points, left_pos, direction, y_box_size, 15.0, 0.05) {
-                Some(h) => h,
-                None => continue,
-            };
+            // direction = Vector3::new(-1.0, 0.0, 0.0);
+            // let hit2 = match perform_boxcast(points, left_pos, direction, y_box_size, 15.0, 0.05) {
+            //     Some(h) => h,
+            //     None => continue,
+            // };
 
-            log_box(rec, &hit2.center, &x_box_size, col_first);
-            log_points(rec, &hit2.points, col_first);
+            // log_box(rec, &hit2.center, &x_box_size, col_first);
+            // log_points(rec, &hit2.points, col_first);
 
-            left_pos = left_pos + direction * hit2.dist + bottom_hit_offset();
-            left_pos += Vector3::new(0.0, -step, 0.0);
-            let _ = left_pos; // используется только для повторения структуры python-версии
+            // left_pos = left_pos + direction * hit2.dist + bottom_hit_offset();
+            // left_pos += Vector3::new(0.0, -step, 0.0);
+            // let _ = left_pos; // используется только для повторения структуры python-версии
         }
     });
 }
@@ -74,41 +75,67 @@ fn train_shapecast_fast(rec: &rerun::RecordingStream, points: &[[f32; 3]]) {
     timed("train_shapecast_fast", || {
         let col_first = [255u8, 230, 230];
         let step = 5.0f32;
+        let _t = Timer::new("Train Shapecast");
+
+        let origin = Vector3::new(-0.9f32, -5.0, 1.0);
+        let direction = Vector3::new(0.0f32, 0.0, -1.0);
+
+        let box_size = Vector3::new(0.3f32, 5.0, 0.2);
+
+        for i in 0..30 {
+            let current_origin = origin + Vector3::new(0.0, -(i as f32 + 1.0) * step, 0.0);
+
+            let hit = match perform_boxcast_fast(
+                points,
+                current_origin,
+                direction,
+                box_size,
+                5.0,
+                0.05,
+            ) {
+                Some(h) => h,
+                None => continue,
+            };
+
+            log_box(rec, &hit.center, &box_size, col_first);
+            log_points(rec, &hit.points, col_first);
+        }
+    });
+}
+
+fn train_shapecast_superfast(rec: &rerun::RecordingStream, points: &[[f32; 3]]) {
+    timed("train_shapecast_superfast", || {
+        let col_first = [255u8, 230, 230];
+        let step = 5.0f32;
+        let total_dist = step * 30.0;
 
         let _t = Timer::new("Train Shapecast");
 
-        let mut origin = Vector3::new(-0.9f32, -5.0, 1.0);
-        let mut direction = Vector3::new(0.0f32, 0.0, -1.0);
-        let y_box_size = Vector3::new(0.3f32, 5.0, 0.2);
-        let x_box_size = Vector3::new(0.2f32, 5.0, 0.3);
+        let origin = Vector3::new(-0.9f32, -5.0, 1.0);
+        let direction = Vector3::new(0.0f32, 0.0, -1.0);
+        let box_size = Vector3::new(0.3f32, 5.0, 0.2);
 
-        for _ in 0..30 {
-            origin += Vector3::new(0.0, -step, 0.0);
+        let aabb_min = origin - box_size;
+        let aabb_max = origin + box_size + direction * total_dist;
 
-            let hit = match perform_boxcast_fast(points, origin, direction, y_box_size, 5.0, 0.05) {
-                Some(h) => h,
-                None => return,
-            };
+        let mut candidates: Vec<[f32; 3]> = points
+            .par_iter()
+            .filter(|p| {
+                aabb_min.x <= p[0]
+                    && p[0] <= aabb_max.x
+                    && aabb_min.y <= p[1]
+                    && p[1] <= aabb_max.y
+                    && aabb_min.z <= p[2]
+                    && p[2] <= aabb_max.z
+            })
+            .copied()
+            .collect();
 
-            log_box(rec, &hit.center, &y_box_size, col_first);
-            log_points(rec, &hit.points, col_first);
+        candidates.sort_unstable_by(|a, b| b[2].total_cmp(&a[2]));
 
-            let top_pos = origin + direction * hit.dist + bottom_hit_offset();
-            let mut left_pos = top_pos - Vector3::new(-0.25, 0.0, 0.12);
-
-            direction = Vector3::new(-1.0, 0.0, 0.0);
-            let hit2 =
-                match perform_boxcast_fast(points, left_pos, direction, y_box_size, 15.0, 0.05) {
-                    Some(h) => h,
-                    None => continue,
-                };
-
-            log_box(rec, &hit2.center, &x_box_size, col_first);
-            log_points(rec, &hit2.points, col_first);
-
-            left_pos = left_pos + direction * hit2.dist + bottom_hit_offset();
-            left_pos += Vector3::new(0.0, -step, 0.0);
-            let _ = left_pos;
+        if let Some(point) = candidates.first() {
+            // первый point по глубине
+            log_points(rec, &[*point], col_first);
         }
     });
 }
@@ -190,6 +217,7 @@ fn main() -> Result<()> {
 
     train_shapecast(&rec, &points);
     train_shapecast_fast(&rec, &points);
+    train_shapecast_superfast(&rec, &points);
 
     Ok(())
 }
