@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt;
 
-use ros2_interfaces_humble::sensor_msgs::msg::{PointCloud2, PointField};
+use ros2_interfaces_jazzy_serde::sensor_msgs::msg::{PointCloud2, PointField};
 use crate::point_cloud::parser_to_rust::FromPointValue;
 use super::{Field, Header, Point, PointCloud, Time};
 
@@ -94,7 +94,7 @@ impl fmt::Display for ParseError {
             }
 
             Self::MissingField { field_name} => {
-                write!(f, "Missing field '{field}'")
+                write!(f, "Missing field '{field_name}'")
             }
 
             Self::UnexpectedDatatype {

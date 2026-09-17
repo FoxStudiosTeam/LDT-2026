@@ -1,4 +1,4 @@
-use ros2_interfaces_humble::sensor_msgs::msg::PointField;
+use ros2_interfaces_jazzy_serde::sensor_msgs::msg::PointField;
 use super::parser::{PointValue, ParseError};
 pub trait FromPointValue: Sized {
     fn from_point_value(value: PointValue) -> Result<Self, ParseError>;

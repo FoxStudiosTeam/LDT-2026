@@ -3,7 +3,7 @@ mod parser_to_rust;
 
 use std::error::Error;
 use parser::ParseError;
-use ros2_interfaces_humble::sensor_msgs::msg::PointCloud2;
+use ros2_interfaces_jazzy_serde::sensor_msgs::msg::PointCloud2;
 
 #[derive(Debug, Clone)]
 pub struct PointCloud {
