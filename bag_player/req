@@ -1,2 +1,6 @@
 numpy
 pyyaml
+textual>=7.2,<8
+numpy
+rerun-sdk
+rosbags
