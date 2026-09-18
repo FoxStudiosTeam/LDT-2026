@@ -20,9 +20,9 @@ pub struct PointLayout {
 
 /// МЕТОД ДЛЯ ОДНОКРАТНОЙ ИНИЦИАЛИЗАЦИИ И ВАЛИДАЦИИ
 /// Вызывается только один раз на самом первом кадре, чтобы закэшировать смещения полей.
-pub fn extract_and_validate_layout(message: &PointCloud2) -> Result<PointLayout, Error> {
-    validate_message(message)?;
-    create_layout(message)
+pub fn extract_and_validate_layout(cloud: &PointCloud2) -> Result<PointLayout, Error> {
+    validate_message(cloud)?;
+    create_layout(cloud)
 }
 
 fn validate_message(message: &PointCloud2) -> Result<(), Error> {
@@ -127,10 +127,17 @@ fn validate_field(
     Ok(())
 }
 
-pub fn parse_coords(message: &PointCloud2, cloud: &mut AppPointCloud, layout: &PointLayout) -> Result<(), Error> {
+pub fn parse_coords(message: &PointCloud2, cloud: Arc<RwLock<AppPointCloud>>, layout: &PointLayout) -> Result<(), Error> {
     let width = message.width as usize;
     let height = message.height as usize;
     let point_step = message.point_step as usize;
+
+    let mut cloud = cloud.write().map_err(|e| Error::AbstractError { msg: e.to_string() })?;
+
+    if width == 0 || height == 0 || message.data.is_empty() {
+        cloud.length == 0;
+        return Ok(());
+    }
 
     let total_points = width
         .checked_mul(height)

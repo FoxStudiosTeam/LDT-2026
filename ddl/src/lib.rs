@@ -29,7 +29,7 @@ impl CloudStats {
     }
 }
 
-pub type AppPointCloud = PointCloud<10_000_000>;
+pub type AppPointCloud = PointCloud<1_000_000>;
 
 pub struct PointCloud<const SIZE: usize> {
     pub x: Box<[f32; SIZE]>,
@@ -46,7 +46,7 @@ pub struct PointCloud<const SIZE: usize> {
 
 impl<const SIZE : usize> PointCloud<SIZE> {
     pub const CAP : usize = SIZE;
-    
+
     pub fn new() -> Self {
         Self { 
             x:  vec![0.0; SIZE].into_boxed_slice().try_into().unwrap(), 
@@ -117,8 +117,11 @@ impl<'a, const SIZE : usize> PointCloud<SIZE> {
     }
 
     pub fn to_rerun(&self) -> impl Iterator<Item = [f32; 3]> + '_ {
-        (0..self.length).map(move |i| {
-            [self.x[i], self.y[i], self.z[i]]
-        })
+        let xs = self.x[..self.length].iter();
+        let ys = self.y[..self.length].iter();
+        let zs = self.z[..self.length].iter();
+
+        xs.zip(ys).zip(zs).map(|((&x, &y), &z)| [x, y, z])
     }
+
 }

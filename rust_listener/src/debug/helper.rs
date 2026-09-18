@@ -3,7 +3,7 @@
 use anyhow::Result;
 use ddl::{AppPointCloud, CloudStats};
 use rerun::{Color, LineStrips3D, Points3D, Radius, RecordingStream};
-
+use ros2_data_extraction::error::Error;
 
 
 // ─── Пороги ───────────────────────────────────────────────────────────────────
@@ -11,7 +11,7 @@ const NEAR_RANGE_M: f32 = 1.0; // точки ближе этого — "опас
 const HIGH_Z_M: f32 = 2.0; // точки выше этого — "верхний слой"
 
 /// Логируем всё облако точек в rerun
-pub fn log_raw_cloud(rec: &RecordingStream, point_cloud : &AppPointCloud) -> Result<()> {
+pub fn log_raw_cloud(rec: &RecordingStream, point_cloud : &AppPointCloud) -> Result<(),Error> {
     if point_cloud.is_empty() {
         return Ok(());
     }
@@ -21,7 +21,7 @@ pub fn log_raw_cloud(rec: &RecordingStream, point_cloud : &AppPointCloud) -> Res
         &Points3D::new(point_cloud.to_rerun())
             .with_colors([Color::from_rgb(160, 185, 220)])
             .with_radii([Radius::new_ui_points(1.2)]),
-    )?;
+    ).map_err(|e| Error::AbstractError { msg: e.to_string() })?;
 
     Ok(())
 }
@@ -32,7 +32,6 @@ pub fn log_debug_overlays(
     point_cloud: &AppPointCloud,
     stats: &CloudStats,
 ) -> Result<()> {
-    print!("log entry");
     // 1. Центр масс
     log_centroid(rec, stats)?;
     // 2. Bounding box

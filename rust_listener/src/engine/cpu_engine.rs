@@ -1,18 +1,20 @@
-use crate::engine::types::{Engine, PointCloud};
+use ddl::AppPointCloud;
 
-pub struct CPUEngine<'a,const SIZE: usize> {
-    point_cloud : &'a PointCloud<SIZE>
+use crate::engine::types::{Engine};
+
+pub struct CPUEngine<'a> {
+    point_cloud : &'a AppPointCloud
 }
 
-impl<'a, const SIZE: usize> CPUEngine<'a,SIZE> {
-    pub fn new(point_cloud : &'a PointCloud<SIZE>) -> Self {
+impl<'a> CPUEngine<'a> {
+    pub fn new(point_cloud : &'a AppPointCloud) -> Self {
         Self {
             point_cloud : point_cloud
         }
     }
 }
 
-impl<'a, const SIZE: usize> Engine<SIZE> for CPUEngine<'a,SIZE> {
+impl<'a> Engine<> for CPUEngine<'a> {
     fn check(&self) -> Result<bool, anyhow::Error> {
 
 
