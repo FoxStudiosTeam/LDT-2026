@@ -1,5 +1,5 @@
 [workspace]
-members = ["cuda-pipeline", "rust_listener"]
+members = ["cuda-pipeline", "rust_listener", "data-extraction", "ddl"]
 resolver = "2"
 
 [workspace.package]
@@ -8,3 +8,5 @@ edition = "2024"
 
 [workspace.dependencies]
 cuda-pipeline = { path = "cuda-pipeline" }
+ros2_data_extraction = { path = "data-extraction" }
+ddl = {path = "ddl"}

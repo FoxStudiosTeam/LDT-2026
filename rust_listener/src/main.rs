@@ -3,29 +3,18 @@
 //! Запуск:
 //!   source /opt/ros/humble/setup.bash
 //!   cargo run --bin ros2_debug_viewer
-//!
-//! Требует работающего Rerun viewer на host.docker.internal:9876 (Windows host).
-//! Требует запущенного `ros2 bag play <path>` или реального ROS2 сенсора.
 
 mod debug_viz;
-mod engine;
 
 use anyhow::Result;
+use ddl::{AppPointCloud, CloudStats};
 use futures::StreamExt;
-use r2r::sensor_msgs::msg::PointCloud2;
-use r2r::{Context, QosProfile};
 use rerun::RecordingStreamBuilder;
-use std::time::Duration;
-use tokio::task;
-
-use crate::engine::types::{AppPointCloud, CloudStats};
 
 // ─── Конфигурация ─────────────────────────────────────────────────────────────
-
 const LIDAR_TOPIC: &str = "/sensing/lidar/hesai128/pointcloud";
-// Полный gRPC-URI viewer'а, как просит сам Rerun при старте
 const RERUN_ADDR: &str = "rerun+http://host.docker.internal:9876/proxy";
-const NODE_SPIN_INTERVAL_MS: u64 = 1;
+const CHANNEL_SIZE: usize = 2; // Двойная буферизация
 
 // ─── Точка входа ──────────────────────────────────────────────────────────────
 
@@ -33,39 +22,60 @@ const NODE_SPIN_INTERVAL_MS: u64 = 1;
 async fn main() -> Result<()> {
     print_banner();
 
-    // Инициализируем Rerun
+    // 1. Инициализируем Rerun
     let rec = init_rerun()?;
 
-    // Инициализируем ROS2 ноду
-    let ctx = Context::create()?;
-    let mut node = r2r::Node::create(ctx, "rust_listener", "")?;
-    let mut sub = node.subscribe::<PointCloud2>(LIDAR_TOPIC, QosProfile::default())?;
-
-    println!("[ROS2] Подписка на топик: {LIDAR_TOPIC}");
+    // 2. Инициализируем RT-подписку (Discovery + выделение памяти под буферы происходят внутри)
+    println!("[ROS2] Инициализация подписки и выделение RT-буферов...");
+    let mut point_cloud_stream  = ros2_data_extraction::init_sub(CHANNEL_SIZE).await?;
+    
+    println!("[ROS2] Успешно подписались на топик: {LIDAR_TOPIC}");
     println!("[INFO] Ожидание сообщений...\n");
 
-    // r2r::Node реализует Send — можно перенести в отдельный поток
-    let _spinner = task::spawn(async move {
-        loop {
-            node.spin_once(Duration::ZERO);
-            tokio::time::sleep(Duration::from_millis(NODE_SPIN_INTERVAL_MS)).await;
-        }
-    });
-
-    // Основной цикл обработки сообщений
     let mut frame_id: u64 = 0;
-    let mut point_cloud: Box<AppPointCloud> = Box::new(AppPointCloud::new());
 
-    while let Some(msg) = sub.next().await {
+    // 3. Главный Zero-Allocation RT цикл обработки
+    // Нам больше не нужны r2r, Node, spin_once и сырые сообщения в main!
+    while let Some(result) = point_cloud_stream.next().await {
         frame_id += 1;
 
-        let timestamp_ns: i64 =
-            msg.header.stamp.sec as i64 * 1_000_000_000 + msg.header.stamp.nanosec as i64;
+        // Достаем готовое облако точек (если была ошибка в ROS2/парсинге, логируем её)
+        let cloud : AppPointCloud = match result {
+            Ok(c ) => c,
+            Err(e) => {
+                eprintln!("[FRAME {:4}] Ошибка стрима/парсинга: {e}", frame_id);
+                continue;
+            }
+        };
 
-        match process_frame(&rec, &msg, frame_id, timestamp_ns, &mut point_cloud) {
-            Ok(()) => {}
-            Err(e) => eprintln!("[FRAME {:4}] Ошибка обработки: {e}", frame_id),
+        // Защита от пустых кадров лидара
+        if cloud.length == 0 {
+            eprintln!("[FRAME {:4}] Пустое облако точек, пропускаем.", frame_id);
+            point_cloud_stream.reuse_buffer(cloud).await;
+            continue;
         }
+
+        let timestamp_ns = cloud.timestamp as i64;
+
+        // Считаем статы по SoA массивам (отрабатывает моментально через SIMD)
+        let stats = cloud.compute_stats();
+
+        // Выводим информацию в консоль
+        print_frame_info(frame_id, timestamp_ns, &stats);
+
+        // Выставляем временны́е метки в Rerun таймлайны
+        rec.set_time(
+            "ros_time",
+            rerun::TimeCell::from_duration_nanos(timestamp_ns),
+        );
+        rec.set_time_sequence("frame", frame_id as i64);
+
+        // Логируем данные в Rerun Viewer
+        debug_viz::log_raw_cloud(&rec, &cloud)?;
+        debug_viz::log_debug_overlays(&rec, &cloud, &stats)?;
+
+        // КРИТИЧЕСКИ ВАЖНО: Возвращаем буфер обратно в пул для следующего кадра!
+        point_cloud_stream.reuse_buffer(cloud).await;
     }
 
     println!("[INFO] Поток сообщений завершён.");
@@ -75,65 +85,26 @@ async fn main() -> Result<()> {
 // ─── Инициализация Rerun ──────────────────────────────────────────────────────
 
 fn init_rerun() -> Result<rerun::RecordingStream> {
-    println!("[Rerun] Подключение по TCP/WebSocket к {RERUN_ADDR}...");
+    println!("[Rerun] Подключение к {RERUN_ADDR}...");
 
-    // Используем .connect(), который работает через стандартный TCP сокет без лимитов gRPC
     let rec = RecordingStreamBuilder::new("ros2_lidar_viewer")
         .connect_grpc_opts(RERUN_ADDR)
         .unwrap();
 
-    println!("[Rerun] Подключено по TCP-каналу!\n");
+    println!("[Rerun] Подключено!\n");
     Ok(rec)
-}
-
-// ─── Обработка одного фрейма ──────────────────────────────────────────────────
-// Это место нужно сделать RT, со строгим контрактом и кастрацию за аллокацию в рантайме, на вход и выход поставить двунаправленый буффер.
-fn process_frame(
-    rec: &rerun::RecordingStream,
-    msg: &PointCloud2,
-    frame_id: u64,
-    timestamp_ns: i64,
-    point_cloud: &mut AppPointCloud
-) -> Result<()> {
-    // Парсим облако точек
-    point_cloud.parse_ros2_msg(msg);
-    if point_cloud.is_empty() {
-        eprintln!("[FRAME {:4}] Пустое облако точек, пропускаем.", frame_id);
-        return Ok(());
-    }
-
-    println!("[FRAME SIZE] {}", point_cloud.length);
-
-    let stats = point_cloud.compute_stats();
-
-    // Выводим в stdout
-    print_frame_info(frame_id, timestamp_ns, &stats);
-
-    // Выставляем временну́ю метку в Rerun (два таймлайна: ros_time и frame)
-    rec.set_time(
-        "ros_time",
-        rerun::TimeCell::from_duration_nanos(timestamp_ns),
-    );
-    rec.set_time_sequence("frame", frame_id as i64);
-
-    // Логируем исходное облако
-    debug_viz::log_raw_cloud(rec, &point_cloud)?;
-
-    // Логируем отладочные оверлеи
-    debug_viz::log_debug_overlays(rec, &point_cloud, &stats)?;
-
-    Ok(())
 }
 
 // ─── Вывод в stdout ───────────────────────────────────────────────────────────
 
 fn print_frame_info(frame_id: u64, timestamp_ns: i64, stats: &CloudStats) {
-
     println!(
         "[FRAME {:4}] pts={:6} | t={} ns | \
          bbox x=[{:6.1},{:6.1}] y=[{:6.1},{:6.1}] z=[{:5.1},{:5.1}] | \
          centroid=({:.2},{:.2},{:.2})",
-        frame_id, stats.n_points, timestamp_ns, stats.min_x, stats.max_x, stats.min_y, stats.max_y, stats.min_z, stats.max_z, stats.centroid_x, stats.centroid_y, stats.centroid_z,
+        frame_id, stats.n_points, timestamp_ns, 
+        stats.min_x, stats.max_x, stats.min_y, stats.max_y, stats.min_z, stats.max_z, 
+        stats.centroid_x, stats.centroid_y, stats.centroid_z,
     );
 }
 

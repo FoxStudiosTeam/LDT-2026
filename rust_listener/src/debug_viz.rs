@@ -1,9 +1,10 @@
 //! debug_viz.rs — генерация отладочных примитивов для Rerun
 
 use anyhow::Result;
+use ddl::{AppPointCloud, CloudStats};
 use rerun::{Color, LineStrips3D, Points3D, Radius, RecordingStream};
 
-use crate::{engine::types::{AppPointCloud, CloudStats}};
+
 
 // ─── Пороги ───────────────────────────────────────────────────────────────────
 const NEAR_RANGE_M: f32 = 1.0; // точки ближе этого — "опасные"

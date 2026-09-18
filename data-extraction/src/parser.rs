@@ -1,11 +1,10 @@
 use crate::error::Error;
 
+use ddl::AppPointCloud;
 use ros2_interfaces_jazzy_serde::sensor_msgs::msg::{
     PointCloud2,
     PointField,
 };
-
-use super::{Header, Point, PointCloud, Time};
 
 struct PointLayout {
     x_offset: usize,
@@ -16,26 +15,14 @@ struct PointLayout {
     timestamp_offset: Option<usize>,
 }
 
-pub fn parse_pointcloud(message: PointCloud2) -> Result<PointCloud, Error> {
-    validate_message(&message)?;
+pub fn parse_pointcloud(message: &PointCloud2, cloud: &mut AppPointCloud) -> Result<(), Error> {
+    validate_message(message)?;
 
-    let layout = create_layout(&message)?;
+    let layout = create_layout(message)?;
 
-    let points = parse_points(&message, &layout)?;
+    parse_coords(message, cloud, &layout)?;
 
-    Ok(PointCloud {
-        header: Header {
-            stamp: Time {
-                sec: message.header.stamp.sec,
-                nanosec: message.header.stamp.nanosec,
-            },
-            frame_id: message.header.frame_id,
-        },
-        width: message.width,
-        height: message.height,
-        points,
-        is_dense: message.is_dense,
-    })
+    Ok(())
 }
 
 fn validate_message(message: &PointCloud2) -> Result<(), Error> {
@@ -140,84 +127,50 @@ fn validate_field(
     Ok(())
 }
 
-fn parse_points(
-    message: &PointCloud2,
-    layout: &PointLayout,
-) -> Result<Box<[Point]>, Error> {
+fn parse_coords(message: &PointCloud2, cloud: &mut AppPointCloud, layout: &PointLayout) -> Result<(), Error> {
     let width = message.width as usize;
     let height = message.height as usize;
     let point_step = message.point_step as usize;
-    let row_step = message.row_step as usize;
-
-    let point_count = width
+    
+    let total_points = width
         .checked_mul(height)
         .ok_or(Error::SizeOverflow)?;
 
-    let mut points = vec![Point::default(); point_count]
-        .into_boxed_slice();
-
-    let data = &message.data;
-    let is_bigendian = message.is_bigendian;
-
-    let mut index = 0;
-
-    for row in 0..height {
-        let row_start = row * row_step;
-
-        for column in 0..width {
-            let point_start = row_start + column * point_step;
-
-            points[index] = Point {
-                x: read_f32(
-                    data,
-                    is_bigendian,
-                    point_start + layout.x_offset,
-                )?,
-
-                y: read_f32(
-                    data,
-                    is_bigendian,
-                    point_start + layout.y_offset,
-                )?,
-
-                z: read_f32(
-                    data,
-                    is_bigendian,
-                    point_start + layout.z_offset,
-                )?,
-
-                intensity: read_f32(
-                    data,
-                    is_bigendian,
-                    point_start + layout.intensity_offset,
-                )?,
-
-                ring: layout.ring_offset
-                    .map(|offset| {
-                        read_u16(
-                            data,
-                            is_bigendian,
-                            point_start + offset,
-                        )
-                    })
-                    .transpose()?,
-
-                timestamp: layout.timestamp_offset
-                    .map(|offset| {
-                        read_f64(
-                            data,
-                            is_bigendian,
-                            point_start + offset,
-                        )
-                    })
-                    .transpose()?,
-            };
-
-            index += 1;
-        }
+    if total_points > AppPointCloud::CAP {
+        return Err(Error::SizeOverflow);
     }
 
-    Ok(points)
+    let is_bigendian = message.is_bigendian;
+    let data = &message.data;
+
+    let point_chunks = data.chunks_exact(point_step).take(total_points);
+
+    for (index, point_buf) in point_chunks.enumerate() {
+        let x = read_f32(point_buf, is_bigendian, layout.x_offset)?;
+        let y = read_f32(point_buf, is_bigendian, layout.y_offset)?;
+        let z = read_f32(point_buf, is_bigendian, layout.z_offset)?;
+        let intensity = read_f32(point_buf, is_bigendian, layout.intensity_offset)?;
+
+        let ring = layout.ring_offset
+            .map(|offset| read_u16(point_buf, is_bigendian, offset))
+            .transpose()?;
+
+        let timestamp = layout.timestamp_offset
+            .map(|offset| read_f64(point_buf, is_bigendian, offset))
+            .transpose()?;
+        
+        cloud.x[index] = x;
+        cloud.y[index] = y;
+        cloud.z[index] = z;
+        cloud.intensity[index] = intensity;
+
+        if let Some(r) = ring { cloud.ring = r; }
+        if let Some(t) = timestamp { cloud.timestamp = t; }
+    }
+
+    cloud.length = total_points;
+
+    Ok(())
 }
 
 fn read_f32(
@@ -297,7 +250,7 @@ fn read_f64(
 
 fn find_field<'a>(
     message: &'a PointCloud2,
-    name: &str,
+    name: &'a str,
 ) -> Option<&'a PointField> {
     message.fields.iter().find(|field| field.name == name)
 }
