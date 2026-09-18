@@ -1,3 +1,5 @@
+use std::sync::{Arc, RwLock};
+
 use crate::error::Error;
 
 use ddl::AppPointCloud;
@@ -6,23 +8,21 @@ use ros2_interfaces_jazzy_serde::sensor_msgs::msg::{
     PointField,
 };
 
-struct PointLayout {
-    x_offset: usize,
-    y_offset: usize,
-    z_offset: usize,
-    intensity_offset: usize,
-    ring_offset: Option<usize>,
-    timestamp_offset: Option<usize>,
+#[derive(Debug, Clone, Copy)]
+pub struct PointLayout {
+    pub x_offset: usize,
+    pub y_offset: usize,
+    pub z_offset: usize,
+    pub intensity_offset: usize,
+    pub ring_offset: Option<usize>,
+    pub timestamp_offset: Option<usize>,
 }
 
-pub fn parse_pointcloud(message: &PointCloud2, cloud: &mut AppPointCloud) -> Result<(), Error> {
+/// МЕТОД ДЛЯ ОДНОКРАТНОЙ ИНИЦИАЛИЗАЦИИ И ВАЛИДАЦИИ
+/// Вызывается только один раз на самом первом кадре, чтобы закэшировать смещения полей.
+pub fn extract_and_validate_layout(message: &PointCloud2) -> Result<PointLayout, Error> {
     validate_message(message)?;
-
-    let layout = create_layout(message)?;
-
-    parse_coords(message, cloud, &layout)?;
-
-    Ok(())
+    create_layout(message)
 }
 
 fn validate_message(message: &PointCloud2) -> Result<(), Error> {
@@ -127,11 +127,11 @@ fn validate_field(
     Ok(())
 }
 
-fn parse_coords(message: &PointCloud2, cloud: &mut AppPointCloud, layout: &PointLayout) -> Result<(), Error> {
+pub fn parse_coords(message: &PointCloud2, cloud: &mut AppPointCloud, layout: &PointLayout) -> Result<(), Error> {
     let width = message.width as usize;
     let height = message.height as usize;
     let point_step = message.point_step as usize;
-    
+
     let total_points = width
         .checked_mul(height)
         .ok_or(Error::SizeOverflow)?;
@@ -144,108 +144,77 @@ fn parse_coords(message: &PointCloud2, cloud: &mut AppPointCloud, layout: &Point
     let data = &message.data;
 
     let point_chunks = data.chunks_exact(point_step).take(total_points);
+    let mut valid_count = 0;
 
-    for (index, point_buf) in point_chunks.enumerate() {
-        let x = read_f32(point_buf, is_bigendian, layout.x_offset)?;
-        let y = read_f32(point_buf, is_bigendian, layout.y_offset)?;
-        let z = read_f32(point_buf, is_bigendian, layout.z_offset)?;
-        let intensity = read_f32(point_buf, is_bigendian, layout.intensity_offset)?;
+    let x_off = layout.x_offset;
+    let y_off = layout.y_offset;
+    let z_off = layout.z_offset;
+    let i_off = layout.intensity_offset;
 
-        let ring = layout.ring_offset
-            .map(|offset| read_u16(point_buf, is_bigendian, offset))
-            .transpose()?;
+    for point_buf in point_chunks {
+        if point_buf.len() < point_step { 
+            break; 
+        }
 
-        let timestamp = layout.timestamp_offset
-            .map(|offset| read_f64(point_buf, is_bigendian, offset))
-            .transpose()?;
-        
-        cloud.x[index] = x;
-        cloud.y[index] = y;
-        cloud.z[index] = z;
-        cloud.intensity[index] = intensity;
+        // Высокопроизводительное чтение памяти по сырым указателям через регистры CPU
+        let (x, y, z, intensity) = unsafe {
+            let px = *(point_buf.as_ptr().add(x_off) as *const u32);
+            let py = *(point_buf.as_ptr().add(y_off) as *const u32);
+            let pz = *(point_buf.as_ptr().add(z_off) as *const u32);
+            let pi = *(point_buf.as_ptr().add(i_off) as *const u32);
 
-        if let Some(r) = ring { cloud.ring = r; }
-        if let Some(t) = timestamp { cloud.timestamp = t; }
+            if is_bigendian {
+                (
+                    f32::from_bits(u32::from_be(px)),
+                    f32::from_bits(u32::from_be(py)),
+                    f32::from_bits(u32::from_be(pz)),
+                    f32::from_bits(u32::from_be(pi)),
+                )
+            } else {
+                (
+                    f32::from_bits(u32::from_le(px)),
+                    f32::from_bits(u32::from_le(py)),
+                    f32::from_bits(u32::from_le(pz)),
+                    f32::from_bits(u32::from_le(pi)),
+                )
+            }
+        };
+
+        if x.is_finite() && y.is_finite() && z.is_finite() {
+            cloud.x[valid_count] = x;
+            cloud.y[valid_count] = y;
+            cloud.z[valid_count] = z;
+            cloud.intensity[valid_count] = intensity;
+            
+            valid_count += 1;
+        }
+
+        if let Some(offset) = layout.ring_offset {
+            if let Some(bytes) = point_buf.get(offset..offset + 2) {
+                let r = if is_bigendian {
+                    u16::from_be_bytes(bytes.try_into().unwrap())
+                } else {
+                    u16::from_le_bytes(bytes.try_into().unwrap())
+                };
+                cloud.ring = r;
+            }
+        }
+
+        if let Some(offset) = layout.timestamp_offset {
+            if let Some(bytes) = point_buf.get(offset..offset + 8) {
+                let t = if is_bigendian {
+                    f64::from_be_bytes(bytes.try_into().unwrap())
+                } else {
+                    f64::from_le_bytes(bytes.try_into().unwrap())
+                };
+                cloud.timestamp = t;
+            }
+        }
     }
 
-    cloud.length = total_points;
+    cloud.length = valid_count;
 
     Ok(())
-}
-
-fn read_f32(
-    data: &[u8],
-    is_bigendian: bool,
-    offset: usize,
-) -> Result<f32, Error> {
-    let bytes = data
-        .get(offset..offset + 4)
-        .ok_or(Error::DataOutOfBounds {
-            field: "f32".to_string(),
-            offset,
-            size: 4,
-            data_len: data.len(),
-        })?;
-
-    let bytes: [u8; 4] = bytes
-        .try_into()
-        .expect("slice length was checked");
-
-    Ok(if is_bigendian {
-        f32::from_be_bytes(bytes)
-    } else {
-        f32::from_le_bytes(bytes)
-    })
-}
-
-fn read_u16(
-    data: &[u8],
-    is_bigendian: bool,
-    offset: usize,
-) -> Result<u16, Error> {
-    let bytes = data
-        .get(offset..offset + 2)
-        .ok_or(Error::DataOutOfBounds {
-            field: "u16".to_string(),
-            offset,
-            size: 2,
-            data_len: data.len(),
-        })?;
-
-    let bytes: [u8; 2] = bytes
-        .try_into()
-        .expect("slice length was checked");
-
-    Ok(if is_bigendian {
-        u16::from_be_bytes(bytes)
-    } else {
-        u16::from_le_bytes(bytes)
-    })
-}
-
-fn read_f64(
-    data: &[u8],
-    is_bigendian: bool,
-    offset: usize,
-) -> Result<f64, Error> {
-    let bytes = data
-        .get(offset..offset + 8)
-        .ok_or(Error::DataOutOfBounds {
-            field: "f64".to_string(),
-            offset,
-            size: 8,
-            data_len: data.len(),
-        })?;
-
-    let bytes: [u8; 8] = bytes
-        .try_into()
-        .expect("slice length was checked");
-
-    Ok(if is_bigendian {
-        f64::from_be_bytes(bytes)
-    } else {
-        f64::from_le_bytes(bytes)
-    })
 }
 
 fn find_field<'a>(

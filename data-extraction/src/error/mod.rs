@@ -41,6 +41,8 @@ pub enum Error {
     },
     DiscoveryChannelClosed,
     InvalidChannelSize,
+    LockError,
+    AbstractError{msg : String},
 }
 
 impl fmt::Display for Error {
@@ -138,6 +140,15 @@ impl fmt::Display for Error {
             
             Self::InvalidChannelSize => {
                 write!(f, "Invalid channel size")
+            }
+
+            Self::LockError => {
+                write!(f, "Lock error")
+            },
+            Self::AbstractError{
+                msg 
+            } => {
+                write!(f, "AbstractError: {msg}")
             }
         }
     }

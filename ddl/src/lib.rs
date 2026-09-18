@@ -29,7 +29,7 @@ impl CloudStats {
     }
 }
 
-pub type AppPointCloud = PointCloud<2_000_000>;
+pub type AppPointCloud = PointCloud<10_000_000>;
 
 pub struct PointCloud<const SIZE: usize> {
     pub x: Box<[f32; SIZE]>,
@@ -49,10 +49,10 @@ impl<const SIZE : usize> PointCloud<SIZE> {
     
     pub fn new() -> Self {
         Self { 
-            x: Box::new([0.0; SIZE]), 
-            y: Box::new([0.0;SIZE]),
-            z: Box::new([0.0;SIZE]),
-            intensity: Box::new([0.0;SIZE]),
+            x:  vec![0.0; SIZE].into_boxed_slice().try_into().unwrap(), 
+            y:  vec![0.0; SIZE].into_boxed_slice().try_into().unwrap(),
+            z:  vec![0.0; SIZE].into_boxed_slice().try_into().unwrap(),
+            intensity:  vec![0.0; SIZE].into_boxed_slice().try_into().unwrap(),
             length: 0,
             width: 0,
             height: 0,
