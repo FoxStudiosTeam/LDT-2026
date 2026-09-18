@@ -28,6 +28,7 @@ async fn main() -> Result<(), Error> {
 
     debug::std::print_banner();
     println!("[PRE INIT] подготовка стримов");
+
     let rec = init_rerun().map_err(|_| Error::AbstractError { msg: "Rerun Init отпал".to_string() })?;
 
     let point_cloud_stream = ros2_data_extraction::init_sub(CHANNEL_SIZE,Arc::clone(&cloud)).await?;

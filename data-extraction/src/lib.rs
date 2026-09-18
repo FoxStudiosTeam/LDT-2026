@@ -20,12 +20,12 @@ pub struct PointCloudStream {
 }
 
 impl PointCloudStream {
-    pub async fn next(&mut self) -> Result<u64, Error> {
+    pub async fn next(&mut self) -> Result<Option<u64>, Error> {
         self.frame_num += 1;
         let (point_cloud, msg) = self.subscription.async_take().await.map_err(|e| Error::AbstractError { msg: e.to_string() })?;
         let layout = extract_and_validate_layout(&point_cloud)?;
         parse_coords(&point_cloud, Arc::clone(&self.cached_cloud), &layout)?;
-        Ok(self.frame_num)
+        Ok(Some(self.frame_num))
     }
 }
 

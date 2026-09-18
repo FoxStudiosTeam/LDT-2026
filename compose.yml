@@ -23,7 +23,7 @@ services:
     command: >
       bash -c "
         echo '► [DATASET] Поехали!' &&
-        ros2 bag play /app/dataset/roundT_doubleT --loop --read-ahead-queue-size 10
+        ros2 bag play /app/dataset/doubleT_obstacle --loop --read-ahead-queue-size 10
       "
 
   # 2. Твое Rust-приложение

@@ -16,9 +16,11 @@ pub fn log_raw_cloud(rec: &RecordingStream, point_cloud : &AppPointCloud) -> Res
         return Ok(());
     }
 
+    let points = point_cloud.to_rerun();
+
     rec.log(
         "lidar/raw",
-        &Points3D::new(point_cloud.to_rerun())
+        &Points3D::new(points)
             .with_colors([Color::from_rgb(160, 185, 220)])
             .with_radii([Radius::new_ui_points(1.2)]),
     ).map_err(|e| Error::AbstractError { msg: e.to_string() })?;
@@ -35,11 +37,11 @@ pub fn log_debug_overlays(
     // 1. Центр масс
     log_centroid(rec, stats)?;
     // 2. Bounding box
-    log_bbox(rec, stats)?;
+    //log_bbox(rec, stats)?;
     // 3. Близкие точки (< NEAR_RANGE_M)
-    log_near_points(rec, point_cloud)?;
+    //log_near_points(rec, point_cloud)?;
     // 4. Высокие точки (Z > HIGH_Z_M)
-    log_high_points(rec, point_cloud)?;
+    //log_high_points(rec, point_cloud)?;
     Ok(())
 }
 

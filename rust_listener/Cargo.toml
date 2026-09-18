@@ -8,7 +8,7 @@ name = "ros2_debug_viewer"
 path = "src/main.rs"
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+tokio = { version = "1", features = ["full"] }
 futures = "0.3"
 anyhow = "1"
 rerun = "0.37.2"

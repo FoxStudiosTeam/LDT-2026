@@ -10,6 +10,8 @@ pub struct CloudStats {
     pub max_x: f32,
     pub max_y: f32,
     pub max_z: f32,
+    pub width: u32,
+    pub height: u32,
 }
 
 impl CloudStats {
@@ -25,11 +27,14 @@ impl CloudStats {
             max_y: f32::NEG_INFINITY,
             max_z: f32::NEG_INFINITY,
             n_points: 0,
+            width: 0,
+            height: 0,
         }
     }
 }
 
-pub type AppPointCloud = PointCloud<1_000_000>;
+// 307_200
+pub type AppPointCloud = PointCloud<2_000_000>;
 
 pub struct PointCloud<const SIZE: usize> {
     pub x: Box<[f32; SIZE]>,
@@ -112,6 +117,8 @@ impl<'a, const SIZE : usize> PointCloud<SIZE> {
         cloud_stats.centroid_x = sum_x / count;
         cloud_stats.centroid_y = sum_y / count;
         cloud_stats.centroid_z = sum_z / count;
+        cloud_stats.width = self.width;
+        cloud_stats.height = self.height;
 
         cloud_stats
     }

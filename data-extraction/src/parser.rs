@@ -30,9 +30,11 @@ fn validate_message(message: &PointCloud2) -> Result<(), Error> {
     let row_step = message.row_step as usize;
     let width = message.width as usize;
 
+    let d = width * point_step;
+
     let minimum_row_step = width
         .checked_mul(point_step)
-        .ok_or(Error::SizeOverflow)?;
+        .ok_or( Error::AbstractError { msg: format!("current size: {d}").to_string() })?;
 
     if row_step < minimum_row_step {
         return Err(Error::InvalidRowStep {
@@ -47,11 +49,11 @@ fn validate_message(message: &PointCloud2) -> Result<(), Error> {
 
         let field_size = size
             .checked_mul(field.count as usize)
-            .ok_or(Error::SizeOverflow)?;
+            .ok_or(Error::AbstractError { msg: format!("current size: {d}").to_string() })?;
 
         let required_end = (field.offset as usize)
             .checked_add(field_size)
-            .ok_or(Error::SizeOverflow)?;
+            .ok_or(Error::AbstractError { msg: format!("current size: {d}").to_string() })?;
 
         if required_end > point_step {
             return Err(Error::InvalidPointStep {
@@ -63,6 +65,13 @@ fn validate_message(message: &PointCloud2) -> Result<(), Error> {
     }
 
     Ok(())
+}
+
+fn find_field<'a>(
+    message: &'a PointCloud2,
+    name: &'a str,
+) -> Option<&'a PointField> {
+    message.fields.iter().find(|field| field.name == name)
 }
 
 fn create_layout(message: &PointCloud2) -> Result<PointLayout, Error> {
@@ -83,25 +92,13 @@ fn create_layout(message: &PointCloud2) -> Result<PointLayout, Error> {
     validate_field(z, PointField::FLOAT32)?;
     validate_field(intensity, PointField::FLOAT32)?;
 
-    let ring = find_field(message, "ring");
-
-    if let Some(field) = ring {
-        validate_field(field, PointField::UINT16)?;
-    }
-
-    let timestamp = find_field(message, "timestamp");
-
-    if let Some(field) = timestamp {
-        validate_field(field, PointField::FLOAT64)?;
-    }
-
     Ok(PointLayout {
         x_offset: x.offset as usize,
         y_offset: y.offset as usize,
         z_offset: z.offset as usize,
         intensity_offset: intensity.offset as usize,
-        ring_offset: ring.map(|field| field.offset as usize),
-        timestamp_offset: timestamp.map(|field| field.offset as usize),
+        ring_offset: None,
+        timestamp_offset: None,
     })
 }
 
@@ -135,16 +132,17 @@ pub fn parse_coords(message: &PointCloud2, cloud: Arc<RwLock<AppPointCloud>>, la
     let mut cloud = cloud.write().map_err(|e| Error::AbstractError { msg: e.to_string() })?;
 
     if width == 0 || height == 0 || message.data.is_empty() {
-        cloud.length == 0;
+        cloud.length = 0;
         return Ok(());
     }
+    let d = width * height;
 
     let total_points = width
         .checked_mul(height)
-        .ok_or(Error::SizeOverflow)?;
+        .ok_or(Error::AbstractError { msg: format!("current size: {d}").to_string() })?;
 
     if total_points > AppPointCloud::CAP {
-        return Err(Error::SizeOverflow);
+        return Err(Error::AbstractError { msg: format!("current size: {d}").to_string() });
     }
 
     let is_bigendian = message.is_bigendian;
@@ -196,27 +194,30 @@ pub fn parse_coords(message: &PointCloud2, cloud: Arc<RwLock<AppPointCloud>>, la
             valid_count += 1;
         }
 
-        if let Some(offset) = layout.ring_offset {
-            if let Some(bytes) = point_buf.get(offset..offset + 2) {
-                let r = if is_bigendian {
-                    u16::from_be_bytes(bytes.try_into().unwrap())
-                } else {
-                    u16::from_le_bytes(bytes.try_into().unwrap())
-                };
-                cloud.ring = r;
-            }
-        }
+        cloud.width = message.width;
+        cloud.height = message.height;
 
-        if let Some(offset) = layout.timestamp_offset {
-            if let Some(bytes) = point_buf.get(offset..offset + 8) {
-                let t = if is_bigendian {
-                    f64::from_be_bytes(bytes.try_into().unwrap())
-                } else {
-                    f64::from_le_bytes(bytes.try_into().unwrap())
-                };
-                cloud.timestamp = t;
-            }
-        }
+        // if let Some(offset) = layout.ring_offset {
+        //     if let Some(bytes) = point_buf.get(offset..offset + 2) {
+        //         let r = if is_bigendian {
+        //             u16::from_be_bytes(bytes.try_into().unwrap())
+        //         } else {
+        //             u16::from_le_bytes(bytes.try_into().unwrap())
+        //         };
+        //         cloud.ring = r;
+        //     }
+        // }
+
+        // if let Some(offset) = layout.timestamp_offset {
+        //     if let Some(bytes) = point_buf.get(offset..offset + 8) {
+        //         let t = if is_bigendian {
+        //             f64::from_be_bytes(bytes.try_into().unwrap())
+        //         } else {
+        //             f64::from_le_bytes(bytes.try_into().unwrap())
+        //         };
+        //         cloud.timestamp = t;
+        //     }
+        // }
     }
 
     cloud.length = valid_count;
@@ -224,12 +225,7 @@ pub fn parse_coords(message: &PointCloud2, cloud: Arc<RwLock<AppPointCloud>>, la
     Ok(())
 }
 
-fn find_field<'a>(
-    message: &'a PointCloud2,
-    name: &'a str,
-) -> Option<&'a PointField> {
-    message.fields.iter().find(|field| field.name == name)
-}
+
 
 fn datatype_size(datatype: u8) -> Result<usize, Error> {
     match datatype {
