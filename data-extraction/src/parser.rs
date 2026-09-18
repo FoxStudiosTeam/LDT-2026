@@ -196,6 +196,7 @@ pub fn parse_coords(message: &PointCloud2, cloud: Arc<RwLock<AppPointCloud>>, la
 
         cloud.width = message.width;
         cloud.height = message.height;
+        cloud.timestamp = message.header.stamp.sec as i64 * 1000000000 + message.header.stamp.nanosec as i64;
 
         // if let Some(offset) = layout.ring_offset {
         //     if let Some(bytes) = point_buf.get(offset..offset + 2) {

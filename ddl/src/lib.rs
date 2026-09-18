@@ -46,7 +46,7 @@ pub struct PointCloud<const SIZE: usize> {
     pub height : u32,
     pub width : u32,
     pub is_dense: bool,
-    pub timestamp: f64,
+    pub timestamp: i64,
 }
 
 impl<const SIZE : usize> PointCloud<SIZE> {
@@ -62,7 +62,7 @@ impl<const SIZE : usize> PointCloud<SIZE> {
             width: 0,
             height: 0,
             ring: 0,
-            timestamp: 0.0,
+            timestamp: 0,
             is_dense: false,
         }
     }

@@ -48,7 +48,7 @@ pub async fn entry(mut point_cloud_stream : PointCloudStream, recording_stream :
             tokio::task::spawn_blocking(move || {
                 let point_cloud = point_cloud.read().map_err(|e| Error::AbstractError { msg: e.to_string() }).unwrap();
 
-                let timestamp_ns = point_cloud.timestamp as i64;
+                let timestamp_ns = point_cloud.timestamp;
                 let stats = point_cloud.compute_stats();
                 debug::std::print_frame_info(frame_id, timestamp_ns, &stats);
                 recording_stream.set_time("ros_time", rerun::TimeCell::from_duration_nanos(timestamp_ns));
