@@ -43,3 +43,6 @@ Makefile
 .idea/
 *.sublime-project
 *.sublime-workspace
+
+# --- ПИТОНЧИК ---
+venv
