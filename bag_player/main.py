@@ -60,9 +60,9 @@ class BagPlayer(Node):
         self.rate = rate
 
         qos = qos_override or QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
+            reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
-            depth=5,
+            depth=10,
             durability=DurabilityPolicy.VOLATILE,
         )
 

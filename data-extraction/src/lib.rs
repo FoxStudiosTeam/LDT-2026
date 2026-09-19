@@ -24,8 +24,6 @@ pub struct PointCloudStream {
 impl PointCloudStream {
     pub async fn next(&mut self) -> Result<Option<u64>, AppError> {
         self.frame_num += 1;
-
-        tokio::time::sleep_until(tokio::time::Instant::now() + std::time::Duration::from_millis(100)).await;
         let started = std::time::Instant::now();
         info!(
             "[FRAME {}] кадр ожидается",

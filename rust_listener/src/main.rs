@@ -33,7 +33,7 @@ kaiv_utils::env_config! {
 async fn main() -> Result<(), AppError> {
     let filter = EnvFilter::try_from_default_env()
         //  формат: package=level "," - разделитель
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+        .unwrap_or_else(|_| EnvFilter::new("info,rustdds=error,rust_listener=info"));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
     Env::fetch();
