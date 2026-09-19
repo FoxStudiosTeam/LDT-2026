@@ -1,6 +1,7 @@
 // 1. Объявляем интерфейс к Си-библиотеке (CUDA)
 unsafe extern "C" {
     unsafe fn run_vector_add(a: *const f32, b: *const f32, c: *mut f32, n: i32);
+    unsafe fn pin_gpu_addr(size : usize) -> *mut f32;
 }
 
 // 2. Делаем безопасную обертку для Rust
@@ -16,6 +17,20 @@ pub fn vector_add(a: &[f32], b: &[f32]) -> Vec<f32> {
     }
 
     c
+}
+
+pub fn pin_gpu(size : usize) -> [*mut f32;3] {
+    unsafe {
+        let pinned_addr_frame_0 = pin_gpu_addr(size);
+        let pinned_addr_frame_1 = pin_gpu_addr(size);
+        let pinned_addr_frame_2 = pin_gpu_addr(size);
+
+        if pinned_addr_frame_0.is_null() || pinned_addr_frame_1.is_null() || pinned_addr_frame_2.is_null() {
+            panic!("Ошибка выделения памяти (смотри в IOMMU)");
+        }
+
+        [pinned_addr_frame_0, pinned_addr_frame_1, pinned_addr_frame_2]
+    }
 }
 
 // 3. Блок тестов для проверки работоспособности

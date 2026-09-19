@@ -10,8 +10,9 @@ mod engine;
 use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
-use shared::error::AppError;
-use shared::types::AppPointCloud;
+use cuda_pipeline::pin_gpu;
+use shared::error::{AppError, ErrorType};
+use shared::types::{AppPointCloud, SIZE};
 use tracing::*;
 use tracing_subscriber::EnvFilter;
 
@@ -32,14 +33,21 @@ shared::env_config! {
 async fn main() -> Result<(), AppError> {
     let filter = EnvFilter::try_from_default_env()
         //  формат: package=level "," - разделитель
-        .unwrap_or_else(|_| EnvFilter::new("info,rustdds=error"));
+        .unwrap_or_else(|_| EnvFilter::new("info,rustdds=error,rust_listener=info"));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
     info!("{}", ENV.ROS_DOMAIN_ID);
 
     Env::fetch();
 
-    let cloud = Arc::<RwLock<AppPointCloud>>::new(RwLock::new(AppPointCloud::new()));
+    let x_ptr = pin_gpu(SIZE);
+    let y_ptr = pin_gpu(SIZE);
+    let z_ptr = pin_gpu(SIZE);
+    let i_ptr = pin_gpu(SIZE);
+
+    let cloud = Arc::<RwLock<AppPointCloud>>::new(RwLock::new(AppPointCloud::new(
+        x_ptr, y_ptr, z_ptr, i_ptr,
+    )));
 
     debug::std::print_banner();
     info!("[PRE INIT] подготовка стримов");
@@ -48,7 +56,6 @@ async fn main() -> Result<(), AppError> {
 
     let point_cloud_stream =
         ros2_data_extraction::init_sub(ENV.ROS_DOMAIN_ID, Arc::clone(&cloud)).await?;
-    info!("[INIT] Успешно подписались.");
 
     let _ = entry(point_cloud_stream, rerun, Arc::clone(&cloud)).await?;
     info!("[POST] Поток сообщений завершён.");

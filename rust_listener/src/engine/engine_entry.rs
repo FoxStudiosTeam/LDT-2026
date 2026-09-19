@@ -37,7 +37,6 @@ pub async fn entry(
 
     while let Some(a) = point_cloud_stream.next().await? {
         frame_id = a;
-        info!("message getted");
 
         // 2. Проверяем лимит без блокировок
         if active_tasks.load(Ordering::Relaxed) >= 4 {
@@ -57,17 +56,29 @@ pub async fn entry(
             let _guard = TaskGuard {
                 counter: active_tasks_clone,
             };
-            let point_cloud = point_cloud.clone();
+            let point_cloud_lock = point_cloud.clone();
 
             tokio::task::spawn_blocking(move || {
-                let point_cloud = point_cloud
+
+                let mut point_cloud_write = point_cloud_lock.write().expect(&format!("⚠️ Мутекс отравился ☠️ {} {}", file!(), line!()));
+                {
+                    point_cloud_write.can_write = false;
+                    point_cloud_write.change_state(shared::types::ProcessingQueue::NEXT, shared::types::ProcessingQueue::READ);
+                    point_cloud_write.can_write = true;
+                }
+                
+                let point_cloud = point_cloud_lock
                     .read()
                     // отъебнет так, что в логах не покажется
                     // .map_err(|e| Error::AbstractError { msg: e.to_string() }).unwrap()
                     .expect(&format!("⚠️ Мутекс отравился ☠️ {} {}", file!(), line!()));
 
-                let timestamp_ns = point_cloud.timestamp;
-                let stats = point_cloud.compute_stats();
+                let number = shared::types::ProcessingQueue::READ;
+
+
+                let timestamp_ns = point_cloud.timestamp[number];
+                let stats = point_cloud.compute_stats(number);
+
                 debug::std::print_frame_info(frame_id, timestamp_ns, &stats);
                 recording_stream.set_time(
                     "ros_time",

@@ -15,7 +15,7 @@ from rosidl_runtime_py.utilities import get_message
 
 import rosbag2_py
 
-DATASET_DIR = "../dataset"
+DATASET_DIR = "/app/dataset"
 
 @dataclass
 class Msg:
@@ -60,9 +60,9 @@ class BagPlayer(Node):
         self.rate = rate
 
         qos = qos_override or QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
+            reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
-            depth=5,
+            depth=10,
             durability=DurabilityPolicy.VOLATILE,
         )
 
@@ -97,6 +97,9 @@ class BagPlayer(Node):
 
             pub = self.publishers_map[m.topic]
             msg = deserialize_message(m.raw, m.msg_type)
+
+
+
             pub.publish(msg)
 
     def run(self):

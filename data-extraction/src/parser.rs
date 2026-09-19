@@ -2,7 +2,7 @@ use std::sync::{Arc, RwLock};
 
 use ros2_interfaces_jazzy_serde::sensor_msgs::msg::{PointCloud2, PointField};
 use shared::error::{AppError, ErrorType};
-use shared::types::AppPointCloud;
+use shared::types::{AppPointCloud, ProcessingQueue};
 
 #[derive(Debug, Clone, Copy)]
 pub struct PointLayout {
@@ -131,8 +131,14 @@ pub fn parse_coords(
         >| { ErrorType::message(e) },
     )?;
 
+    if !cloud.can_write {
+        return Ok(());
+    }
+
+    let write_state = ProcessingQueue::WRITE;
+
     if width == 0 || height == 0 || message.data.is_empty() {
-        cloud.length = 0;
+        cloud.length[write_state] = 0;
         return Ok(());
     }
     let d = width * height;
@@ -186,43 +192,23 @@ pub fn parse_coords(
         };
 
         if x.is_finite() && y.is_finite() && z.is_finite() {
-            cloud.x[valid_count] = x;
-            cloud.y[valid_count] = y;
-            cloud.z[valid_count] = z;
-            cloud.intensity[valid_count] = intensity;
+            cloud.x[write_state][valid_count] = x;
+            cloud.y[write_state][valid_count] = y;
+            cloud.z[write_state][valid_count] = z;
+            cloud.intensity[write_state][valid_count] = intensity;
 
             valid_count += 1;
         }
 
-        cloud.width = message.width;
-        cloud.height = message.height;
-        cloud.timestamp =
+        cloud.width[write_state] = message.width;
+        cloud.height[write_state] = message.height;
+        cloud.timestamp[write_state] =
             message.header.stamp.sec as i64 * 1000000000 + message.header.stamp.nanosec as i64;
-
-        // if let Some(offset) = layout.ring_offset {
-        //     if let Some(bytes) = point_buf.get(offset..offset + 2) {
-        //         let r = if is_bigendian {
-        //             u16::from_be_bytes(bytes.try_into().unwrap())
-        //         } else {
-        //             u16::from_le_bytes(bytes.try_into().unwrap())
-        //         };
-        //         cloud.ring = r;
-        //     }
-        // }
-
-        // if let Some(offset) = layout.timestamp_offset {
-        //     if let Some(bytes) = point_buf.get(offset..offset + 8) {
-        //         let t = if is_bigendian {
-        //             f64::from_be_bytes(bytes.try_into().unwrap())
-        //         } else {
-        //             f64::from_le_bytes(bytes.try_into().unwrap())
-        //         };
-        //         cloud.timestamp = t;
-        //     }
-        // }
     }
 
-    cloud.length = valid_count;
+    cloud.length[write_state] = valid_count;
+
+    cloud.change_state(write_state, ProcessingQueue::NEXT);
 
     Ok(())
 }

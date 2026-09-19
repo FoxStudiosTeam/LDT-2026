@@ -1,6 +1,7 @@
 use crate::discovery::DiscoveredTopic;
 use ros2_client::{Context, Name, Node, NodeName, NodeOptions, Subscription};
 use ros2_interfaces_jazzy_serde::sensor_msgs::msg::PointCloud2;
+use rustdds::qos::HasQoSPolicy;
 use shared::error::{AppError, ErrCtx, ErrorType};
 use tracing::*;
 
@@ -36,7 +37,7 @@ pub fn subscribe(
         .app_error()?;
 
     let subscription = node
-        .create_subscription::<PointCloud2>(&topic, None)
+        .create_subscription::<PointCloud2>(&topic, Some(topic.qos()))
         .app_error()?;
 
     Ok(subscription)
