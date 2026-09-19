@@ -4788,6 +4788,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "large_processor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "kaiv_utils",
+ "rerun",
+ "shared",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

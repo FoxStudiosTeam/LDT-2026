@@ -1,8 +1,8 @@
 use std::sync::{Arc, RwLock};
 
-use ddl::AppPointCloud;
 use ros2_interfaces_jazzy_serde::sensor_msgs::msg::{PointCloud2, PointField};
 use shared::error::{AppError, ErrorType};
+use shared::types::AppPointCloud;
 
 #[derive(Debug, Clone, Copy)]
 pub struct PointLayout {
@@ -126,9 +126,9 @@ pub fn parse_coords(
 
     // тут короче мутекс пойзон 👉👈 который не sync+send потому что гард держит, поэтому моя synd+send app_error не работает 💔
     let mut cloud = cloud.write().map_err(
-        |e: std::sync::PoisonError<std::sync::RwLockWriteGuard<'_, ddl::PointCloud<2000000>>>| {
-            ErrorType::message(e)
-        },
+        |e: std::sync::PoisonError<
+            std::sync::RwLockWriteGuard<'_, shared::types::PointCloud<2000000>>,
+        >| { ErrorType::message(e) },
     )?;
 
     if width == 0 || height == 0 || message.data.is_empty() {

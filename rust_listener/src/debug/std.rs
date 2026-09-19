@@ -1,6 +1,6 @@
 // ─── Вывод в stdout ───────────────────────────────────────────────────────────
 
-use ddl::CloudStats;
+use shared::types::CloudStats;
 use tracing::*;
 
 pub fn print_frame_info(frame_id: u64, timestamp_ns: i64, stats: &CloudStats) {

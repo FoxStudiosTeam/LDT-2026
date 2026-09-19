@@ -1,7 +1,7 @@
 use std::sync::{Arc, RwLock};
 
-use ddl::AppPointCloud;
 use ros2_interfaces_jazzy_serde::sensor_msgs::msg::PointCloud2;
+use shared::types::AppPointCloud;
 
 use shared::error::{AppError, ErrCtx, ErrorType};
 use tracing::info;

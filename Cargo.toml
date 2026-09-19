@@ -3,7 +3,8 @@ members = [
     "cuda-pipeline",
     "rust_listener",
     "data-extraction",
-    "shared"
+    "shared",
+    "large_processor"
 ]
 resolver = "2"
 
@@ -16,3 +17,4 @@ cuda-pipeline = { path = "cuda-pipeline" }
 ros2_data_extraction = { path = "data-extraction" }
 kaiv_utils = { git = "https://github.com/kaiv-dev/kaiv_utils.git", rev = "fdaf82e", features = ["env_config_macro", "trace_err"] }
 shared = {path = "shared"}
+large_processor = {path = "large_processor"}

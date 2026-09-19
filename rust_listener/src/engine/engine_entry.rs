@@ -6,10 +6,10 @@ use std::{
     time::Duration,
 };
 
-use ddl::AppPointCloud;
 use rerun::RecordingStream;
 use ros2_data_extraction::PointCloudStream;
 use shared::error::AppError;
+use shared::types::AppPointCloud;
 use tokio::{sync::Semaphore, time};
 use tracing::*;
 

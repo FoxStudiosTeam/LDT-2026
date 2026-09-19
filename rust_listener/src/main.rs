@@ -10,8 +10,8 @@ mod engine;
 use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
-use ddl::AppPointCloud;
 use shared::error::{AppError, ErrorType};
+use shared::types::AppPointCloud;
 use tracing::*;
 use tracing_subscriber::EnvFilter;
 
