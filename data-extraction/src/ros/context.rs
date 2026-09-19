@@ -1,13 +1,7 @@
-use std::env;
 use ros2_client::{Context, ContextOptions};
-use crate::error::Error;
+use shared::error::{AppError, ErrCtx};
 
-pub fn create_context() -> Result<Context, Error> {
-    let opt = ContextOptions::new().domain_id(
-        env::var("ROS_DOMAIN_ID")
-        .ok()
-        .and_then(|value| value.parse::<u16>().ok())
-        .unwrap_or(0)
-    );
-    Context::with_options(opt).map_err(|err| Error::CreateError(err, "Failed to create context"))
+pub fn create_context(domain_id: u16) -> Result<Context, AppError> {
+    let opt = ContextOptions::new().domain_id(domain_id);
+    Context::with_options(opt).app_error()
 }

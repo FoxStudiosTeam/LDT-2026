@@ -18,6 +18,8 @@ use ros2_client::{
     rustdds::{DomainParticipantStatusEvent, QosPolicies},
 };
 
+use tracing::*;
+
 #[derive(Debug, Clone)]
 pub struct DiscoveredTopic {
     pub name: String,
@@ -69,7 +71,7 @@ type Record = (u128, i64);
 
 fn summarize(name: &str, xs: &[f64]) {
     if xs.is_empty() {
-        println!("{name}: no data");
+        info!("{name}: no data");
         return;
     }
     let mut sorted = xs.to_vec();
@@ -80,7 +82,7 @@ fn summarize(name: &str, xs: &[f64]) {
     let mean = xs.iter().sum::<f64>() / n as f64;
     let min = sorted[0];
     let max = sorted[n - 1];
-    println!(
+    info!(
         "{name}: n={n} min={min:.2}ms max={max:.2}ms mean={mean:.2}ms p50={p50:.2}ms p95={p95:.2}ms"
     );
 }
@@ -89,8 +91,8 @@ fn summarize(name: &str, xs: &[f64]) {
 async fn main() -> Result<(), Error> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: jitter_bench <topic-substring-optional-unused> [num_samples]");
-        eprintln!("(topic is auto-discovered like in ros2_debug_viewer, arg kept for CLI parity)");
+        error!("Usage: jitter_bench <topic-substring-optional-unused> [num_samples]");
+        error!("(topic is auto-discovered like in ros2_debug_viewer, arg kept for CLI parity)");
     }
     let num_samples: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(250);
 
@@ -112,12 +114,12 @@ async fn main() -> Result<(), Error> {
     });
 
     let receiver = node.status_receiver();
-    eprintln!("[jitter_bench] Поиск топика PointCloud2 в DDS сети...");
+    error!("[jitter_bench] Поиск топика PointCloud2 в DDS сети...");
     let mut target_topic = None;
     while let Ok(msg) = receiver.recv().await {
         if let ros2_client::NodeEvent::DDS(dds_event) = msg {
             if let Some(topic) = find_pointcloud_topic(dds_event) {
-                eprintln!("[jitter_bench] Найден топик: {}", topic.name);
+                error!("[jitter_bench] Найден топик: {}", topic.name);
                 target_topic = Some(topic);
                 break;
             }
@@ -127,7 +129,7 @@ async fn main() -> Result<(), Error> {
     let subscription = subscribe(&mut node, topic).expect("SubscriptionFailed");
 
     const SKIP_SAMPLES: usize = 30;
-    eprintln!("[jitter_bench] Пропускаю первые {SKIP_SAMPLES} фреймов (прогрев)...");
+    error!("[jitter_bench] Пропускаю первые {SKIP_SAMPLES} фреймов (прогрев)...");
 
     let mut skipped = 0;
     while skipped < SKIP_SAMPLES {
@@ -136,7 +138,7 @@ async fn main() -> Result<(), Error> {
         }
     }
 
-    eprintln!("[jitter_bench] Собираю {num_samples} сэмплов без логирования...");
+    error!("[jitter_bench] Собираю {num_samples} сэмплов без логирования...");
 
     let mut records: Vec<Record> = Vec::with_capacity(num_samples);
     let epoch = SystemTime::now();
@@ -174,13 +176,13 @@ async fn main() -> Result<(), Error> {
         .map(|w| (w[1].1 as f64 - w[0].1 as f64) / 1e6)
         .collect();
 
-    println!("\n=== Jitter summary (Rust) ===");
+    info!("\n=== Jitter summary (Rust) ===");
     summarize("Receive-side inter-arrival (recv_monotonic)", &deltas_ms);
     summarize(
         "Publisher-side inter-arrival (source_timestamp)",
         &header_deltas_ms,
     );
-    println!(
+    info!(
         "\nRaw samples written to jitter_samples_rust.csv ({} rows)",
         records.len()
     );

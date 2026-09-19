@@ -6,18 +6,13 @@ unsafe extern "C" {
 // 2. Делаем безопасную обертку для Rust
 pub fn vector_add(a: &[f32], b: &[f32]) -> Vec<f32> {
     assert_eq!(a.len(), b.len(), "Массивы должны быть одинаковой длины!");
-    
+
     let n = a.len();
     let mut c = vec![0.0f32; n];
 
     // Вызываем unsafe код один раз внутри контролируемой обертки
     unsafe {
-        run_vector_add(
-            a.as_ptr(),
-            b.as_ptr(),
-            c.as_mut_ptr(),
-            n as i32,
-        );
+        run_vector_add(a.as_ptr(), b.as_ptr(), c.as_mut_ptr(), n as i32);
     }
 
     c
@@ -41,7 +36,7 @@ mod tests {
         for val in h_c {
             assert_eq!(val, 4.0f32);
         }
-        
+
         println!("Тест пройден! CUDA вернула правильные данные.");
     }
 }

@@ -1,6 +1,0 @@
-[package]
-name = "ddl"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]

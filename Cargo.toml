@@ -1,5 +1,10 @@
 [workspace]
-members = ["cuda-pipeline", "rust_listener", "data-extraction", "ddl"]
+members = [
+    "cuda-pipeline",
+    "rust_listener",
+    "data-extraction",
+    "shared",
+]
 resolver = "2"
 
 [workspace.package]
@@ -9,4 +14,5 @@ edition = "2024"
 [workspace.dependencies]
 cuda-pipeline = { path = "cuda-pipeline" }
 ros2_data_extraction = { path = "data-extraction" }
-ddl = {path = "ddl"}
+kaiv_utils = { git = "https://github.com/kaiv-dev/kaiv_utils.git", rev = "fdaf82e", features = ["env_config_macro", "trace_err"] }
+shared = {path = "shared"}

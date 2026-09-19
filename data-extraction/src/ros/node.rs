@@ -1,22 +1,21 @@
-use crate::error::Error;
+use crate::discovery::DiscoveredTopic;
 use ros2_client::{Context, Name, Node, NodeName, NodeOptions, Subscription};
 use ros2_interfaces_jazzy_serde::sensor_msgs::msg::PointCloud2;
-use crate::discovery::DiscoveredTopic;
+use shared::error::{AppError, ErrCtx, ErrorType};
+use tracing::*;
 
-pub fn create_node(context: &Context) -> Result<Node, Error> {
-    let node_name = NodeName::new("/","rust_listener")
-        .map_err(|_| Error::InvalidName("Invalid node name"))?;
-    context.new_node(node_name, NodeOptions::new())
-        .map_err(|err| Error::NodeCreation(err))
+pub fn create_node(context: &Context) -> Result<Node, AppError> {
+    let node_name = NodeName::new("/", "rust_listener")
+        .map_err(|_| ErrorType::InvalidName("Invalid node name"))?;
+    context.new_node(node_name, NodeOptions::new()).app_error()
 }
 
-pub fn start_spinner(node: &mut Node) -> Result<(), Error> {
-    let spinner = node.spinner()
-        .map_err(|err| Error::CreateError(err, "Failed to create spinner"))?;
+pub fn start_spinner(node: &mut Node) -> Result<(), AppError> {
+    let spinner = node.spinner().app_error()?;
 
     tokio::spawn(async move {
-        if let Err(error) = spinner.spin().await{
-            eprintln!("Spinner error: {}", error);
+        if let Err(error) = spinner.spin().await {
+            error!("Spinner error: {}", error);
         };
     });
 
@@ -25,18 +24,20 @@ pub fn start_spinner(node: &mut Node) -> Result<(), Error> {
 
 pub fn subscribe(
     node: &mut Node,
-    discovered_topic: DiscoveredTopic
-) -> Result<Subscription<PointCloud2>, Error> {
-    let topic = node.create_topic(
-        &Name::parse(discovered_topic.name.as_str())
-            .map_err(|_| Error::InvalidName("Invalid topic name"))?,
-        discovered_topic.msg_type.clone(),
-        &discovered_topic.qos
-    ).map_err(|error| Error::CreateError(error, "Failed to create topic"))?;
+    discovered_topic: DiscoveredTopic,
+) -> Result<Subscription<PointCloud2>, AppError> {
+    let topic = node
+        .create_topic(
+            &Name::parse(discovered_topic.name.as_str())
+                .map_err(|_| ErrorType::InvalidName("Invalid topic name"))?,
+            discovered_topic.msg_type.clone(),
+            &discovered_topic.qos,
+        )
+        .app_error()?;
 
     let subscription = node
         .create_subscription::<PointCloud2>(&topic, None)
-        .map_err(|error| Error::CreateError(error, "Failed to create subscription"))?;
+        .app_error()?;
 
     Ok(subscription)
 }
