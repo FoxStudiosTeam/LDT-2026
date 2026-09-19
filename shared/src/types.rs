@@ -212,6 +212,10 @@ impl<'a, const SIZE : usize> PointCloud<SIZE> {
 
     // Заменить на макросы но тогда копировать на стек self.$x и после этого уже без self
     pub fn change_state(&mut self, queue_old : ProcessingQueue, queue_new : ProcessingQueue) {
+        if !self.can_write {
+            return;
+        }
+        
         let mut ptr_old = self.x[queue_old].ptr;
         let mut ptr_new = self.x[queue_new].ptr;
         mem::swap(&mut ptr_old, &mut ptr_new);
