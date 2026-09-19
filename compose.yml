@@ -9,7 +9,7 @@ services:
     container_name: ros2_dataset_player
     # ВЫПИЛИЛИ networks
     network_mode: "host" # <--- ПУСКАЕМ СЕТЬ НАПРЯМУЮ ЧЕРЕЗ ХОСТ
-    ipc: "host"          
+    ipc: "host"
     shm_size: '2gb'
     ulimits:
       nofile:
@@ -34,7 +34,7 @@ services:
     container_name: rust_viewer
     # ВЫПИЛИЛИ networks и ports (порт 9876 теперь автоматом слушается на твоем localhost)
     network_mode: "host" # <--- И СЮДА ТОЖЕ ХОСТОВУЮ СЕТЬ
-    ipc: "host"          
+    ipc: "host"
     shm_size: '2gb'
     ulimits:
       nofile:

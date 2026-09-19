@@ -8,10 +8,11 @@ name = "ros2_debug_viewer"
 path = "src/main.rs"
 
 [dependencies]
-r2r = { git = "https://github.com/sequenceplanner/r2r", branch = "master" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+tokio = { version = "1", features = ["full"] }
 futures = "0.3"
 anyhow = "1"
 rerun = "0.37.2"
 
 cuda-pipeline = { workspace = true }
+ros2_data_extraction = { workspace = true }
+ddl = { workspace = true }
