@@ -10,8 +10,9 @@ mod engine;
 use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
+use cuda_pipeline::pin_gpu;
 use shared::error::{AppError, ErrorType};
-use shared::types::AppPointCloud;
+use shared::types::{AppPointCloud, SIZE};
 use tracing::*;
 use tracing_subscriber::EnvFilter;
 
@@ -37,7 +38,12 @@ async fn main() -> Result<(), AppError> {
 
     Env::fetch();
 
-    let cloud = Arc::<RwLock<AppPointCloud>>::new(RwLock::new(AppPointCloud::new()));
+    let x_ptr = pin_gpu(SIZE);
+    let y_ptr = pin_gpu(SIZE);
+    let z_ptr = pin_gpu(SIZE);
+    let i_ptr = pin_gpu(SIZE);
+
+    let cloud = Arc::<RwLock<AppPointCloud>>::new(RwLock::new(AppPointCloud::new(x_ptr, y_ptr, z_ptr, i_ptr)));
 
     debug::std::print_banner();
     info!("[PRE INIT] подготовка стримов");

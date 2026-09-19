@@ -37,3 +37,14 @@ extern "C" void run_vector_add(const float* a, const float* b, float* c, int n) 
     cudaFree(d_b);
     cudaFree(d_c);
 }
+
+extern "C" float* pin_gpu_addr(size_t size) {
+    float* host_ptr = NULL;
+    size_t bytes = size * sizeof(float);
+
+    cudaError err = cudaHostAlloc((void**) &host_ptr, bytes, cudaHostAllocMapped);
+    if (err != cudaSuccess) {
+        return NULL;
+    }
+    return host_ptr;
+}
