@@ -7,37 +7,55 @@
 mod debug;
 mod engine;
 
-
 use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
 use ddl::AppPointCloud;
+use shared::error::{AppError, ErrorType};
+use tracing::*;
+use tracing_subscriber::EnvFilter;
 
+use crate::{
+    debug::rerun::{check_rerun_connection, init_rerun},
+    engine::engine_entry::entry,
+};
 
-use crate::{debug::rerun::init_rerun, engine::engine_entry::entry};
-use ros2_data_extraction::error::Error;
-
-const CHANNEL_SIZE: usize = 8;
+kaiv_utils::env_config! {
+    ".env" => pub (crate) ENV = pub (crate) Env {
+        RERUN_URL : String = "rerun+http://host.docker.internal:9876/proxy".to_string(),
+        ROS_DOMAIN_ID : u16 = 0
+    }
+}
 
 // ─── Точка входа ──────────────────────────────────────────────────────────────
 
 // Error надо отрефакторить чтобы у нас была одна общая ошибка, в рамках этой ветки не делаю потому что важнее сделать data-pipe чтобы корректно было, а не пакеты.
 #[tokio::main]
-async fn main() -> Result<(), Error> {
+async fn main() -> Result<(), AppError> {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
+
+    Env::fetch();
+
     let cloud = Arc::<RwLock<AppPointCloud>>::new(RwLock::new(AppPointCloud::new()));
 
     debug::std::print_banner();
-    println!("[PRE INIT] подготовка стримов");
+    info!("[PRE INIT] подготовка стримов");
 
-    let rec = init_rerun().map_err(|_| Error::AbstractError { msg: "Rerun Init отпал".to_string() })?;
+    let rerun = init_rerun().await?;
 
-    let point_cloud_stream = ros2_data_extraction::init_sub(CHANNEL_SIZE,Arc::clone(&cloud)).await?;
-    println!("[INIT] Успешно подписались.");
+    //
+    check_rerun_connection(&rerun).await.ok();
 
-    let _ = entry(point_cloud_stream,rec, Arc::clone(&cloud)).await?;
+    let point_cloud_stream =
+        ros2_data_extraction::init_sub(ENV.ROS_DOMAIN_ID, Arc::clone(&cloud)).await?;
+    info!("[INIT] Успешно подписались.");
 
-    println!("[POST] Поток сообщений завершён.");
+    let _ = entry(point_cloud_stream, rerun, Arc::clone(&cloud)).await?;
+
+    info!("[POST] Поток сообщений завершён.");
     debug::std::print_banner();
-    println!("[END] Завершение работы клиента");
+    info!("[END] Завершение работы клиента");
     Ok(())
 }

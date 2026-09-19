@@ -1,7 +1,7 @@
 [package]
 name = "rust_listener"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [[bin]]
 name = "ros2_debug_viewer"
@@ -13,6 +13,9 @@ futures = "0.3"
 anyhow = "1"
 rerun = "0.37.2"
 
-cuda-pipeline = { workspace = true }
-ros2_data_extraction = { workspace = true }
-ddl = { workspace = true }
+cuda-pipeline.workspace = true
+ros2_data_extraction.workspace = true
+shared.workspace = true
+kaiv_utils.workspace = true
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

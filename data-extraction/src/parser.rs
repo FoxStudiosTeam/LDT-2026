@@ -1,12 +1,8 @@
 use std::sync::{Arc, RwLock};
 
-use crate::error::Error;
-
 use ddl::AppPointCloud;
-use ros2_interfaces_jazzy_serde::sensor_msgs::msg::{
-    PointCloud2,
-    PointField,
-};
+use ros2_interfaces_jazzy_serde::sensor_msgs::msg::{PointCloud2, PointField};
+use shared::error::{AppError, ErrorType};
 
 #[derive(Debug, Clone, Copy)]
 pub struct PointLayout {
@@ -20,12 +16,12 @@ pub struct PointLayout {
 
 /// МЕТОД ДЛЯ ОДНОКРАТНОЙ ИНИЦИАЛИЗАЦИИ И ВАЛИДАЦИИ
 /// Вызывается только один раз на самом первом кадре, чтобы закэшировать смещения полей.
-pub fn extract_and_validate_layout(cloud: &PointCloud2) -> Result<PointLayout, Error> {
+pub fn extract_and_validate_layout(cloud: &PointCloud2) -> Result<PointLayout, AppError> {
     validate_message(cloud)?;
     create_layout(cloud)
 }
 
-fn validate_message(message: &PointCloud2) -> Result<(), Error> {
+fn validate_message(message: &PointCloud2) -> Result<(), AppError> {
     let point_step = message.point_step as usize;
     let row_step = message.row_step as usize;
     let width = message.width as usize;
@@ -34,14 +30,15 @@ fn validate_message(message: &PointCloud2) -> Result<(), Error> {
 
     let minimum_row_step = width
         .checked_mul(point_step)
-        .ok_or( Error::AbstractError { msg: format!("current size: {d}").to_string() })?;
+        .ok_or(ErrorType::message(format!("current size: {d}").to_string()))?;
 
     if row_step < minimum_row_step {
-        return Err(Error::InvalidRowStep {
+        return ErrorType::InvalidRowStep {
             row_step,
             width,
             point_step,
-        });
+        }
+        .err();
     }
 
     for field in &message.fields {
@@ -49,43 +46,38 @@ fn validate_message(message: &PointCloud2) -> Result<(), Error> {
 
         let field_size = size
             .checked_mul(field.count as usize)
-            .ok_or(Error::AbstractError { msg: format!("current size: {d}").to_string() })?;
+            .ok_or(ErrorType::message(format!("current size: {d}")))?;
 
         let required_end = (field.offset as usize)
             .checked_add(field_size)
-            .ok_or(Error::AbstractError { msg: format!("current size: {d}").to_string() })?;
+            .ok_or(ErrorType::message(format!("current size: {d}")))?;
 
         if required_end > point_step {
-            return Err(Error::InvalidPointStep {
+            return ErrorType::InvalidPointStep {
                 point_step,
                 field: field.name.clone(),
                 required_end,
-            });
+            }
+            .err();
         }
     }
 
     Ok(())
 }
 
-fn find_field<'a>(
-    message: &'a PointCloud2,
-    name: &'a str,
-) -> Option<&'a PointField> {
+fn find_field<'a>(message: &'a PointCloud2, name: &'a str) -> Option<&'a PointField> {
     message.fields.iter().find(|field| field.name == name)
 }
 
-fn create_layout(message: &PointCloud2) -> Result<PointLayout, Error> {
-    let x = find_field(message, "x")
-        .ok_or(Error::NoneError("x field not found"))?;
+fn create_layout(message: &PointCloud2) -> Result<PointLayout, AppError> {
+    let x = find_field(message, "x").ok_or(ErrorType::NoneError("x field not found"))?;
 
-    let y = find_field(message, "y")
-        .ok_or(Error::NoneError("y field not found"))?;
+    let y = find_field(message, "y").ok_or(ErrorType::NoneError("y field not found"))?;
 
-    let z = find_field(message, "z")
-        .ok_or(Error::NoneError("z field not found"))?;
+    let z = find_field(message, "z").ok_or(ErrorType::NoneError("z field not found"))?;
 
     let intensity = find_field(message, "intensity")
-        .ok_or(Error::NoneError("intensity field not found"))?;
+        .ok_or(ErrorType::NoneError("intensity field not found"))?;
 
     validate_field(x, PointField::FLOAT32)?;
     validate_field(y, PointField::FLOAT32)?;
@@ -102,34 +94,42 @@ fn create_layout(message: &PointCloud2) -> Result<PointLayout, Error> {
     })
 }
 
-fn validate_field(
-    field: &PointField,
-    expected_datatype: u8,
-) -> Result<(), Error> {
+fn validate_field(field: &PointField, expected_datatype: u8) -> Result<(), AppError> {
     if field.count != 1 {
-        return Err(Error::InvalidFieldCount {
+        return ErrorType::InvalidFieldCount {
             field: field.name.clone(),
             expected: 1,
             actual: field.count,
-        });
+        }
+        .err();
     }
 
     if field.datatype != expected_datatype {
-        return Err(Error::UnexpectedDatatype {
+        return ErrorType::UnexpectedDatatype {
             expected_datatype,
             actual_datatype: field.datatype,
-        });
+        }
+        .err();
     }
 
     Ok(())
 }
 
-pub fn parse_coords(message: &PointCloud2, cloud: Arc<RwLock<AppPointCloud>>, layout: &PointLayout) -> Result<(), Error> {
+pub fn parse_coords(
+    message: &PointCloud2,
+    cloud: Arc<RwLock<AppPointCloud>>,
+    layout: &PointLayout,
+) -> Result<(), AppError> {
     let width = message.width as usize;
     let height = message.height as usize;
     let point_step = message.point_step as usize;
 
-    let mut cloud = cloud.write().map_err(|e| Error::AbstractError { msg: e.to_string() })?;
+    // тут короче мутекс пойзон 👉👈 который не sync+send потому что гард держит, поэтому моя synd+send app_error не работает 💔
+    let mut cloud = cloud.write().map_err(
+        |e: std::sync::PoisonError<std::sync::RwLockWriteGuard<'_, ddl::PointCloud<2000000>>>| {
+            ErrorType::message(e)
+        },
+    )?;
 
     if width == 0 || height == 0 || message.data.is_empty() {
         cloud.length = 0;
@@ -139,10 +139,10 @@ pub fn parse_coords(message: &PointCloud2, cloud: Arc<RwLock<AppPointCloud>>, la
 
     let total_points = width
         .checked_mul(height)
-        .ok_or(Error::AbstractError { msg: format!("current size: {d}").to_string() })?;
+        .ok_or(ErrorType::message(format!("current size: {d}").to_string()))?;
 
     if total_points > AppPointCloud::CAP {
-        return Err(Error::AbstractError { msg: format!("current size: {d}").to_string() });
+        return ErrorType::message(format!("current size: {d}").to_string()).err();
     }
 
     let is_bigendian = message.is_bigendian;
@@ -157,8 +157,8 @@ pub fn parse_coords(message: &PointCloud2, cloud: Arc<RwLock<AppPointCloud>>, la
     let i_off = layout.intensity_offset;
 
     for point_buf in point_chunks {
-        if point_buf.len() < point_step { 
-            break; 
+        if point_buf.len() < point_step {
+            break;
         }
 
         // Высокопроизводительное чтение памяти по сырым указателям через регистры CPU
@@ -190,13 +190,14 @@ pub fn parse_coords(message: &PointCloud2, cloud: Arc<RwLock<AppPointCloud>>, la
             cloud.y[valid_count] = y;
             cloud.z[valid_count] = z;
             cloud.intensity[valid_count] = intensity;
-            
+
             valid_count += 1;
         }
 
         cloud.width = message.width;
         cloud.height = message.height;
-        cloud.timestamp = message.header.stamp.sec as i64 * 1000000000 + message.header.stamp.nanosec as i64;
+        cloud.timestamp =
+            message.header.stamp.sec as i64 * 1000000000 + message.header.stamp.nanosec as i64;
 
         // if let Some(offset) = layout.ring_offset {
         //     if let Some(bytes) = point_buf.get(offset..offset + 2) {
@@ -226,20 +227,16 @@ pub fn parse_coords(message: &PointCloud2, cloud: Arc<RwLock<AppPointCloud>>, la
     Ok(())
 }
 
-
-
-fn datatype_size(datatype: u8) -> Result<usize, Error> {
+fn datatype_size(datatype: u8) -> Result<usize, AppError> {
     match datatype {
         PointField::INT8 | PointField::UINT8 => Ok(1),
 
         PointField::INT16 | PointField::UINT16 => Ok(2),
 
-        PointField::INT32
-        | PointField::UINT32
-        | PointField::FLOAT32 => Ok(4),
+        PointField::INT32 | PointField::UINT32 | PointField::FLOAT32 => Ok(4),
 
         PointField::FLOAT64 => Ok(8),
 
-        datatype => Err(Error::UnsupportedDatatype(datatype)),
+        datatype => ErrorType::UnsupportedDatatype(datatype).err(),
     }
 }

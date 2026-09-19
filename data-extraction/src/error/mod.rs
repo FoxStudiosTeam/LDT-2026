@@ -2,7 +2,6 @@ use std::fmt;
 
 #[derive(Debug)]
 pub enum Error {
-    CreateError(ros2_client::ros2::CreateError, &'static str),
     InvalidName(&'static str),
     NodeCreation(ros2_client::NodeCreateError),
     NoneError(&'static str),
@@ -36,13 +35,15 @@ pub enum Error {
         actual_datatype: u8,
     },
     SizeOverflow,
-    ParseFailed{
+    ParseFailed {
         err: ros2_client::ros2::ReadError,
     },
     DiscoveryChannelClosed,
     InvalidChannelSize,
     LockError,
-    AbstractError{msg : String},
+    AbstractError {
+        msg: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -113,41 +114,41 @@ impl fmt::Display for Error {
                 )
             }
 
-            Self::MissingField { field_name} => {
+            Self::MissingField { field_name } => {
                 write!(f, "Missing field '{field_name}'")
             }
 
             Self::UnexpectedDatatype {
                 expected_datatype,
-                actual_datatype } => {
-                write!(f, "Unexpected data type:\
-                 expected={expected_datatype}, actual={actual_datatype}")
+                actual_datatype,
+            } => {
+                write!(
+                    f,
+                    "Unexpected data type:\
+                 expected={expected_datatype}, actual={actual_datatype}"
+                )
             }
 
             Self::SizeOverflow => {
                 write!(f, "Size overflow detected")
             }
 
-            Self::ParseFailed {
-                err
-            } => {
+            Self::ParseFailed { err } => {
                 write!(f, "Parse failed: {err}")
             }
 
             Self::DiscoveryChannelClosed => {
                 write!(f, "Discovery channel closed")
             }
-            
+
             Self::InvalidChannelSize => {
                 write!(f, "Invalid channel size")
             }
 
             Self::LockError => {
                 write!(f, "Lock error")
-            },
-            Self::AbstractError{
-                msg 
-            } => {
+            }
+            Self::AbstractError { msg } => {
                 write!(f, "AbstractError: {msg}")
             }
         }

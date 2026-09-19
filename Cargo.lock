@@ -2622,10 +2622,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ddl"
-version = "0.1.0"
-
-[[package]]
 name = "defmt"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2778,6 +2774,12 @@ checksum = "d4b8a88685455ed29a21542a33abd9cb6510b6b129abadabdcef0f4c55bc8f61"
 dependencies = [
  "litrs",
 ]
+
+[[package]]
+name = "dotenvy"
+version = "0.15.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 
 [[package]]
 name = "downcast-rs"
@@ -4677,6 +4679,17 @@ dependencies = [
  "serde_json",
  "signature",
  "zeroize",
+]
+
+[[package]]
+name = "kaiv_utils"
+version = "0.0.2"
+source = "git+https://github.com/kaiv-dev/kaiv_utils.git?rev=fdaf82e#fdaf82e95bb2d5f54e06c34a55229b6970f7d910"
+dependencies = [
+ "dotenvy",
+ "once_cell",
+ "paste",
+ "tracing",
 ]
 
 [[package]]
@@ -9920,11 +9933,12 @@ dependencies = [
 name = "ros2_data_extraction"
 version = "0.1.0"
 dependencies = [
- "ddl",
  "futures",
  "ros2-client",
  "ros2-interfaces-jazzy-serde",
+ "shared",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -9939,11 +9953,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cuda-pipeline",
- "ddl",
  "futures",
+ "kaiv_utils",
  "rerun",
  "ros2_data_extraction",
+ "shared",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -10423,6 +10440,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
 dependencies = [
  "lazy_static",
+]
+
+[[package]]
+name = "shared"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ros2-client",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

@@ -3,15 +3,14 @@
 use anyhow::Result;
 use ddl::{AppPointCloud, CloudStats};
 use rerun::{Color, LineStrips3D, Points3D, Radius, RecordingStream};
-use ros2_data_extraction::error::Error;
-
+use shared::error::{AppError, ErrCtx};
 
 // ─── Пороги ───────────────────────────────────────────────────────────────────
 const NEAR_RANGE_M: f32 = 1.0; // точки ближе этого — "опасные"
 const HIGH_Z_M: f32 = 2.0; // точки выше этого — "верхний слой"
 
 /// Логируем всё облако точек в rerun
-pub fn log_raw_cloud(rec: &RecordingStream, point_cloud : &AppPointCloud) -> Result<(),Error> {
+pub fn log_raw_cloud(rec: &RecordingStream, point_cloud: &AppPointCloud) -> Result<(), AppError> {
     if point_cloud.is_empty() {
         return Ok(());
     }
@@ -23,7 +22,8 @@ pub fn log_raw_cloud(rec: &RecordingStream, point_cloud : &AppPointCloud) -> Res
         &Points3D::new(points)
             .with_colors([Color::from_rgb(160, 185, 220)])
             .with_radii([Radius::new_ui_points(1.2)]),
-    ).map_err(|e| Error::AbstractError { msg: e.to_string() })?;
+    )
+    .app_error()?;
 
     Ok(())
 }
@@ -49,7 +49,7 @@ pub fn log_debug_overlays(
 fn log_centroid(rec: &RecordingStream, stats: &CloudStats) -> Result<()> {
     rec.log(
         "lidar/debug/centroid",
-        &Points3D::new(&[[stats.centroid_x,stats.centroid_y, stats.centroid_z]])
+        &Points3D::new(&[[stats.centroid_x, stats.centroid_y, stats.centroid_z]])
             .with_colors([Color::from_rgb(50, 255, 80)])
             .with_radii([Radius::new_scene_units(0.25)])
             .with_labels(["centroid"]),
@@ -101,7 +101,9 @@ fn log_near_points(rec: &RecordingStream, point_cloud: &AppPointCloud) -> Result
     let near: Vec<[f32; 3]> = point_cloud
         .iter()
         .filter(|p| {
-            let x = *p.0; let y = *p.1; let z = *p.2;
+            let x = *p.0;
+            let y = *p.1;
+            let z = *p.2;
             let dist2 = x * x + y * y + z * z;
             dist2 < NEAR_RANGE_M * NEAR_RANGE_M
         })
@@ -109,17 +111,20 @@ fn log_near_points(rec: &RecordingStream, point_cloud: &AppPointCloud) -> Result
         .collect();
 
     if near.is_empty() {
-        rec.log("lidar/debug/near_range", &Points3D::new([] as [[f32; 3]; 0]))?;
+        rec.log(
+            "lidar/debug/near_range",
+            &Points3D::new([] as [[f32; 3]; 0]),
+        )?;
         return Ok(());
     }
 
-    // ВЫКИДЫВАЕМ МИЛЛИОНЫ СТРОК И ЦВЕТОВ! 
+    // ВЫКИДЫВАЕМ МИЛЛИОНЫ СТРОК И ЦВЕТОВ!
     // Points3D умеет принимать ОДИН цвет и ОДИН радиус на все точки сразу!
     rec.log(
         "lidar/debug/near_range",
         &Points3D::new(&near)
             .with_colors([Color::from_rgb(255, 60, 60)]) // Один цвет на весь массив (0 аллокаций!)
-            .with_radii([Radius::new_ui_points(2.5)]),   // Один радиус на весь массив (0 аллокаций!)
+            .with_radii([Radius::new_ui_points(2.5)]), // Один радиус на весь массив (0 аллокаций!)
     )?;
     Ok(())
 }
@@ -128,7 +133,7 @@ fn log_near_points(rec: &RecordingStream, point_cloud: &AppPointCloud) -> Result
 fn log_high_points(rec: &RecordingStream, point_cloud: &AppPointCloud) -> Result<()> {
     let high: Vec<[f32; 3]> = point_cloud
         .iter()
-        .filter(|&(_, _, &z, _)| z > HIGH_Z_M) 
+        .filter(|&(_, _, &z, _)| z > HIGH_Z_M)
         .map(|(&x, &y, &z, _)| [x, y, z])
         .collect();
 
@@ -142,7 +147,7 @@ fn log_high_points(rec: &RecordingStream, point_cloud: &AppPointCloud) -> Result
         "lidar/debug/high_z",
         &Points3D::new(&high)
             .with_colors([Color::from_rgb(0, 230, 180)]) // Один цвет на весь массив (0 аллокаций!)
-            .with_radii([Radius::new_ui_points(2.0)]),   // One radius to rule them all
+            .with_radii([Radius::new_ui_points(2.0)]), // One radius to rule them all
     )?;
     Ok(())
 }
