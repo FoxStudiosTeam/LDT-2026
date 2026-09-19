@@ -5,6 +5,8 @@ ros2/*
 fix.ps1
 target
 !dataset/Dockerfile
+.env
+
 # --- Rust/Cargo ---
 /target/
 **/*.rs.bk

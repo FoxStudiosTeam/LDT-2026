@@ -1,5 +1,5 @@
-use crate::error::Error;
 use ros2_client::{Context, Node};
+use shared::error::AppError;
 
 mod context;
 pub mod node;
@@ -8,12 +8,12 @@ pub struct Ros {
     node: Node,
 }
 impl Ros {
-    pub fn new() -> Result<Self,Error> {
-        let context = context::create_context()?;
+    pub fn new(domain_id: u16) -> Result<Self, AppError> {
+        let context = context::create_context(domain_id)?;
         let mut node = node::create_node(&context)?;
-        
-        node::start_spinner(&mut node);
-        
+
+        let _ = node::start_spinner(&mut node);
+
         Ok(Self { context, node })
     }
 
