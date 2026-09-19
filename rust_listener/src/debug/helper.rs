@@ -11,11 +11,11 @@ const HIGH_Z_M: f32 = 2.0; // точки выше этого — "верхний
 
 /// Логируем всё облако точек в rerun
 pub fn log_raw_cloud(rec: &RecordingStream, point_cloud: &AppPointCloud) -> Result<(), AppError> {
-    if point_cloud.is_empty() {
+    if point_cloud.is_empty(shared::types::ProcessingQueue::READ) {
         return Ok(());
     }
 
-    let points = point_cloud.to_rerun();
+    let points = point_cloud.to_rerun(shared::types::ProcessingQueue::READ);
 
     rec.log(
         "lidar/raw",
@@ -99,7 +99,7 @@ fn log_bbox(rec: &RecordingStream, stats: &CloudStats) -> Result<()> {
 /// Точки ближе NEAR_RANGE_M к началу координат — красным
 fn log_near_points(rec: &RecordingStream, point_cloud: &AppPointCloud) -> Result<()> {
     let near: Vec<[f32; 3]> = point_cloud
-        .iter()
+        .iter(shared::types::ProcessingQueue::READ)
         .filter(|p| {
             let x = *p.0;
             let y = *p.1;
@@ -132,7 +132,7 @@ fn log_near_points(rec: &RecordingStream, point_cloud: &AppPointCloud) -> Result
 /// Точки выше HIGH_Z_M — бирюзовым
 fn log_high_points(rec: &RecordingStream, point_cloud: &AppPointCloud) -> Result<()> {
     let high: Vec<[f32; 3]> = point_cloud
-        .iter()
+        .iter(shared::types::ProcessingQueue::READ)
         .filter(|&(_, _, &z, _)| z > HIGH_Z_M)
         .map(|(&x, &y, &z, _)| [x, y, z])
         .collect();

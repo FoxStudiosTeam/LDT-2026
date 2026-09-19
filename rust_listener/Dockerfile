@@ -29,13 +29,13 @@ WORKDIR /app
 
 COPY Cargo.toml Cargo.lock* ./
 COPY cuda-pipeline/Cargo.toml ./cuda-pipeline/
-COPY ddl/Cargo.toml ./ddl/
+COPY shared/Cargo.toml ./shared/
 COPY data-extraction/Cargo.toml ./data-extraction/
 COPY rust_listener/Cargo.toml ./rust_listener/
 
-RUN mkdir -p cuda-pipeline/src ddl/src data-extraction/src rust_listener/src && \
+RUN mkdir -p cuda-pipeline/src shared/src data-extraction/src rust_listener/src && \
     echo "fn main() {}" > rust_listener/src/main.rs && \
-    touch cuda-pipeline/src/lib.rs ddl/src/lib.rs data-extraction/src/lib.rs
+    touch cuda-pipeline/src/lib.rs shared/src/lib.rs data-extraction/src/lib.rs
 
 RUN source /opt/ros/humble/setup.bash && cargo build --release
 
@@ -43,14 +43,14 @@ RUN source /opt/ros/humble/setup.bash && cargo build --release
 # 📦 СБОРКА РЕАЛЬНОГО ИСХОДНОГО КОДА
 # ──────────────────────────────────────────────────────────────────────────────
 
-RUN rm -rf cuda-pipeline/src ddl/src data-extraction/src rust_listener/src
+RUN rm -rf cuda-pipeline/src shared/src data-extraction/src rust_listener/src
 
 COPY cuda-pipeline/ ./cuda-pipeline/
-COPY ddl/ ./ddl/
+COPY shared/ ./shared/
 COPY data-extraction/ ./data-extraction/
 COPY rust_listener/ ./rust_listener/
 
-RUN rm -rf target/release/.fingerprint/ddl-* \
+RUN rm -rf target/release/.fingerprint/shared-* \
            target/release/.fingerprint/cuda_pipeline-* \
            target/release/.fingerprint/ros2_data_extraction-* \
            target/release/.fingerprint/rust_listener-* \
