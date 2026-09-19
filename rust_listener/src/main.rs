@@ -15,10 +15,8 @@ use shared::types::AppPointCloud;
 use tracing::*;
 use tracing_subscriber::EnvFilter;
 
-use crate::{
-    debug::rerun::{check_rerun_connection, init_rerun},
-    engine::engine_entry::entry,
-};
+use crate::debug::rerun::init_rerun;
+use crate::engine::engine_entry::entry;
 
 kaiv_utils::env_config! {
     ".env" => pub (crate) ENV = pub (crate) Env {
@@ -32,9 +30,10 @@ kaiv_utils::env_config! {
 // Error надо отрефакторить чтобы у нас была одна общая ошибка, в рамках этой ветки не делаю потому что важнее сделать data-pipe чтобы корректно было, а не пакеты.
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
+    let filter = EnvFilter::try_from_default_env()
+        //  формат: package=level "," - разделитель
+        .unwrap_or_else(|_| EnvFilter::new("info,rustdds=error"));
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     Env::fetch();
 
@@ -44,9 +43,6 @@ async fn main() -> Result<(), AppError> {
     info!("[PRE INIT] подготовка стримов");
 
     let rerun = init_rerun().await?;
-
-    //
-    check_rerun_connection(&rerun).await.ok();
 
     let point_cloud_stream =
         ros2_data_extraction::init_sub(ENV.ROS_DOMAIN_ID, Arc::clone(&cloud)).await?;
