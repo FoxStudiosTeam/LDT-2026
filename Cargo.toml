@@ -4,6 +4,7 @@ members = [
     "rust_listener",
     "data-extraction",
     "shared",
+    "jitter_test"
 ]
 resolver = "2"
 
