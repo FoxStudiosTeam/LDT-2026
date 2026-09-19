@@ -43,7 +43,6 @@ services:
     environment:
       - ROS_DOMAIN_ID=42
       - ROS_LOCALHOST_ONLY=1
-      - RUST_LOG=info,rustdds=off
     depends_on:
       - ros2_dataset_player
     deploy:

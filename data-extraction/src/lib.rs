@@ -24,23 +24,9 @@ pub struct PointCloudStream {
 impl PointCloudStream {
     pub async fn next(&mut self) -> Result<Option<u64>, AppError> {
         self.frame_num += 1;
-        let started = std::time::Instant::now();
-        info!(
-            "[FRAME {}] кадр ожидается",
-            self.frame_num
-        );
         let (point_cloud, _msg) = self.subscription.async_take().await.app_error()?;
-        let info = _msg.sample_identity();
-        info!(
-            "[FRAME {}] кадр получен за {:?}cек\nseq{:?} writer{:?}",
-            self.frame_num, started.elapsed().as_secs_f32(),info.sequence_number, info.writer_guid
-        );
         let layout = extract_and_validate_layout(&point_cloud)?;
         parse_coords(&point_cloud, Arc::clone(&self.cached_cloud), &layout)?;
-        info!(
-            "[FRAME {}] кадр получен и обработан за {:?}cек",
-            self.frame_num, started.elapsed().as_secs_f32()
-        );
         Ok(Some(self.frame_num))
     }
 }
