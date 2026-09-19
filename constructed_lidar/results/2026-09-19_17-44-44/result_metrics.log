@@ -1,0 +1,7 @@
+───────────────────── Results for RosbagDataset Sequence doubleT_platform_mcap ─────────────────────
++-------------------+-------+-------+
+|            Metric | Value | Units |
++===================+=======+=======+
+| Average Frequency |   9   | Hz    |
+|   Average Runtime |  101  | ms    |
++-------------------+-------+-------+

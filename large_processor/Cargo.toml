@@ -1,0 +1,19 @@
+[package]
+name = "large_processor"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+anyhow = "1"
+rerun = "0.37.2"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+thiserror = "2.0.20"
+shared.workspace = true
+ros2-client = { version = "0.10.1", features = ["humble"] }
+# ros2-client = { version = "0.10.1", features = ["humble"], default-features = false }
+serde = { version = "1.0.229", features = ["derive"] }
+ros2-interfaces-jazzy-serde = { version = "0.0.5", features = ["sensor_msgs"] }
+ros2_data_extraction.workspace = true

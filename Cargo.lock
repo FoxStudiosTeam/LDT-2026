@@ -4682,17 +4682,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kaiv_utils"
-version = "0.0.2"
-source = "git+https://github.com/kaiv-dev/kaiv_utils.git?rev=fdaf82e#fdaf82e95bb2d5f54e06c34a55229b6970f7d910"
-dependencies = [
- "dotenvy",
- "once_cell",
- "paste",
- "tracing",
-]
-
-[[package]]
 name = "kernel32-sys"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4785,6 +4774,24 @@ dependencies = [
  "euclid",
  "polycool",
  "smallvec",
+]
+
+[[package]]
+name = "large_processor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "rerun",
+ "ros2-client",
+ "ros2-interfaces-jazzy-serde",
+ "ros2_data_extraction",
+ "serde",
+ "shared",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -9954,7 +9961,6 @@ dependencies = [
  "anyhow",
  "cuda-pipeline",
  "futures",
- "kaiv_utils",
  "rerun",
  "ros2_data_extraction",
  "shared",
@@ -10447,6 +10453,8 @@ name = "shared"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "dotenvy",
+ "once_cell",
  "ros2-client",
  "thiserror 2.0.20",
 ]

@@ -3,4 +3,7 @@ pyyaml
 textual>=7.2,<8
 numpy
 rerun-sdk
-rosbags
+rosbags<0.10.0
+# rosbags
+kiss-icp
+open3d

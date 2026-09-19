@@ -1,0 +1,7 @@
+───────────────────── Results for RosbagDataset Sequence kiss_icp_seg_v_oxqylo ─────────────────────
++-------------------+-------+-------+
+|            Metric | Value | Units |
++===================+=======+=======+
+| Average Frequency |   8   | Hz    |
+|   Average Runtime |  121  | ms    |
++-------------------+-------+-------+

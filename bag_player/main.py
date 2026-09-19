@@ -109,53 +109,6 @@ class BagPlayer(Node):
         except KeyboardInterrupt:
             pass
 
-def get_key_blocking():
-    if sys.platform == 'win32':
-        import msvcrt
-        key = msvcrt.getch()
-        if key == b'\x03': return 'CTRL_C'
-        if key in (b'\x00', b'\xe0'):
-            key = msvcrt.getch()
-            if key == b'H': return 'UP'
-            if key == b'P': return 'DOWN'
-            if key == b'K': return 'LEFT'
-            if key == b'M': return 'RIGHT'
-        elif key in (b'w', b'W'): return 'UP'
-        elif key in (b's', b'S'): return 'DOWN'
-        elif key in (b'a', b'A'): return 'LEFT'
-        elif key in (b'd', b'D'): return 'RIGHT'
-        elif key == b'\r': return 'ENTER'
-        elif key == b'\x1b': return 'ESC'
-        elif key == b' ': return 'SPACE'
-        elif key in (b'q', b'Q'): return 'QUIT'
-        return key.decode('ascii', errors='ignore')
-    else:
-        import tty, termios, select
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
-        try:
-            tty.setraw(fd)
-            ch = os.read(fd, 1)
-            if ch == b'\x1b':
-                rlist, _, _ = select.select([fd], [], [], 0.1)
-                if not rlist: return 'ESC'
-                seq = os.read(fd, 2)
-                if seq in (b'[A', b'OA'): return 'UP'
-                if seq in (b'[B', b'OB'): return 'DOWN'
-                if seq in (b'[C', b'OC'): return 'RIGHT'
-                if seq in (b'[D', b'OD'): return 'LEFT'
-                return 'ESC'
-            if ch == b'\x03': return 'CTRL_C'
-            if ch in (b'w', b'W'): return 'UP'
-            if ch in (b's', b'S'): return 'DOWN'
-            if ch in (b'a', b'A'): return 'LEFT'
-            if ch in (b'd', b'D'): return 'RIGHT'
-            if ch in (b'\r', b'\n'): return 'ENTER'
-            if ch == b' ': return 'SPACE'
-            if ch in (b'q', b'Q'): return 'QUIT'
-            return ch.decode('ascii', errors='ignore')
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 # def main():
 #     parser = argparse.ArgumentParser()
@@ -232,6 +185,7 @@ def play_bag_direct(bag_path, loop, rate, topics_filter):
 
     filter_set = final_topics if final_topics else None
 
+    print(f"Топики: {filter_set}")
     print(f"Загрузка файла: {bag_path} ...")
     msgs, type_map = load_bag(bag_path, filter_set)
     if not msgs:
@@ -244,6 +198,55 @@ def play_bag_direct(bag_path, loop, rate, topics_filter):
     node.destroy_node()
     rclpy.shutdown()
 
+
+def get_key_blocking():
+    if sys.platform == 'win32':
+        import msvcrt
+        key = msvcrt.getch()
+        if key == b'\x03': return 'CTRL_C'
+        if key in (b'\x00', b'\xe0'):
+            key = msvcrt.getch()
+            if key == b'H': return 'UP'
+            if key == b'P': return 'DOWN'
+            if key == b'K': return 'LEFT'
+            if key == b'M': return 'RIGHT'
+        elif key in (b'w', b'W'): return 'UP'
+        elif key in (b's', b'S'): return 'DOWN'
+        elif key in (b'a', b'A'): return 'LEFT'
+        elif key in (b'd', b'D'): return 'RIGHT'
+        elif key == b'\r': return 'ENTER'
+        elif key == b'\x1b': return 'ESC'
+        elif key == b' ': return 'SPACE'
+        elif key in (b'q', b'Q'): return 'QUIT'
+        return key.decode('ascii', errors='ignore')
+    else:
+        import tty, termios, select
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            ch = os.read(fd, 1)
+            if ch == b'\x1b':
+                rlist, _, _ = select.select([fd], [], [], 0.1)
+                if not rlist: return 'ESC'
+                seq = os.read(fd, 2)
+                if seq in (b'[A', b'OA'): return 'UP'
+                if seq in (b'[B', b'OB'): return 'DOWN'
+                if seq in (b'[C', b'OC'): return 'RIGHT'
+                if seq in (b'[D', b'OD'): return 'LEFT'
+                return 'ESC'
+            if ch == b'\x03': return 'CTRL_C'
+            if ch in (b'w', b'W'): return 'UP'
+            if ch in (b's', b'S'): return 'DOWN'
+            if ch in (b'a', b'A'): return 'LEFT'
+            if ch in (b'd', b'D'): return 'RIGHT'
+            if ch in (b'\r', b'\n'): return 'ENTER'
+            if ch == b' ': return 'SPACE'
+            if ch in (b'q', b'Q'): return 'QUIT'
+            return ch.decode('ascii', errors='ignore')
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            
 def main():
     parser = argparse.ArgumentParser(description="ROS2 Bag RAM Player")
     parser.add_argument("bag_path", nargs="?", default=None, help="Пусть к папке/файлу bag. Если не указан — запуск TUI.")

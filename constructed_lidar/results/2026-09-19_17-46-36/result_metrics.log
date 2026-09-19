@@ -1,0 +1,7 @@
+──────────────────────── Results for RosbagDataset Sequence roundT_doubleT ─────────────────────────
++-------------------+-------+-------+
+|            Metric | Value | Units |
++===================+=======+=======+
+| Average Frequency |   9   | Hz    |
+|   Average Runtime |  111  | ms    |
++-------------------+-------+-------+

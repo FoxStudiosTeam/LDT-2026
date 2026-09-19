@@ -1,0 +1,7 @@
+────────────────── Results for RosbagDataset Sequence roundT_pressureGate_roundT ───────────────────
++-------------------+-------+-------+
+|            Metric | Value | Units |
++===================+=======+=======+
+| Average Frequency |   8   | Hz    |
+|   Average Runtime |  122  | ms    |
++-------------------+-------+-------+

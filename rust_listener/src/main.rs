@@ -10,7 +10,7 @@ mod engine;
 use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
-use shared::error::{AppError, ErrorType};
+use shared::error::AppError;
 use shared::types::AppPointCloud;
 use tracing::*;
 use tracing_subscriber::EnvFilter;
@@ -18,7 +18,7 @@ use tracing_subscriber::EnvFilter;
 use crate::debug::rerun::init_rerun;
 use crate::engine::engine_entry::entry;
 
-kaiv_utils::env_config! {
+shared::env_config! {
     ".env" => pub (crate) ENV = pub (crate) Env {
         RERUN_URL : String = "rerun+http://host.docker.internal:9876/proxy".to_string(),
         ROS_DOMAIN_ID : u16 = 0
@@ -35,6 +35,8 @@ async fn main() -> Result<(), AppError> {
         .unwrap_or_else(|_| EnvFilter::new("info,rustdds=error"));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
+    info!("{}", ENV.ROS_DOMAIN_ID);
+
     Env::fetch();
 
     let cloud = Arc::<RwLock<AppPointCloud>>::new(RwLock::new(AppPointCloud::new()));
@@ -49,7 +51,6 @@ async fn main() -> Result<(), AppError> {
     info!("[INIT] Успешно подписались.");
 
     let _ = entry(point_cloud_stream, rerun, Arc::clone(&cloud)).await?;
-
     info!("[POST] Поток сообщений завершён.");
     debug::std::print_banner();
     info!("[END] Завершение работы клиента");

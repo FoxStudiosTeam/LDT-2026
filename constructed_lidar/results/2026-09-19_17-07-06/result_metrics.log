@@ -1,0 +1,7 @@
+─────────────────────── Results for RosbagDataset Sequence doubleT_obstacle ────────────────────────
++-------------------+-------+-------+
+|            Metric | Value | Units |
++===================+=======+=======+
+| Average Frequency |   4   | Hz    |
+|   Average Runtime |  241  | ms    |
++-------------------+-------+-------+

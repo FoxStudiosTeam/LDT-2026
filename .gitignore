@@ -6,6 +6,8 @@ fix.ps1
 target
 !dataset/Dockerfile
 .env
+.cache
+*.ply
 
 # --- Rust/Cargo ---
 /target/
@@ -47,4 +49,4 @@ Makefile
 *.sublime-workspace
 
 # --- ПИТОНЧИК ---
-venv
+venv/
