@@ -33,7 +33,7 @@ kaiv_utils::env_config! {
 async fn main() -> Result<(), AppError> {
     let filter = EnvFilter::try_from_default_env()
         //  формат: package=level "," - разделитель
-        .unwrap_or_else(|_| EnvFilter::new("info,rustdds=error"));
+        .unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
     Env::fetch();
@@ -52,7 +52,6 @@ async fn main() -> Result<(), AppError> {
 
     let point_cloud_stream =
         ros2_data_extraction::init_sub(ENV.ROS_DOMAIN_ID, Arc::clone(&cloud)).await?;
-    info!("[INIT] Успешно подписались.");
 
     let _ = entry(point_cloud_stream, rerun, Arc::clone(&cloud)).await?;
 

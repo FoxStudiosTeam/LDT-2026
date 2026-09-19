@@ -4,7 +4,7 @@ use ros2_interfaces_jazzy_serde::sensor_msgs::msg::PointCloud2;
 use shared::types::AppPointCloud;
 
 use shared::error::{AppError, ErrCtx, ErrorType};
-use tracing::info;
+use tracing::{error, info};
 
 use crate::parser::{extract_and_validate_layout, parse_coords};
 mod discovery;
@@ -18,15 +18,31 @@ pub struct PointCloudStream {
     ros2: ros::Ros,
     subscription: ros2_client::Subscription<PointCloud2>,
     cached_cloud: Arc<RwLock<AppPointCloud>>,
-    frame_num: u64,
+    frame_num: u64
 }
 
 impl PointCloudStream {
     pub async fn next(&mut self) -> Result<Option<u64>, AppError> {
         self.frame_num += 1;
+
+        tokio::time::sleep_until(tokio::time::Instant::now() + std::time::Duration::from_millis(100)).await;
+        let started = std::time::Instant::now();
+        info!(
+            "[FRAME {}] кадр ожидается",
+            self.frame_num
+        );
         let (point_cloud, _msg) = self.subscription.async_take().await.app_error()?;
+        let info = _msg.sample_identity();
+        info!(
+            "[FRAME {}] кадр получен за {:?}cек\nseq{:?} writer{:?}",
+            self.frame_num, started.elapsed().as_secs_f32(),info.sequence_number, info.writer_guid
+        );
         let layout = extract_and_validate_layout(&point_cloud)?;
         parse_coords(&point_cloud, Arc::clone(&self.cached_cloud), &layout)?;
+        info!(
+            "[FRAME {}] кадр получен и обработан за {:?}cек",
+            self.frame_num, started.elapsed().as_secs_f32()
+        );
         Ok(Some(self.frame_num))
     }
 }
@@ -41,10 +57,16 @@ pub async fn init_sub(
     info!("[ROS2] Поиск топика PointCloud2 в DDS сети...");
     let mut target_topic = None;
 
+    let mut subscribed: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     while let Ok(msg) = receiver.recv().await {
         if let ros2_client::NodeEvent::DDS(dds_event) = msg {
             if let Some(topic) = discovery::find_pointcloud_topic(dds_event) {
-                info!("[ROS2] Успешно обнаружен топик лидара: {}", topic.name);
+                if !subscribed.insert(topic.name.clone()) {
+                    info!("[DISCOVERY] Дубликат обнаружения топика {}, пропускаю повторную подписку", topic.name);
+                    continue;
+                }
+                info!("[DISCOVERY] Успешно обнаружен топик лидара: {}", topic.name);
                 target_topic = Some(topic);
                 break;
             }
@@ -58,12 +80,16 @@ pub async fn init_sub(
         }
     };
 
+    println!("[SUBSCRIBE] Подписка №{} на топик {}", subscribed.len(), topic.name);
+
     let subscription = ros::node::subscribe(ros2.mutable_node(), topic)?;
+
+    println!("[SUBSCRIBE] Успешная подписка");
 
     Ok(PointCloudStream {
         ros2,
         subscription,
         cached_cloud: cloud,
-        frame_num: 0,
+        frame_num: 0
     })
 }

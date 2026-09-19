@@ -37,7 +37,7 @@ pub async fn entry(
 
     while let Some(a) = point_cloud_stream.next().await? {
         frame_id = a;
-        info!("message getted");
+        info!("[ENGINE] message getted");
 
         // 2. Проверяем лимит без блокировок
         if active_tasks.load(Ordering::Relaxed) >= 4 {
@@ -53,6 +53,10 @@ pub async fn entry(
         let active_tasks_clone = active_tasks.clone();
 
         tokio::spawn(async move {
+            info!(
+                "[ENGINE] [Frame {}] в асинхронной обработке",
+                frame_id
+            );
             // 4. Активируем гвард. Как только таска завершится или упадет — счетчик уменьшится
             let _guard = TaskGuard {
                 counter: active_tasks_clone,
@@ -60,24 +64,67 @@ pub async fn entry(
             let point_cloud_lock = point_cloud.clone();
 
             tokio::task::spawn_blocking(move || {
+                info!(
+                    "[ENGINE] [Frame {}] в асинхронной обработке (spawn blocking)",
+                    frame_id
+                );
+
                 let point_cloud = point_cloud_lock
                     .read()
                     // отъебнет так, что в логах не покажется
                     // .map_err(|e| Error::AbstractError { msg: e.to_string() }).unwrap()
                     .expect(&format!("⚠️ Мутекс отравился ☠️ {} {}", file!(), line!()));
 
+                info!(
+                    "[ENGINE] [Frame {}] pc lock",
+                    frame_id
+                );
+
                 let number = shared::types::ProcessingQueue::READ;
+
+                info!(
+                    "[ENGINE] [Frame {}] number",
+                    frame_id
+                );
+
                 let mut point_cloud_write = point_cloud_lock.write().expect(&format!("⚠️ Мутекс отравился ☠️ {} {}", file!(), line!()));
-                
+
+                info!(
+                    "[ENGINE] [Frame {}] pc write",
+                    frame_id
+                );
+
                 {
+
+                    info!(
+                        "[ENGINE] [Frame {}] block in",
+                        frame_id
+                    );
+
                     point_cloud_write.can_write = false;
                     point_cloud_write.change_state(shared::types::ProcessingQueue::NEXT, shared::types::ProcessingQueue::READ);
                     point_cloud_write.can_write = true;
+
+                    info!(
+                        "[ENGINE] [Frame {}] block out",
+                        frame_id
+                    );
                 }
 
                 let timestamp_ns = point_cloud.timestamp[number];
-                
+
+                info!(
+                    "[ENGINE] [Frame {}] pc.ts",
+                    frame_id
+                );
+
                 let stats = point_cloud.compute_stats(number);
+
+                info!(
+                    "[ENGINE] [Frame {}] pc compute stats",
+                    frame_id
+                );
+
                 debug::std::print_frame_info(frame_id, timestamp_ns, &stats);
                 recording_stream.set_time(
                     "ros_time",
@@ -85,14 +132,28 @@ pub async fn entry(
                 );
                 recording_stream.set_time_sequence("frame", frame_id as i64);
 
+                info!(
+                    "[ENGINE] [Frame {}] before rerun",
+                    frame_id
+                );
+
                 // Пушим данные в сеть (Rerun визуализация)
                 debug::helper::log_raw_cloud(&recording_stream, &point_cloud).unwrap();
                 debug::helper::log_debug_overlays(&recording_stream, &point_cloud, &stats)
                     // .map_err(|e| Error::AbstractError { msg: e.to_string() })
                     .expect(&format!("⚠️ Мутекс отравился ☠️ {} {}", file!(), line!()));
+
+                info!(
+                    "[ENGINE] [Frame {}] after",
+                    frame_id
+                );
             })
             .await
             .unwrap();
+            info!(
+                "[ENGINE] [Frame {}] обработка завершена",
+                frame_id
+            );
         });
     }
 
