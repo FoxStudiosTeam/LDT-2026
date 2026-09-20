@@ -12,7 +12,7 @@ impl Ros {
         let context = context::create_context(domain_id)?;
         let mut node = node::create_node(&context)?;
 
-        let _ = node::start_spinner(&mut node);
+        node::start_spinner(&mut node)?;
 
         Ok(Self { context, node })
     }

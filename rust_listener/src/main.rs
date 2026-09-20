@@ -43,7 +43,9 @@ async fn main() -> Result<(), AppError> {
     let z_ptr = pin_gpu(SIZE);
     let i_ptr = pin_gpu(SIZE);
 
-    let cloud = Arc::<RwLock<AppPointCloud>>::new(RwLock::new(AppPointCloud::new(x_ptr, y_ptr, z_ptr, i_ptr)));
+    let cloud = Arc::<RwLock<AppPointCloud>>::new(RwLock::new(AppPointCloud::new(
+        x_ptr, y_ptr, z_ptr, i_ptr,
+    )));
 
     debug::std::print_banner();
     info!("[PRE INIT] подготовка стримов");
