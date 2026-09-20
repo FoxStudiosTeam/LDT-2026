@@ -3,8 +3,9 @@ members = [
     "cuda-pipeline",
     "rust_listener",
     "data-extraction",
-    "large_processor",
+    "middleman",
     "shared",
+    "jitter_test",
 ]
 resolver = "2"
 
@@ -16,4 +17,4 @@ edition = "2024"
 cuda-pipeline = { path = "cuda-pipeline" }
 ros2_data_extraction = { path = "data-extraction" }
 shared = {path = "shared"}
-large_processor = {path = "large_processor"}
+middleman = {path = "middleman"}

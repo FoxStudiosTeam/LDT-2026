@@ -83,10 +83,6 @@ impl Ros {
 ///  2. СРАЗУ берём receiver (bounded(8) — канал маленький!)
 ///  3. читаем события
 pub async fn discover_pointcloud(ros: &mut Ros) -> Result<DiscoveredTopic, AppError> {
-    // 1. Сначала спиннер — без него status_receiver() паникует
-    ros.start_spinner()?;
-
-    // 2. Сразу же берём receiver, пока канал не успел переполниться
     let receiver = ros.node.status_receiver();
 
     info!("[ROS2] Ожидание PointCloud2 в DDS-сети...");
@@ -137,11 +133,11 @@ pub fn subscribe_empty(
         )
         .app_error()?;
 
-    let qos = QosPolicies::builder()
-        .reliability(ros2_client::rustdds::policy::Reliability::BestEffort)
-        .build();
+    // let qos = QosPolicies::builder()
+    //     .reliability(ros2_client::rustdds::policy::Reliability::BestEffort)
+    //     .build();
 
-    node.create_subscription::<()>(&t, Some(qos)).app_error()
+    node.create_subscription::<()>(&t, None).app_error()
 }
 
 // ─── Parse ────────────────────────────────────────────────────────────────────

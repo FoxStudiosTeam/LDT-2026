@@ -33,11 +33,14 @@ pub async fn entry(
 ) -> Result<(), AppError> {
     let mut frame_id: u64 = 0;
     let recording_stream = Arc::new(recording_stream);
-    let active_tasks = Arc::new(AtomicUsize::new(0));
 
+    let mut last = std::time::Instant::now();
     while let Some(a) = point_cloud_stream.next().await? {
         frame_id = a;
 
+        let now = std::time::Instant::now();
+        info!("[{}ms] FRAME {a}", now.duration_since(last).as_millis());
+        last = now;
         // 2. Проверяем лимит без блокировок
         if active_tasks.load(Ordering::Relaxed) >= 4 {
             info!("Скипаем кадр {}, так как обработка перегружена", frame_id);
@@ -59,14 +62,20 @@ pub async fn entry(
             let point_cloud_lock = point_cloud.clone();
 
             tokio::task::spawn_blocking(move || {
-
-                let mut point_cloud_write = point_cloud_lock.write().expect(&format!("⚠️ Мутекс отравился ☠️ {} {}", file!(), line!()));
+                let mut point_cloud_write = point_cloud_lock.write().expect(&format!(
+                    "⚠️ Мутекс отравился ☠️ {} {}",
+                    file!(),
+                    line!()
+                ));
                 {
                     point_cloud_write.can_write = false;
-                    point_cloud_write.change_state(shared::types::ProcessingQueue::NEXT, shared::types::ProcessingQueue::READ);
+                    point_cloud_write.change_state(
+                        shared::types::ProcessingQueue::NEXT,
+                        shared::types::ProcessingQueue::READ,
+                    );
                     point_cloud_write.can_write = true;
                 }
-                
+
                 let point_cloud = point_cloud_lock
                     .read()
                     // отъебнет так, что в логах не покажется
@@ -74,7 +83,6 @@ pub async fn entry(
                     .expect(&format!("⚠️ Мутекс отравился ☠️ {} {}", file!(), line!()));
 
                 let number = shared::types::ProcessingQueue::READ;
-
 
                 let timestamp_ns = point_cloud.timestamp[number];
                 let stats = point_cloud.compute_stats(number);

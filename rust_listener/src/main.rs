@@ -38,8 +38,6 @@ async fn main() -> Result<(), AppError> {
 
     info!("{}", ENV.ROS_DOMAIN_ID);
 
-    Env::fetch();
-
     let x_ptr = pin_gpu(SIZE);
     let y_ptr = pin_gpu(SIZE);
     let z_ptr = pin_gpu(SIZE);

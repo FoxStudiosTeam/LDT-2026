@@ -15,7 +15,7 @@ from rosidl_runtime_py.utilities import get_message
 
 import rosbag2_py
 
-DATASET_DIR = "/app/dataset"
+DATASET_DIR = "../dataset"
 
 @dataclass
 class Msg:

@@ -1,5 +1,5 @@
 [package]
-name = "large_processor"
+name = "middleman"
 version.workspace = true
 edition.workspace = true
 

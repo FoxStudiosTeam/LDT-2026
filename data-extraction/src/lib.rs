@@ -18,7 +18,7 @@ pub struct PointCloudStream {
     ros2: ros::Ros,
     subscription: ros2_client::Subscription<PointCloud2>,
     cached_cloud: Arc<RwLock<AppPointCloud>>,
-    frame_num: u64
+    frame_num: u64,
 }
 
 impl PointCloudStream {
@@ -47,7 +47,10 @@ pub async fn init_sub(
         if let ros2_client::NodeEvent::DDS(dds_event) = msg {
             if let Some(topic) = discovery::find_pointcloud_topic(dds_event) {
                 if !subscribed.insert(topic.name.clone()) {
-                    info!("[DISCOVERY] Дубликат обнаружения топика {}, пропускаю повторную подписку", topic.name);
+                    info!(
+                        "[DISCOVERY] Дубликат обнаружения топика {}, пропускаю повторную подписку",
+                        topic.name
+                    );
                     continue;
                 }
                 info!("[DISCOVERY] Успешно обнаружен топик лидара: {}", topic.name);
@@ -64,7 +67,11 @@ pub async fn init_sub(
         }
     };
 
-    println!("[SUBSCRIBE] Подписка №{} на топик {}", subscribed.len(), topic.name);
+    println!(
+        "[SUBSCRIBE] Подписка №{} на топик {}",
+        subscribed.len(),
+        topic.name
+    );
 
     let subscription = ros::node::subscribe(ros2.mutable_node(), topic)?;
 
@@ -74,6 +81,6 @@ pub async fn init_sub(
         ros2,
         subscription,
         cached_cloud: cloud,
-        frame_num: 0
+        frame_num: 0,
     })
 }

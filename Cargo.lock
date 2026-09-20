@@ -1301,6 +1301,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cdr"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9617422bf43fde9280707a7e90f8f7494389c182f5c70b0f67592d0f06d41dfa"
+dependencies = [
+ "byteorder",
+ "serde",
+]
+
+[[package]]
 name = "cdr-encoding"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4588,6 +4598,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "jitter_test"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cdr",
+ "futures",
+ "ros2-client",
+ "ros2-interfaces-jazzy-serde",
+ "rustdds",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "jni"
 version = "0.22.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4774,24 +4799,6 @@ dependencies = [
  "euclid",
  "polycool",
  "smallvec",
-]
-
-[[package]]
-name = "large_processor"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "futures",
- "rerun",
- "ros2-client",
- "ros2-interfaces-jazzy-serde",
- "ros2_data_extraction",
- "serde",
- "shared",
- "thiserror 2.0.20",
- "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -5121,6 +5128,24 @@ checksum = "c73f5c649995a115e1a0220b35e4df0a1294500477f97a91d0660fb5abeb574a"
 dependencies = [
  "libc",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "middleman"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "rerun",
+ "ros2-client",
+ "ros2-interfaces-jazzy-serde",
+ "ros2_data_extraction",
+ "serde",
+ "shared",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
