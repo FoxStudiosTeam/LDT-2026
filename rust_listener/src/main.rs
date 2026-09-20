@@ -11,7 +11,8 @@ use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
 use cuda_pipeline::pin_gpu;
-use shared::error::{AppError, ErrorType};
+use rerun::*;
+use shared::error::{AppError, ErrCtx, ErrorType};
 use shared::types::{AppPointCloud, SIZE};
 use tracing::*;
 use tracing_subscriber::EnvFilter;
@@ -22,7 +23,8 @@ use crate::engine::engine_entry::entry;
 kaiv_utils::env_config! {
     ".env" => pub (crate) ENV = pub (crate) Env {
         RERUN_URL : String = "rerun+http://host.docker.internal:9876/proxy".to_string(),
-        ROS_DOMAIN_ID : u16 = 0
+        ROS_DOMAIN_ID : u16 = 0,
+        TEST_RERUN : bool = false
     }
 }
 
@@ -51,6 +53,12 @@ async fn main() -> Result<(), AppError> {
     info!("[PRE INIT] подготовка стримов");
 
     let rerun = init_rerun().await?;
+
+    if ENV.TEST_RERUN {
+        info!("TEST RERUN");
+        debug::rerun::test_rerun(&rerun);
+        return Ok(());
+    }
 
     let point_cloud_stream =
         ros2_data_extraction::init_sub(ENV.ROS_DOMAIN_ID, Arc::clone(&cloud)).await?;

@@ -109,9 +109,10 @@ where
 {
     #[track_caller]
     fn app_error(self) -> Result<T, AppError> {
+        let location = Location::caller();
         self.map_err(|e| AppError {
             kind: ErrorType::ExternalError(Box::new(e)),
-            location: Location::caller(),
+            location,
         })
     }
 }

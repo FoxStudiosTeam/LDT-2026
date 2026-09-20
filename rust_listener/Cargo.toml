@@ -19,3 +19,4 @@ shared.workspace = true
 kaiv_utils.workspace = true
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+ros2-interfaces-jazzy-serde = { version = "0.0.5", features = ["sensor_msgs"] }
