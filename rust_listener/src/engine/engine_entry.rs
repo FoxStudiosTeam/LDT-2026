@@ -40,6 +40,8 @@ pub async fn entry(
 
         info!("[Frame {a}] frame took");
 
+        info!("[Frame {a}]");
+
         // 2. Проверяем лимит без блокировок
         if active_tasks.load(Ordering::Relaxed) >= 4 {
             info!("Скипаем кадр {}, так как обработка перегружена", frame_id);
@@ -71,30 +73,28 @@ pub async fn entry(
             //         point_cloud_write.can_write = true;
             //     }
             //
-            //     let point_cloud = point_cloud_lock
-            //         .read()
-            //         // отъебнет так, что в логах не покажется
-            //         // .map_err(|e| Error::AbstractError { msg: e.to_string() }).unwrap()
-            //         .expect(&format!("⚠️ Мутекс отравился ☠️ {} {}", file!(), line!()));
-            //
-            //     let number = shared::types::ProcessingQueue::READ;
-            //
-            //
-            //     let timestamp_ns = point_cloud.timestamp[number];
-            //     let stats = point_cloud.compute_stats(number);
-            //
-            //     debug::std::print_frame_info(frame_id, timestamp_ns, &stats);
-            //     recording_stream.set_time(
-            //         "ros_time",
-            //         rerun::TimeCell::from_duration_nanos(timestamp_ns),
-            //     );
-            //     recording_stream.set_time_sequence("frame", frame_id as i64);
-            //
-            //     // Пушим данные в сеть (Rerun визуализация)
-            //     debug::helper::log_raw_cloud(&recording_stream, &point_cloud).unwrap();
-            //     debug::helper::log_debug_overlays(&recording_stream, &point_cloud, &stats)
-            //         // .map_err(|e| Error::AbstractError { msg: e.to_string() })
-            //         .expect(&format!("⚠️ Мутекс отравился ☠️ {} {}", file!(), line!()));
+                let point_cloud = point_cloud_lock
+                    .read()
+                    // отъебнет так, что в логах не покажется
+                    // .map_err(|e| Error::AbstractError { msg: e.to_string() }).unwrap()
+                    .expect(&format!("⚠️ Мутекс отравился ☠️ {} {}", file!(), line!()));
+                let number = shared::types::ProcessingQueue::READ;
+
+                let timestamp_ns = point_cloud.timestamp[number];
+                let stats = point_cloud.compute_stats(number);
+
+                debug::std::print_frame_info(frame_id, timestamp_ns, &stats);
+                recording_stream.set_time(
+                    "ros_time",
+                    rerun::TimeCell::from_duration_nanos(timestamp_ns),
+                );
+                recording_stream.set_time_sequence("frame", frame_id as i64);
+
+                // Пушим данные в сеть (Rerun визуализация)
+                debug::helper::log_raw_cloud(&recording_stream, &point_cloud).unwrap();
+                debug::helper::log_debug_overlays(&recording_stream, &point_cloud, &stats)
+                    // .map_err(|e| Error::AbstractError { msg: e.to_string() })
+                    .expect(&format!("⚠️ Мутекс отравился ☠️ {} {}", file!(), line!()));
             // })
             // .await
             // .unwrap();
