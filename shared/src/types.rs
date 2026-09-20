@@ -1,3 +1,4 @@
+use core::fmt;
 use std::{mem, ops::{Deref, DerefMut, Index, IndexMut}};
 
 /// Статистика по облаку точек
@@ -38,7 +39,53 @@ impl CloudStats {
 
 #[repr(C)]
 pub struct CudaArray<const SIZE : usize> {
-    pub ptr : *mut f32
+    pub ptr : *mut f32,
+    pub length : usize
+}
+
+impl<const SIZE : usize> CudaArray<SIZE> {
+    pub fn get(&self, index : usize) -> Option<f32> {
+        if index >= self.length || self.ptr.is_null() {
+            return None;
+        }
+        unsafe {
+            Some(*self.ptr.add(index))
+        }
+    }
+
+    // Теперь берет истинный последний элемент, а не физический конец капы
+    pub fn last(&self) -> Option<&f32>{
+        if self.length == 0 || self.ptr.is_null() {
+            return None;
+        }
+
+        unsafe {
+            let last_ptr = self.ptr.add(self.length - 1);
+            Some(&*last_ptr)
+        }
+    }
+
+    pub fn push(&mut self, value: f32) {
+        if self.length == SIZE {
+            return;
+        }
+        unsafe {
+            let write_ptr = self.ptr.add(self.length);
+            *write_ptr = value;
+        }
+        self.length += 1;
+    }
+
+    // Сброс счетчика перед новым циклом записи из ROS2
+    #[inline(always)]
+    pub fn clear(&mut self) {
+        self.length = 0;
+    }
+
+    #[inline(always)]
+    pub fn cap(&self) -> usize {
+        SIZE
+    }
 }
 
 unsafe impl<const SIZE: usize> Send for CudaArray<SIZE> {}
@@ -51,7 +98,8 @@ impl<const SIZE : usize> Deref for CudaArray<SIZE> {
         if self.ptr.is_null() {
             panic!("Попытка разыменовать пустой указатель")
         }
-        unsafe { std::slice::from_raw_parts(self.ptr, SIZE) }
+        // Создаем слайс только до РЕАЛЬНОЙ заполненной длины
+        unsafe { std::slice::from_raw_parts(self.ptr, self.length) }
     }
 }
 
@@ -61,7 +109,8 @@ impl<const SIZE: usize> DerefMut for CudaArray<SIZE> {
         if self.ptr.is_null() {
             panic!("Попытка разыменовать пустой указатель")
         }
-        unsafe { std::slice::from_raw_parts_mut(self.ptr, SIZE) }
+        // Создаем слайс только до РЕАЛЬНОЙ заполненной длины
+        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.length) }
     }
 }
 
@@ -84,8 +133,6 @@ impl<T> IndexMut<ProcessingQueue> for TripleBuffer<T> {
 }
 
 pub const SIZE : usize = 2_000_000;
-
-// 307_200
 pub type AppPointCloud = PointCloud<SIZE>;
 
 pub struct PointCloud<const SIZE: usize> {
@@ -97,7 +144,7 @@ pub struct PointCloud<const SIZE: usize> {
     pub can_write : bool,
 
     pub ring : TripleBuffer<u16>,
-    pub length: TripleBuffer<usize>,
+    // Дублирующее поле "pub length: TripleBuffer<usize>" удалено, чтобы избежать рассинхронизации.
     pub height : TripleBuffer<u32>,
     pub width : TripleBuffer<u32>,
     pub is_dense: TripleBuffer<bool>,
@@ -107,7 +154,13 @@ pub struct PointCloud<const SIZE: usize> {
 impl<const SIZE : usize> PointCloud<SIZE> {
     pub const CAP : usize = SIZE;
 
-    // Передавать нужно предварительно выделенные буфферы из графической памяти (DMA)
+    pub fn clear(&mut self, queue : ProcessingQueue) {
+        self.x[queue].clear();
+        self.y[queue].clear();
+        self.z[queue].clear();
+        self.intensity[queue].clear();
+    }
+
     pub fn new(
         x_ptrs: [*mut f32; 3],
         y_ptrs: [*mut f32; 3],
@@ -115,9 +168,9 @@ impl<const SIZE : usize> PointCloud<SIZE> {
         i_ptrs: [*mut f32; 3],
     ) -> Self {
         let make_fields = |ptrs: [*mut f32; 3]| [
-            CudaArray { ptr: ptrs[0] },
-            CudaArray { ptr: ptrs[1] },
-            CudaArray { ptr: ptrs[2] }
+            CudaArray { ptr: ptrs[0], length: 0 },
+            CudaArray { ptr: ptrs[1], length: 0 },
+            CudaArray { ptr: ptrs[2], length: 0 }
         ];
 
         Self {
@@ -127,7 +180,6 @@ impl<const SIZE : usize> PointCloud<SIZE> {
             intensity: TripleBuffer(make_fields(i_ptrs)),
             can_write: true,
 
-            length: TripleBuffer([0;3]),
             width: TripleBuffer([0;3]),
             height: TripleBuffer([0;3]),
             ring: TripleBuffer([0;3]),
@@ -136,8 +188,9 @@ impl<const SIZE : usize> PointCloud<SIZE> {
         }
     }
 
+    #[inline(always)]
     pub fn is_empty(&self, queue : ProcessingQueue) -> bool {
-        return self.length[queue] == 0
+        self.len(queue) == 0
     }
 }
 
@@ -149,7 +202,6 @@ pub enum ProcessingQueue {
 }
 
 impl ProcessingQueue {
-    //  FSM состояний (Конечный автомат)
     #[inline(always)]
     pub fn next_step(&mut self){
         *self = match *self {
@@ -160,29 +212,39 @@ impl ProcessingQueue {
     }
 }
 
-impl<'a, const SIZE : usize> PointCloud<SIZE> {
+impl fmt::Display for ProcessingQueue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let numeric_value = *self as u8; 
+        write!(f, "Current state: {}", numeric_value)
+    }
+}
+
+impl<const SIZE : usize> PointCloud<SIZE> {
     pub fn iter(&self, queue: ProcessingQueue) -> impl Iterator<Item = (&f32, &f32, &f32, &f32)> {
-        let x_iter = self.x[queue][..self.length[queue]].iter();
-        let y_iter = self.y[queue][..self.length[queue]].iter();
-        let z_iter = self.z[queue][..self.length[queue]].iter();
-        let int_iter = self.intensity[queue][..self.length[queue]].iter();
+        let x_iter = self.x[queue].iter();
+        let y_iter = self.y[queue].iter();
+        let z_iter = self.z[queue].iter();
+        let int_iter = self.intensity[queue].iter();
 
         x_iter.zip(y_iter).zip(z_iter).zip(int_iter)
         .map(|(((x, y), z), intensity)| (x, y, z, intensity))
     }
 
+    #[inline(always)]
     pub fn len(&self, queue: ProcessingQueue) -> usize {
-        self.length[queue]
+        // Истинная длина теперь живет внутри CudaArray (x == y == z)
+        self.x[queue].length
     }
 
     pub fn compute_stats(&self, queue: ProcessingQueue) -> CloudStats {
         let mut cloud_stats = CloudStats::new();
+        let current_len = self.len(queue);
         
-        if self.length[queue] == 0 {
+        if current_len == 0 {
             return cloud_stats
         }
 
-        cloud_stats.n_points = self.length[queue];
+        cloud_stats.n_points = current_len;
 
         let (mut sum_x, mut sum_y, mut sum_z) = (0.0f32, 0.0f32, 0.0f32);
 
@@ -200,7 +262,7 @@ impl<'a, const SIZE : usize> PointCloud<SIZE> {
             cloud_stats.max_z = cloud_stats.max_z.max(z);
         }
 
-        let count = self.length[queue] as f32;
+        let count = current_len as f32;
         cloud_stats.centroid_x = sum_x / count;
         cloud_stats.centroid_y = sum_y / count;
         cloud_stats.centroid_z = sum_z / count;
@@ -210,7 +272,6 @@ impl<'a, const SIZE : usize> PointCloud<SIZE> {
         cloud_stats
     } 
 
-    // Заменить на макросы но тогда копировать на стек self.$x и после этого уже без self
     pub fn change_state(&mut self, queue_old : ProcessingQueue, queue_new : ProcessingQueue) {
         if !self.can_write {
             return;
@@ -231,19 +292,13 @@ impl<'a, const SIZE : usize> PointCloud<SIZE> {
         let mut ptr_old = self.intensity[queue_old].ptr;
         let mut ptr_new = self.intensity[queue_new].ptr;
         mem::swap(&mut ptr_old, &mut ptr_new);
-
-        let mut ptr_old = self.length[queue_old];
-        let mut ptr_new = self.length[queue_new];
-        mem::swap(&mut ptr_old, &mut ptr_new);
     }
 
     pub fn to_rerun(&self, queue: ProcessingQueue) -> impl Iterator<Item = [f32; 3]> + '_ {
-        let xs = self.x[queue][..self.length[queue]].iter();
-        let ys = self.y[queue][..self.length[queue]].iter();
-        let zs = self.z[queue][..self.length[queue]].iter();
+        let xs = self.x[queue].iter();
+        let ys = self.y[queue].iter();
+        let zs = self.z[queue].iter();
 
         xs.zip(ys).zip(zs).map(|((&x, &y), &z)| [x, y, z])
     }
-
 }
-

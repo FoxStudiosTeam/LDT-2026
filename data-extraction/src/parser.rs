@@ -135,13 +135,15 @@ pub fn parse_coords(
         return Ok(());
     }
 
-    let write_state = ProcessingQueue::WRITE;
 
     if width == 0 || height == 0 || message.data.is_empty() {
-        cloud.length[write_state] = 0;
         return Ok(());
     }
     let d = width * height;
+
+    let write_state = ProcessingQueue::WRITE;
+
+    cloud.clear(write_state);
 
     let total_points = width
         .checked_mul(height)
@@ -155,7 +157,6 @@ pub fn parse_coords(
     let data = &message.data;
 
     let point_chunks = data.chunks_exact(point_step).take(total_points);
-    let mut valid_count = 0;
 
     let x_off = layout.x_offset;
     let y_off = layout.y_offset;
@@ -192,16 +193,17 @@ pub fn parse_coords(
         };
 
         if x.is_finite() && y.is_finite() && z.is_finite() {
-            cloud.x[write_state][valid_count] = x;
-            cloud.y[write_state][valid_count] = y;
-            cloud.z[write_state][valid_count] = z;
-            cloud.intensity[write_state][valid_count] = intensity;
+            //cloud.x[write_state][valid_count] = x;
+            //cloud.y[write_state][valid_count] = y;
+            //cloud.z[write_state][valid_count] = z;
+            //cloud.intensity[write_state][valid_count] = intensity;
 
-            valid_count += 1;
+            cloud.x[write_state].push(x);
+            cloud.y[write_state].push(y);
+            cloud.z[write_state].push(z);
+            cloud.intensity[write_state].push(intensity);
         }
     }
-
-    cloud.length[write_state] = valid_count;
 
     cloud.width[write_state] = message.width;
     cloud.height[write_state] = message.height;

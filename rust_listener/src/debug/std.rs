@@ -4,7 +4,7 @@ use shared::types::CloudStats;
 use tracing::*;
 
 pub fn print_frame_info(frame_id: u64, timestamp_ns: i64, stats: &CloudStats) {
-    println!(
+    tracing::info!(
         "[FRAME {:4}] pts={:6} | t={} ns | \
         bbox x=[{:6.1},{:6.1}] y=[{:6.1},{:6.1}] z=[{:5.1},{:5.1}] | \
         centroid=({:.2},{:.2},{:.2}) | \
@@ -25,7 +25,7 @@ pub fn print_frame_info(frame_id: u64, timestamp_ns: i64, stats: &CloudStats) {
         stats.height
     );
 }
-
+ 
 // ─── Баннер ───────────────────────────────────────────────────────────────────
 
 pub fn print_banner() {

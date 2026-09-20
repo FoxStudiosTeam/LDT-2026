@@ -43,36 +43,43 @@ pub async fn entry(
         let recording_stream = recording_stream.clone();
 
         {
-                    let mut point_cloud_write = point_cloud.write().expect(&format!("⚠️ Мутекс отравился ☠️ {} {}", file!(), line!()));
-                    point_cloud_write.can_write = false;
-                    point_cloud_write.change_state(shared::types::ProcessingQueue::NEXT, shared::types::ProcessingQueue::READ);
-                    point_cloud_write.can_write = true;
-                }
+            let mut point_cloud_write = point_cloud.write().expect(&format!("⚠️ Мутекс отравился ☠️ {} {}", file!(), line!()));
+            point_cloud_write.can_write = false;
+            point_cloud_write.change_state(shared::types::ProcessingQueue::NEXT, shared::types::ProcessingQueue::READ);
+            let mut queue = shared::types::ProcessingQueue::NEXT;
+            tracing::info!("point 0 (x): {:?}, point last (x): {:?}, queue: {}, length: {}, cap: {}", point_cloud_write.x[queue].get(0), point_cloud_write.x[queue].last(), queue, point_cloud_write.len(queue),AppPointCloud::CAP);
+            queue.next_step();
+            tracing::info!("point 0 (x): {:?}, point last (x): {:?}, queue: {}, length: {}, cap: {}", point_cloud_write.x[queue].get(0), point_cloud_write.x[queue].last(), queue, point_cloud_write.len(queue),AppPointCloud::CAP);
+            queue.next_step();
+            tracing::info!("point 0 (x): {:?}, point last (x): {:?}, queue: {}, length: {}, cap: {}", point_cloud_write.x[queue].get(0), point_cloud_write.x[queue].last(), queue, point_cloud_write.len(queue),AppPointCloud::CAP);
             
-                let point_cloud = point_cloud
-                    .read()
-                    // отъебнет так, что в логах не покажется
-                    // .map_err(|e| Error::AbstractError { msg: e.to_string() }).unwrap()
-                    .expect(&format!("⚠️ Мутекс отравился ☠️ {} {}", file!(), line!()));
+            point_cloud_write.can_write = true;
+        }
             
-                let number = shared::types::ProcessingQueue::READ;
+        let point_cloud = point_cloud
+            .read()
+            // отъебнет так, что в логах не покажется
+            // .map_err(|e| Error::AbstractError { msg: e.to_string() }).unwrap()
+            .expect(&format!("⚠️ Мутекс отравился ☠️ {} {}", file!(), line!()));
+            
+        let number = shared::types::ProcessingQueue::READ;
             
             
-                let timestamp_ns = point_cloud.timestamp[number];
-                let stats = point_cloud.compute_stats(number);
+        let timestamp_ns = point_cloud.timestamp[number];
+        let stats = point_cloud.compute_stats(number);
             
-                debug::std::print_frame_info(frame_id, timestamp_ns, &stats);
-                recording_stream.set_time(
-                    "ros_time",
-                    rerun::TimeCell::from_duration_nanos(timestamp_ns),
-                );
-                recording_stream.set_time_sequence("frame", frame_id as i64);
+        debug::std::print_frame_info(frame_id, timestamp_ns, &stats);
+        recording_stream.set_time(
+            "ros_time",
+                rerun::TimeCell::from_duration_nanos(timestamp_ns),
+        );
+        recording_stream.set_time_sequence("frame", frame_id as i64);
             
-                // Пушим данные в сеть (Rerun визуализация)
-                debug::helper::log_raw_cloud(&recording_stream, &point_cloud).unwrap();
-                debug::helper::log_debug_overlays(&recording_stream, &point_cloud, &stats)
-                    // .map_err(|e| Error::AbstractError { msg: e.to_string() })
-                    .expect(&format!("⚠️ Мутекс отравился ☠️ {} {}", file!(), line!()));
+        // Пушим данные в сеть (Rerun визуализация)
+        debug::helper::log_raw_cloud(&recording_stream, &point_cloud).unwrap();
+        debug::helper::log_debug_overlays(&recording_stream, &point_cloud, &stats)
+        // .map_err(|e| Error::AbstractError { msg: e.to_string() })
+        .expect(&format!("⚠️ Мутекс отравился ☠️ {} {}", file!(), line!()));
     }
 
     Ok(())

@@ -21,7 +21,6 @@ pub fn find_pointcloud_topic(
                 let mut message_type = writer.type_name.split("::");
 
                 let topic_name = writer.topic_name.strip_prefix("rt")?;
-
                 Some(DiscoveredTopic {
                     name: topic_name.to_owned(),
                     msg_type: MessageTypeName::new(

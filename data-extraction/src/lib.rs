@@ -25,7 +25,7 @@ impl PointCloudStream {
     pub async fn next(&mut self) -> Result<Option<u64>, AppError> {
         self.frame_num += 1;
 
-        tracing::debug!("Waiting for PointCloud2...");
+        tracing::info!("Waiting for PointCloud2...");
 
         let result = self.subscription.async_take().await;
 
@@ -38,7 +38,7 @@ impl PointCloudStream {
 
         let (point_cloud, _msg) = result.app_error()?;
 
-        tracing::debug!(
+        tracing::info!(
             width = point_cloud.width,
             height = point_cloud.height,
             fields = point_cloud.fields.len(),
@@ -49,7 +49,7 @@ impl PointCloudStream {
         );
 
         for field in &point_cloud.fields {
-            tracing::debug!(
+            tracing::info!(
                 name = %field.name,
                 offset = field.offset,
                 datatype = field.datatype,
