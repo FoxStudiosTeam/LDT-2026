@@ -9936,6 +9936,7 @@ dependencies = [
  "futures",
  "ros2-client",
  "ros2-interfaces-jazzy-serde",
+ "rustdds",
  "shared",
  "tokio",
  "tracing",

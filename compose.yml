@@ -1,14 +1,13 @@
 version: '3.8'
 
 services:
-  # 1. Сервис плеера
+  # 1. Сервис плеера — остаётся на ROS2
   ros2_dataset_player:
     build:
       context: .
       dockerfile: ./dataset/Dockerfile
     container_name: ros2_dataset_player
-    # ВЫПИЛИЛИ networks
-    network_mode: "host" # <--- ПУСКАЕМ СЕТЬ НАПРЯМУЮ ЧЕРЕЗ ХОСТ
+    network_mode: "host"
     ipc: "host"
     shm_size: '2gb'
     ulimits:
@@ -17,38 +16,39 @@ services:
         hard: 65535
     environment:
       - ROS_DOMAIN_ID=42
-      - ROS_LOCALHOST_ONLY=1 # <--- Запрещаем DDS улетать в твой роутер/Wi-Fi
+      - ROS_LOCALHOST_ONLY=1
     volumes:
       - ./dataset:/app/dataset:ro
     command: >
       bash -c "
         echo '► [DATASET] Поехали!' &&
-        ros2 bag play /app/dataset/doubleT_obstacle --loop --read-ahead-queue-size 10
+        ros2 bag play /app/dataset/roundT_doubleT --loop --read-ahead-queue-size 10
       "
 
-  # 2. Твое Rust-приложение
+  # 2. Rust-приложение — без ROS2, чистый ros2-client/rustdds
   rust_viewer:
     build:
       context: .
       dockerfile: rust_listener/Dockerfile
     container_name: rust_viewer
-    # ВЫПИЛИЛИ networks и ports (порт 9876 теперь автоматом слушается на твоем localhost)
-    network_mode: "host" # <--- И СЮДА ТОЖЕ ХОСТОВУЮ СЕТЬ
+    network_mode: "host"
     ipc: "host"
     shm_size: '2gb'
+    cap_add:
+      - NET_ADMIN          # нужно, чтобы поднять net.core.rmem_max изнутри контейнера
     ulimits:
       nofile:
         soft: 1024
         hard: 65535
     environment:
       - ROS_DOMAIN_ID=42
-      - ROS_LOCALHOST_ONLY=1 # <--- И здесь закрываем контур локалхостом
+      - ROS_LOCALHOST_ONLY=1
     depends_on:
       - ros2_dataset_player
     deploy:
-        resources:
-          reservations:
-            devices:
-              - driver: nvidia
-                count: all
-                capabilities: [gpu]
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

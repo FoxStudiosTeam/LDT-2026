@@ -4,7 +4,7 @@ use ros2_interfaces_jazzy_serde::sensor_msgs::msg::PointCloud2;
 use shared::types::AppPointCloud;
 
 use shared::error::{AppError, ErrCtx, ErrorType};
-use tracing::info;
+use tracing::{error, info};
 
 use crate::parser::{extract_and_validate_layout, parse_coords};
 mod discovery;
@@ -18,7 +18,7 @@ pub struct PointCloudStream {
     ros2: ros::Ros,
     subscription: ros2_client::Subscription<PointCloud2>,
     cached_cloud: Arc<RwLock<AppPointCloud>>,
-    frame_num: u64,
+    frame_num: u64
 }
 
 impl PointCloudStream {
@@ -41,10 +41,16 @@ pub async fn init_sub(
     info!("[ROS2] Поиск топика PointCloud2 в DDS сети...");
     let mut target_topic = None;
 
+    let mut subscribed: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     while let Ok(msg) = receiver.recv().await {
         if let ros2_client::NodeEvent::DDS(dds_event) = msg {
             if let Some(topic) = discovery::find_pointcloud_topic(dds_event) {
-                info!("[ROS2] Успешно обнаружен топик лидара: {}", topic.name);
+                if !subscribed.insert(topic.name.clone()) {
+                    info!("[DISCOVERY] Дубликат обнаружения топика {}, пропускаю повторную подписку", topic.name);
+                    continue;
+                }
+                info!("[DISCOVERY] Успешно обнаружен топик лидара: {}", topic.name);
                 target_topic = Some(topic);
                 break;
             }
@@ -58,12 +64,16 @@ pub async fn init_sub(
         }
     };
 
+    println!("[SUBSCRIBE] Подписка №{} на топик {}", subscribed.len(), topic.name);
+
     let subscription = ros::node::subscribe(ros2.mutable_node(), topic)?;
+
+    println!("[SUBSCRIBE] Успешная подписка");
 
     Ok(PointCloudStream {
         ros2,
         subscription,
         cached_cloud: cloud,
-        frame_num: 0,
+        frame_num: 0
     })
 }
