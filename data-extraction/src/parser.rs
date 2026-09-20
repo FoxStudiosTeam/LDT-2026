@@ -1,7 +1,7 @@
 use std::sync::{Arc, RwLock};
 
-use ros2_interfaces_jazzy_serde::sensor_msgs::msg::{PointCloud2, PointField};
 use shared::error::{AppError, ErrorType};
+use shared::transport::{PointCloud2, PointField};
 use shared::types::{AppPointCloud, ProcessingQueue};
 
 #[derive(Debug, Clone, Copy)]
@@ -199,14 +199,13 @@ pub fn parse_coords(
 
             valid_count += 1;
         }
-
-        cloud.width[write_state] = message.width;
-        cloud.height[write_state] = message.height;
-        cloud.timestamp[write_state] =
-            message.header.stamp.sec as i64 * 1000000000 + message.header.stamp.nanosec as i64;
     }
 
     cloud.length[write_state] = valid_count;
+
+    cloud.width[write_state] = message.width;
+    cloud.height[write_state] = message.height;
+    cloud.timestamp[write_state] = message.header.stamp.sec as i64 * 1000000000 + message.header.stamp.nanosec as i64;
 
     cloud.change_state(write_state, ProcessingQueue::NEXT);
 

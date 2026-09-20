@@ -1,6 +1,6 @@
 use std::sync::{Arc, RwLock};
 
-use ros2_interfaces_jazzy_serde::sensor_msgs::msg::PointCloud2;
+use shared::transport::PointCloud2;
 use shared::types::AppPointCloud;
 
 use shared::error::{AppError, ErrCtx, ErrorType};
@@ -24,11 +24,46 @@ pub struct PointCloudStream {
 impl PointCloudStream {
     pub async fn next(&mut self) -> Result<Option<u64>, AppError> {
         self.frame_num += 1;
-        let (point_cloud, _msg) = self.subscription.async_take().await.app_error()?;
+
+        tracing::debug!("Waiting for PointCloud2...");
+
+        let result = self.subscription.async_take().await;
+
+        if let Err(ref e) = result {
+            tracing::error!(
+                error = ?e,
+                "PointCloud2 deserialization failed"
+            );
+        }
+
+        let (point_cloud, _msg) = result.app_error()?;
+
+        tracing::debug!(
+            width = point_cloud.width,
+            height = point_cloud.height,
+            fields = point_cloud.fields.len(),
+            point_step = point_cloud.point_step,
+            row_step = point_cloud.row_step,
+            data_len = point_cloud.data.len(),
+            "Received PointCloud2"
+        );
+
+        for field in &point_cloud.fields {
+            tracing::debug!(
+                name = %field.name,
+                offset = field.offset,
+                datatype = field.datatype,
+                count = field.count,
+                "PointCloud2 field"
+            );
+        }
+
         let layout = extract_and_validate_layout(&point_cloud)?;
         parse_coords(&point_cloud, Arc::clone(&self.cached_cloud), &layout)?;
+
         Ok(Some(self.frame_num))
     }
+
 }
 
 pub async fn init_sub(
@@ -38,42 +73,59 @@ pub async fn init_sub(
     let mut ros2 = ros::Ros::new(domain_id)?;
     let receiver = ros2.node().status_receiver();
 
-    info!("[ROS2] Поиск топика PointCloud2 в DDS сети...");
-    let mut target_topic = None;
+    info!("[ROS2] Ожидание топика PointCloud2 в DDS сети...");
 
-    let mut subscribed: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut subscribed = std::collections::HashSet::<String>::new();
 
-    while let Ok(msg) = receiver.recv().await {
-        if let ros2_client::NodeEvent::DDS(dds_event) = msg {
-            if let Some(topic) = discovery::find_pointcloud_topic(dds_event) {
-                if !subscribed.insert(topic.name.clone()) {
-                    info!("[DISCOVERY] Дубликат обнаружения топика {}, пропускаю повторную подписку", topic.name);
-                    continue;
-                }
-                info!("[DISCOVERY] Успешно обнаружен топик лидара: {}", topic.name);
-                target_topic = Some(topic);
-                break;
+    let topic = loop {
+        let msg = match receiver.recv().await {
+            Ok(msg) => msg,
+            Err(err) => {
+                return ErrorType::message(format!(
+                    "DDS receiver channel closed: {err}"
+                ))
+                .err();
             }
-        }
-    }
+        };
 
-    let topic = match target_topic {
-        Some(t) => t,
-        None => {
-            return ErrorType::message("DDS receiver channel closed".to_string()).err();
+        let ros2_client::NodeEvent::DDS(dds_event) = msg else {
+            continue;
+        };
+
+        if let Some(topic) = discovery::find_pointcloud_topic(dds_event) {
+            if !subscribed.insert(topic.name.clone()) {
+                info!(
+                    "[DISCOVERY] Дубликат обнаружения топика {}, пропускаю",
+                    topic.name
+                );
+                continue;
+            }
+
+            info!(
+                "[DISCOVERY] Обнаружен PointCloud2: {}",
+                topic.name
+            );
+
+            break topic;
         }
     };
 
-    println!("[SUBSCRIBE] Подписка №{} на топик {}", subscribed.len(), topic.name);
+    info!(
+        "[SUBSCRIBE] Подписка на PointCloud2: {}",
+        topic.name
+    );
 
-    let subscription = ros::node::subscribe(ros2.mutable_node(), topic)?;
+    let subscription = ros::node::subscribe(
+        ros2.mutable_node(),
+        topic,
+    )?;
 
-    println!("[SUBSCRIBE] Успешная подписка");
+    info!("[SUBSCRIBE] Успешная подписка");
 
     Ok(PointCloudStream {
         ros2,
         subscription,
         cached_cloud: cloud,
-        frame_num: 0
+        frame_num: 0,
     })
 }

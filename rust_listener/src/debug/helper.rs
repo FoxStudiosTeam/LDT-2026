@@ -36,12 +36,12 @@ pub fn log_debug_overlays(
 ) -> Result<()> {
     // 1. Центр масс
     log_centroid(rec, stats)?;
-    // 2. Bounding box
-    //log_bbox(rec, stats)?;
-    // 3. Близкие точки (< NEAR_RANGE_M)
-    //log_near_points(rec, point_cloud)?;
-    // 4. Высокие точки (Z > HIGH_Z_M)
-    //log_high_points(rec, point_cloud)?;
+    //2. Bounding box
+    log_bbox(rec, stats)?;
+    //3. Близкие точки (< NEAR_RANGE_M)
+    log_near_points(rec, point_cloud)?;
+    //4. Высокие точки (Z > HIGH_Z_M)
+    log_high_points(rec, point_cloud)?;
     Ok(())
 }
 
