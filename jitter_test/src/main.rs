@@ -19,6 +19,7 @@ use ros2_client::{
 };
 
 use tracing::*;
+use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Clone)]
 pub struct DiscoveredTopic {
@@ -89,12 +90,20 @@ fn summarize(name: &str, xs: &[f64]) {
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<(), Error> {
+    let filter = EnvFilter::try_from_default_env()
+        //  формат: package=level "," - разделитель
+        .unwrap_or_else(|_| EnvFilter::new("info,rustdds=off"));
+    tracing_subscriber::fmt().with_env_filter(filter).init();
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         error!("Usage: jitter_bench <topic-substring-optional-unused> [num_samples]");
         error!("(topic is auto-discovered like in ros2_debug_viewer, arg kept for CLI parity)");
     }
     let num_samples: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(250);
+
+    let id = env::var("ROS_DOMAIN_ID").ok().and_then(|v| v.parse::<u16>().ok()).unwrap_or(42);
+
+    info!("D id: {id}");
 
     let opt = ContextOptions::new().domain_id(
         env::var("ROS_DOMAIN_ID")
@@ -153,14 +162,17 @@ async fn main() -> Result<(), Error> {
                 .map(|t| t.duration_since(Timestamp::ZERO).to_nanoseconds())
                 .unwrap_or(0);
             records.push((recv_ns, src_ts));
+            info!("🦀");
         }
     }
 
     // Пишем сырые данные
     let mut f = File::create("jitter_samples_rust.csv")?;
     writeln!(f, "recv_ns,source_timestamp_ns")?;
+    info!("jitter_samples_rust.csv");
     for (recv, src) in &records {
         writeln!(f, "{recv},{src}")?;
+        info!("{recv},{src}");
     }
 
     // recv-side inter-arrival
