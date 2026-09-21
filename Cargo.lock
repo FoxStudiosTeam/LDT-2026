@@ -9956,6 +9956,7 @@ dependencies = [
  "cuda-pipeline",
  "futures",
  "kaiv_utils",
+ "rayon",
  "rerun",
  "ros2-interfaces-jazzy-serde",
  "ros2_data_extraction",
@@ -10449,6 +10450,7 @@ name = "shared"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "rayon",
  "rerun",
  "ros2-client",
  "thiserror 2.0.20",

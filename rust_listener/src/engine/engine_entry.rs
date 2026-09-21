@@ -6,8 +6,14 @@ use std::sync::{
 use rerun::RecordingStream;
 use ros2_data_extraction::PointCloudStream;
 use ros2_interfaces_jazzy_serde::sensor_msgs::msg::PointCloud2;
-use shared::error::{AppError, ErrCtx, ErrorType};
-use shared::types::AppPointCloud;
+use shared::{
+    boxcast::{BoxCastAxis, BoxCastQuery},
+    types::AppPointCloud,
+};
+use shared::{
+    error::{AppError, ErrCtx, ErrorType},
+    types::ProcessingQueue,
+};
 use tokio::{sync::Semaphore, time};
 use tracing::*;
 
@@ -108,6 +114,18 @@ pub async fn entry(
                 if let Err(e) = recording_stream.log_debug_overlays(&point_cloud, &stats) {
                     error!("Ошибка логирования оверлеев в rerun: {e:?}");
                 }
+
+                // let q = BoxCastQuery {
+                //     center: [0.0, 0.0, 0.5],
+                //     half_size: [0.4, 0.3, 0.5],
+                //     distance: 5.0,
+                //     axis: BoxCastAxis::Forward,
+                //     threshold: 3,
+                // };
+                // let res = point_cloud.box_cast(ProcessingQueue::READ, &q);
+                // shared::debug_boxcast::log_boxcast(&recording_stream, &q, &res)
+                //     .app_error()
+                //     .ok();
             })
             .await
             .unwrap();
@@ -115,107 +133,4 @@ pub async fn entry(
     }
 
     Ok(())
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Point {
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
-    pub intensity: f32,
-}
-
-impl From<&Point> for rerun::Position3D {
-    #[inline]
-    fn from(p: &Point) -> Self {
-        rerun::Position3D::new(p.x, p.y, p.z)
-    }
-}
-
-pub fn parse_coords(pc: &PointCloud2) -> Result<Vec<Point>, AppError> {
-    let width = pc.width as usize;
-    let height = pc.height as usize;
-    let point_step = pc.point_step as usize;
-
-    let total_points = width.checked_mul(height).ok_or_else(|| {
-        ErrorType::message(format!(
-            "Overflow calculating total points: {}x{}",
-            width, height
-        ))
-    })?;
-
-    // Поиск смещений полей
-    let x_field = pc
-        .fields
-        .iter()
-        .find(|f| f.name == "x")
-        .ok_or(ErrorType::NoneError("field 'x' not found"))?;
-    let y_field = pc
-        .fields
-        .iter()
-        .find(|f| f.name == "y")
-        .ok_or(ErrorType::NoneError("field 'y' not found"))?;
-    let z_field = pc
-        .fields
-        .iter()
-        .find(|f| f.name == "z")
-        .ok_or(ErrorType::NoneError("field 'z' not found"))?;
-    let i_field = pc
-        .fields
-        .iter()
-        .find(|f| f.name == "intensity")
-        .ok_or(ErrorType::NoneError("field 'intensity' not found"))?;
-
-    let x_off = x_field.offset as usize;
-    let y_off = y_field.offset as usize;
-    let z_off = z_field.offset as usize;
-    let i_off = i_field.offset as usize;
-
-    // Валидация: смещения полей должны умещаться в размер одной точки (4 байта на f32)
-    if x_off + 4 > point_step
-        || y_off + 4 > point_step
-        || z_off + 4 > point_step
-        || i_off + 4 > point_step
-    {
-        return Err(
-            ErrorType::message("Field offset is out of point_step bounds".to_string()).into(),
-        );
-    }
-
-    let is_bigendian = pc.is_bigendian;
-    let mut result = Vec::with_capacity(total_points);
-
-    // Функция чтения f32 с учетом endianness и возможной невыровненности памяти
-    #[inline(always)]
-    unsafe fn read_f32_unaligned(ptr: *const u8, offset: usize, is_bigendian: bool) -> f32 {
-        let raw_bytes = std::ptr::read_unaligned(ptr.add(offset) as *const u32);
-        let bits = if is_bigendian {
-            u32::from_be(raw_bytes)
-        } else {
-            u32::from_le(raw_bytes)
-        };
-        f32::from_bits(bits)
-    }
-
-    let point_chunks = pc.data.chunks_exact(point_step).take(total_points);
-
-    for point_buf in point_chunks {
-        let ptr = point_buf.as_ptr();
-
-        let (x, y, z, intensity) = unsafe {
-            (
-                read_f32_unaligned(ptr, x_off, is_bigendian),
-                read_f32_unaligned(ptr, y_off, is_bigendian),
-                read_f32_unaligned(ptr, z_off, is_bigendian),
-                read_f32_unaligned(ptr, i_off, is_bigendian),
-            )
-        };
-
-        // Игнорируем точки с NaN (если точка «пустая»)
-        if pc.is_dense || (!x.is_nan() && !y.is_nan() && !z.is_nan()) {
-            result.push(Point { x, y, z, intensity });
-        }
-    }
-
-    Ok(result)
 }
