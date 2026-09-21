@@ -12,10 +12,10 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-COPY req /app/req
+COPY bag_player/req /app/req
 
 RUN python3 -m pip install --no-cache-dir -r /app/req
 
-COPY main.py /app/main.py
+COPY bag_player/main.py /app/main.py
 
 ENTRYPOINT ["/bin/bash", "-c", "source /opt/ros/humble/setup.bash && exec python3 /app/main.py \"$@\"", "--"]

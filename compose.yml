@@ -1,4 +1,6 @@
 services:
+  # 1. Сервис плеера — остаётся на ROS2
+  # АСТМАТИК 👎
   # ros2_dataset_player:
   #   build:
   #     context: .
@@ -12,37 +14,46 @@ services:
   #       soft: 1024
   #       hard: 65535
   #   environment:
-  #     ROS_DOMAIN_ID: 42
-  #     ROS_DISTRO: humble
+  #     - ROS_DOMAIN_ID=42
+  #     - ROS_LOCALHOST_ONLY=1
+  #   env_file:
+  #     - .env
   #   volumes:
   #     - ./dataset:/app/dataset:ro
   #   command: >
-  #     ros2 bag play
-  #     /app/dataset/doubleT_obstacle
-  #     --loop
-  #     --rate 0.1
-
-  bag_player:
+  #     bash -c "
+  #       echo '► [DATASET] Поехали!' &&
+  #       ros2 bag play /app/dataset/roundT_doubleT --loop --read-ahead-queue-size 50
+  #     "
+  ros2_fast_player:
     build:
-      context: ./bag_player
-      dockerfile: ./Dockerfile
-    container_name: bag_player
+      context: .
+      dockerfile: ./bag_player/Dockerfile
+    container_name: ros2_fast_player
     network_mode: "host"
     ipc: "host"
     environment:
-      ROS_DOMAIN_ID: 42
-      ROS_DISTRO: humble
+      - ROS_DOMAIN_ID=42
+      - ROS_LOCALHOST_ONLY=1
+    env_file:
+      - .env
     volumes:
-      - ./dataset:/app/dataset
-
+      - ./dataset:/app/dataset:ro
+    command: ["/app/dataset/doubleT_platform"]
+    
+  # 2. Rust-приложение — без ROS2, чистый ros2-client/rustdds
   rust_viewer:
     build:
       context: .
       dockerfile: ./rust_listener/Dockerfile
     container_name: rust_viewer
     network_mode: "host"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ipc: "host"
     shm_size: '2gb'
+    env_file:
+      - .env # ⚠️⚠️⚠️ ДОКЕР У МЕНЯ ПОЧЕМУ - ТО ДОСТУЧАТЬСЯ ТОЛЬКО ПО СЕТИ РОУТЕРА
     cap_add:
       - NET_ADMIN
     ulimits:
@@ -50,10 +61,10 @@ services:
         soft: 1024
         hard: 65535
     environment:
-      ROS_DOMAIN_ID: 42
-      ROS_DISTRO: humble
-    # depends_on:
-    #   - ros2_dataset_player
+      - ROS_DOMAIN_ID=42
+      - ROS_LOCALHOST_ONLY=1
+    depends_on:
+      - ros2_fast_player
     deploy:
       resources:
         reservations:

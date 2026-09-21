@@ -120,6 +120,11 @@ pub fn parse_coords(
     cloud: Arc<RwLock<AppPointCloud>>,
     layout: &PointLayout,
 ) -> Result<(), AppError> {
+    tracing::info!(
+        "Data {} of {}",
+        message.data.len(),
+        message.width * message.height
+    );
     let width = message.width as usize;
     let height = message.height as usize;
     let point_step = message.point_step as usize;
