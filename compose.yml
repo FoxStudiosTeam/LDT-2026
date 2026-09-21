@@ -56,6 +56,8 @@ services:
       - .env # ⚠️⚠️⚠️ ДОКЕР У МЕНЯ ПОЧЕМУ - ТО ДОСТУЧАТЬСЯ ТОЛЬКО ПО СЕТИ РОУТЕРА
     cap_add:
       - NET_ADMIN
+    volumes:
+      - ./frames:/frames
     ulimits:
       nofile:
         soft: 1024

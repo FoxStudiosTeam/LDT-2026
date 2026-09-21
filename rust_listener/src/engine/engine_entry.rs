@@ -1,84 +1,62 @@
-use std::sync::{
-    Arc, RwLock,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::sync::{Arc, RwLock};
 
 use rerun::RecordingStream;
 use ros2_data_extraction::PointCloudStream;
-use shared::{
-    boxcast::{BoxCastAxis, BoxCastQuery},
-    types::AppPointCloud,
-};
+use shared::types::AppPointCloud;
 use shared::{
     error::{AppError, ErrCtx},
     types::ProcessingQueue,
 };
 use tracing::*;
 
-use crate::debug::{self, helper::DebugStream};
-
-struct TaskGuard {
-    counter: Arc<AtomicUsize>,
-}
-
-impl Drop for TaskGuard {
-    fn drop(&mut self) {
-        // Гарантированный декремент при любом исходе (паника, ошибка, выход)
-        self.counter.fetch_sub(1, Ordering::SeqCst);
-    }
-}
+use crate::{
+    ENV,
+    debug::{self, helper::DebugStream},
+};
 
 pub async fn entry(
     mut point_cloud_stream: PointCloudStream,
     recording_stream: RecordingStream,
     point_cloud: Arc<RwLock<AppPointCloud>>,
 ) -> Result<(), AppError> {
-    let mut frame_id: u64 = 0;
     let recording_stream = Arc::new(recording_stream);
-    let active_tasks = Arc::new(AtomicUsize::new(0));
 
-    recording_stream
-        .log("point", &rerun::Points3D::new([(0.0, 0.0, 0.0)]))
-        .app_error()?;
-
-    while let Some(a) = point_cloud_stream.next().await? {
-        info!("[Frame {a}] frame took");
-        frame_id = a;
-
-        // 2. Проверяем лимит без блокировок
-        if active_tasks.load(Ordering::Relaxed) >= 4 {
-            info!("Скипаем кадр {}, так как обработка перегружена", frame_id);
-            continue;
+    while let Some(frame) = point_cloud_stream.next().await? {
+        tracing::info!("Frame {frame}");
+        if frame >= ENV.TOTAL_FRAMES {
+            return Ok(());
         }
+        let frame_id = frame;
 
-        // 3. Инкрементируем счетчик перед спавном
-        active_tasks.fetch_add(1, Ordering::SeqCst);
-
-        let point_cloud = point_cloud.clone();
+        let point_cloud_lock = point_cloud.clone();
         let recording_stream = recording_stream.clone();
-        let active_tasks_clone = active_tasks.clone();
 
-        tokio::spawn(async move {
-            // 4. Активируем гвард. Как только таска завершится или упадет — счетчик уменьшится
-            let _guard = TaskGuard {
-                counter: active_tasks_clone,
-            };
-            let point_cloud_lock = point_cloud.clone();
-            tokio::task::spawn_blocking(move || {
-                {
-                    let mut point_cloud_write = point_cloud_lock.write().expect(&format!(
-                        "⚠️ Мутекс отравился ☠️ {} {}",
-                        file!(),
-                        line!()
-                    ));
-                    point_cloud_write.can_write = false;
-                    point_cloud_write.change_state(
-                        ProcessingQueue::NEXT,
-                        ProcessingQueue::READ,
-                    );
-                    point_cloud_write.can_write = true;
-                }
+        tokio::task::spawn_blocking(move || {
+            let frame_start = std::time::Instant::now();
 
+            // 1. Ожидание лочки и переключение очередей (TripleBuffer swap)
+            let swap_start = std::time::Instant::now();
+            {
+                let mut point_cloud_write = point_cloud_lock.write().expect(&format!(
+                    "⚠️ Мутекс отравился ☠️ {} {}",
+                    file!(),
+                    line!()
+                ));
+                let next_pts = point_cloud_write.len(ProcessingQueue::NEXT);
+                let read_pts_old = point_cloud_write.len(ProcessingQueue::READ);
+                point_cloud_write.change_state(ProcessingQueue::NEXT, ProcessingQueue::READ);
+                let read_pts_new = point_cloud_write.len(ProcessingQueue::READ);
+
+                debug!(
+                    "[FRAME {frame_id}] Swapped queues in {:?}: NEXT had {next_pts} pts -> READ now has {read_pts_new} pts (was {read_pts_old})",
+                    swap_start.elapsed()
+                );
+            }
+
+            // 2. Вычисляем статистику, строим RangeImage и извлекаем точки ПОД READ-ЛОКОМ,
+            //    после чего НЕМЕДЛЕННО освобождаем лок, чтобы не задерживать ROS2 парсер.
+            let compute_start = std::time::Instant::now();
+            let (timestamp_ns, stats, rerun_points, range_image) = {
                 let point_cloud = point_cloud_lock.read().expect(&format!(
                     "⚠️ Мутекс отравился ☠️ {} {}",
                     file!(),
@@ -86,41 +64,75 @@ pub async fn entry(
                 ));
 
                 let number = ProcessingQueue::READ;
-
                 let timestamp_ns = point_cloud.timestamp[number];
                 let stats = point_cloud.compute_stats(number);
-
-                debug::std::print_frame_info(frame_id, timestamp_ns, &stats);
-                recording_stream.set_time(
-                    "ros_time",
-                    rerun::TimeCell::from_duration_nanos(timestamp_ns),
+                let rerun_points: Vec<[f32; 3]> = point_cloud.to_rerun(number).collect();
+                let range_image = shared::range_image::RangeImage::from_pandar128_organized(
+                    &point_cloud,
+                    number,
+                    1,
                 );
-                recording_stream.set_time_sequence("frame", frame_id as i64);
 
-                // Пушим данные в сеть (Rerun визуализация)
-                if let Err(e) = recording_stream.log_raw_cloud(&point_cloud) {
-                    error!("Ошибка логирования облака точек в rerun: {e:?}");
-                }
-                if let Err(e) = recording_stream.log_debug_overlays(&point_cloud, &stats) {
-                    error!("Ошибка логирования оверлеев в rerun: {e:?}");
-                }
+                (timestamp_ns, stats, rerun_points, range_image)
+            }; // <--- read-lock освобожден!
+            let compute_dur = compute_start.elapsed();
 
-                // let q = BoxCastQuery {
-                //     center: [0.0, 0.0, 0.5],
-                //     half_size: [0.4, 0.3, 0.5],
-                //     distance: 5.0,
-                //     axis: BoxCastAxis::Forward,
-                //     threshold: 3,
-                // };
-                // let res = point_cloud.box_cast(ProcessingQueue::READ, &q);
-                // shared::debug_boxcast::log_boxcast(&recording_stream, &q, &res)
-                //     .app_error()
-                //     .ok();
-            })
-            .await
-            .unwrap();
-        });
+            debug!(
+                "[FRAME {frame_id}] Data extracted & stats & RangeImage computed in {:?}: n_points={}, centroid=({:.2}, {:.2}, {:.2})",
+                compute_dur,
+                stats.n_points,
+                stats.centroid_x, stats.centroid_y, stats.centroid_z
+            );
+
+            debug::std::print_frame_info(frame_id, timestamp_ns, &stats);
+            recording_stream.set_time(
+                "ros_time",
+                rerun::TimeCell::from_duration_nanos(timestamp_ns),
+            );
+            recording_stream.set_time_sequence("frame", frame_id as i64);
+
+            // 3. Отправка 3D облака и оверлеев в Rerun (БЕЗ удержания лока point_cloud!)
+            let rerun_cloud_start = std::time::Instant::now();
+            if let Err(e) = recording_stream.log_raw_points(&rerun_points) {
+                error!("Ошибка логирования облака точек в rerun: {e:?}");
+            }
+            if let Err(e) = recording_stream.log_debug_centroid(&stats) {
+                error!("Ошибка логирования оверлеев в rerun: {e:?}");
+            }
+            debug!(
+                "[FRAME {frame_id}] Rerun 3D points & overlays send duration: {:?}",
+                rerun_cloud_start.elapsed()
+            );
+
+            // 4. Отправка 2D карты глубины и 4:3 превью в Rerun (БЕЗ удержания лока point_cloud!)
+            let rerun_depth_start = std::time::Instant::now();
+            if let Err(e) = recording_stream.log_depth_image(&range_image, ENV.PREVIEW_FOV_X_DEG) {
+                error!("Ошибка логирования карты глубины в rerun: {e:?}");
+            }
+            debug!(
+                "[FRAME {frame_id}] Rerun depth image send duration: {:?}",
+                rerun_depth_start.elapsed()
+            );
+
+            // 5. Сохранение сырых кадров без интерполяции для прототипирования на Python
+            if !ENV.RENDER_PATH.is_empty() {
+                let crop_raw = range_image.crop_fov(ENV.PREVIEW_FOV_X_DEG);
+                let _ = std::fs::create_dir_all(&ENV.RENDER_PATH);
+                let file_path = format!("{}/frame_{frame_id:06}.npy", ENV.RENDER_PATH);
+                if let Err(e) = crop_raw.save_npy(&file_path) {
+                    error!("Ошибка сохранения кадра {file_path}: {e}");
+                } else {
+                    debug!("[FRAME {frame_id}] Saved raw frame to {file_path}");
+                }
+            }
+
+            debug!(
+                "[FRAME {frame_id}] >>> TOTAL frame processing latency: {:?}",
+                frame_start.elapsed()
+            );
+        })
+        .await
+        .unwrap();
     }
-
     Ok(())
 }

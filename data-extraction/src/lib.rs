@@ -49,22 +49,21 @@ impl PointCloudStream {
             "Received PointCloud2"
         );
 
-        for field in &point_cloud.fields {
-            tracing::info!(
-                name = %field.name,
-                offset = field.offset,
-                datatype = field.datatype,
-                count = field.count,
-                "PointCloud2 field"
-            );
-        }
+        // for field in &point_cloud.fields {
+        //     tracing::info!(
+        //         name = %field.name,
+        //         offset = field.offset,
+        //         datatype = field.datatype,
+        //         count = field.count,
+        //         "PointCloud2 field"
+        //     );
+        // }
 
         let layout = extract_and_validate_layout(&point_cloud)?;
         parse_coords(&point_cloud, Arc::clone(&self.cached_cloud), &layout)?;
 
         Ok(Some(self.frame_num))
     }
-
 }
 
 pub async fn init_sub(
@@ -115,10 +114,7 @@ pub async fn init_sub(
         started.elapsed()
     );
 
-    let subscription = ros::node::subscribe(
-        ros2.mutable_node(),
-        topic,
-    )?;
+    let subscription = ros::node::subscribe(ros2.mutable_node(), topic)?;
 
     info!("[SUBSCRIBE] Успешная подписка");
 

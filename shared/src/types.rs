@@ -1,7 +1,6 @@
 use std::fmt;
 use std::ops::{Deref, DerefMut, Index, IndexMut};
 
-
 /// Статистика по облаку точек
 pub struct CloudStats {
     pub n_points: usize,
@@ -37,6 +36,12 @@ impl CloudStats {
     }
 }
 
+/// Проверка, является ли точка началом координат с запасом 5 мм (0.005 м)
+#[inline(always)]
+pub fn is_zero_point(x: f32, y: f32, z: f32) -> bool {
+    x.abs() <= 0.005 && y.abs() <= 0.005 && z.abs() <= 0.005
+}
+
 #[repr(C)]
 pub struct CudaArray<const SIZE: usize> {
     pub ptr: *mut f32,
@@ -48,9 +53,7 @@ impl<const SIZE: usize> CudaArray<SIZE> {
         if index >= self.length || self.ptr.is_null() {
             return None;
         }
-        unsafe {
-            Some(*self.ptr.add(index))
-        }
+        unsafe { Some(*self.ptr.add(index)) }
     }
 
     // Теперь берет истинный последний элемент, а не физический конец капы
@@ -167,11 +170,22 @@ impl<const SIZE: usize> PointCloud<SIZE> {
         z_ptrs: [*mut f32; 3],
         i_ptrs: [*mut f32; 3],
     ) -> Self {
-        let make_fields = |ptrs: [*mut f32; 3]| [
-            CudaArray { ptr: ptrs[0], length: 0 },
-            CudaArray { ptr: ptrs[1], length: 0 },
-            CudaArray { ptr: ptrs[2], length: 0 },
-        ];
+        let make_fields = |ptrs: [*mut f32; 3]| {
+            [
+                CudaArray {
+                    ptr: ptrs[0],
+                    length: 0,
+                },
+                CudaArray {
+                    ptr: ptrs[1],
+                    length: 0,
+                },
+                CudaArray {
+                    ptr: ptrs[2],
+                    length: 0,
+                },
+            ]
+        };
 
         Self {
             x: TripleBuffer(make_fields(x_ptrs)),
@@ -248,11 +262,14 @@ impl<const SIZE: usize> PointCloud<SIZE> {
             return cloud_stats;
         }
 
-        cloud_stats.n_points = current_len;
-
         let (mut sum_x, mut sum_y, mut sum_z) = (0.0f32, 0.0f32, 0.0f32);
+        let mut valid_count = 0usize;
 
         for (&x, &y, &z, _) in self.iter(queue) {
+            if is_zero_point(x, y, z) {
+                continue;
+            }
+            valid_count += 1;
             sum_x += x;
             sum_y += y;
             sum_z += z;
@@ -266,10 +283,20 @@ impl<const SIZE: usize> PointCloud<SIZE> {
             cloud_stats.max_z = cloud_stats.max_z.max(z);
         }
 
-        let count = current_len as f32;
-        cloud_stats.centroid_x = sum_x / count;
-        cloud_stats.centroid_y = sum_y / count;
-        cloud_stats.centroid_z = sum_z / count;
+        cloud_stats.n_points = valid_count;
+        if valid_count > 0 {
+            let count = valid_count as f32;
+            cloud_stats.centroid_x = sum_x / count;
+            cloud_stats.centroid_y = sum_y / count;
+            cloud_stats.centroid_z = sum_z / count;
+        } else {
+            cloud_stats.min_x = 0.0;
+            cloud_stats.min_y = 0.0;
+            cloud_stats.min_z = 0.0;
+            cloud_stats.max_x = 0.0;
+            cloud_stats.max_y = 0.0;
+            cloud_stats.max_z = 0.0;
+        }
         cloud_stats.width = self.width[queue];
         cloud_stats.height = self.height[queue];
 
@@ -277,10 +304,6 @@ impl<const SIZE: usize> PointCloud<SIZE> {
     }
 
     pub fn change_state(&mut self, queue_old: ProcessingQueue, queue_new: ProcessingQueue) {
-        if !self.can_write {
-            return;
-        }
-
         let idx_old = queue_old as usize;
         let idx_new = queue_new as usize;
 
@@ -306,6 +329,9 @@ impl<const SIZE: usize> PointCloud<SIZE> {
         let ys = self.y[queue][..len].iter();
         let zs = self.z[queue][..len].iter();
 
-        xs.zip(ys).zip(zs).map(|((&x, &y), &z)| [x, y, z])
+        xs.zip(ys)
+            .zip(zs)
+            .filter(|((x, y), z)| !is_zero_point(**x, **y, **z))
+            .map(|((&x, &y), &z)| [x, y, z])
     }
 }

@@ -28,24 +28,29 @@ pub struct DiscoveredTopic {
     pub qos: QosPolicies,
 }
 
-pub fn find_pointcloud_topic(event: DomainParticipantStatusEvent) -> Option<DiscoveredTopic> {
-    match event {
-        DomainParticipantStatusEvent::WriterDetected { writer }
-            if writer.type_name.contains("PointCloud2") =>
-        {
-            let mut message_type = writer.type_name.split("::");
-            let topic_name = writer.topic_name.strip_prefix("rt")?;
+pub fn find_pointcloud_topic(
+    dp: &ros2_client::rustdds::dds::DomainParticipant,
+) -> Option<DiscoveredTopic> {
+    dp.discovered_writers()
+        .into_iter()
+        .filter_map(|writer| {
+            let data = writer.publication_topic_data;
+            if !data.type_name.contains("PointCloud2") {
+                return None;
+            }
+
+            let name = data.topic_name.strip_prefix("rt")?.to_owned();
+            let mut parts = data.type_name.split("::");
+            let package = parts.next()?;
+            let type_name = parts.last()?.trim_end_matches('_');
+
             Some(DiscoveredTopic {
-                name: topic_name.to_owned(),
-                msg_type: MessageTypeName::new(
-                    message_type.next()?,
-                    message_type.last()?.trim_end_matches('_'),
-                ),
-                qos: writer.qos,
+                name,
+                msg_type: MessageTypeName::new(package, type_name),
+                qos: data.qos(),
             })
-        }
-        _ => None,
-    }
+        })
+        .min_by(|a, b| a.name.cmp(&b.name))
 }
 
 pub fn subscribe(
@@ -122,19 +127,15 @@ async fn main() -> Result<(), Error> {
         let _ = spinner.spin().await;
     });
 
-    let receiver = node.status_receiver();
+    let participant = context.domain_participant();
     error!("[jitter_bench] Поиск топика PointCloud2 в DDS сети...");
-    let mut target_topic = None;
-    while let Ok(msg) = receiver.recv().await {
-        if let ros2_client::NodeEvent::DDS(dds_event) = msg {
-            if let Some(topic) = find_pointcloud_topic(dds_event) {
-                error!("[jitter_bench] Найден топик: {}", topic.name);
-                target_topic = Some(topic);
-                break;
-            }
+    let topic = loop {
+        if let Some(topic) = find_pointcloud_topic(&participant) {
+            error!("[jitter_bench] Найден топик: {}", topic.name);
+            break topic;
         }
-    }
-    let topic = target_topic.expect("топик не найден");
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    };
     let subscription = subscribe(&mut node, topic).expect("SubscriptionFailed");
 
     const SKIP_SAMPLES: usize = 30;

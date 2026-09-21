@@ -43,8 +43,8 @@ impl BoxCastAxis {
     #[inline(always)]
     pub const fn index(self) -> usize {
         match self {
-            Self::Forward | Self::Backward => 0, // X
-            Self::Left | Self::Right => 1,       // Y
+            Self::Forward | Self::Backward => 1, // X
+            Self::Left | Self::Right => 0,       // Y
             Self::Up | Self::Down => 2,          // Z
         }
     }
@@ -53,8 +53,8 @@ impl BoxCastAxis {
     #[inline(always)]
     pub const fn sign(self) -> f32 {
         match self {
-            Self::Forward | Self::Left | Self::Up => 1.0,
-            Self::Backward | Self::Right | Self::Down => -1.0,
+            Self::Backward | Self::Left | Self::Up => 1.0,
+            Self::Forward | Self::Right | Self::Down => -1.0,
         }
     }
 
@@ -227,6 +227,10 @@ pub fn box_cast(xs: &[f32], ys: &[f32], zs: &[f32], q: &BoxCastQuery) -> BoxCast
         .fold(
             || Nearest::new(cap),
             |acc, (i, ((&a, &u), &v))| {
+                // Исключаем точки в начале координат (шум/пустые возвраты)
+                if crate::types::is_zero_point(a, u, v) {
+                    return acc;
+                }
                 // Отрицательная форма условий: NaN не проходит ни одну проверку.
                 let along = sign * (a - ca); // координата вдоль движения
                 if !(along >= -ha && along <= ha + d) {
@@ -273,5 +277,4 @@ impl<const SIZE: usize> PointCloud<SIZE> {
             q,
         )
     }
-
 }

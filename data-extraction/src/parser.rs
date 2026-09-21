@@ -140,7 +140,6 @@ pub fn parse_coords(
         return Ok(());
     }
 
-
     if width == 0 || height == 0 || message.data.is_empty() {
         return Ok(());
     }
@@ -176,7 +175,7 @@ pub fn parse_coords(
         if point_buf.len() < point_step {
             break;
         }
-        
+
         // Безопасное чтение 4-байтовых кусков, устойчивое к невыровненному point_step = 26
         let x_bytes: [u8; 4] = point_buf[x_off..x_off + 4].try_into().unwrap();
         let y_bytes: [u8; 4] = point_buf[y_off..y_off + 4].try_into().unwrap();
@@ -204,21 +203,21 @@ pub fn parse_coords(
                 f32::from_bits(u32::from_le(pi)),
             )
         };
-        
+
         if logged_points < 5 && (x != 0.0 || y != 0.0 || z != 0.0) {
-            tracing::info!(
-                "POINT {}:\n  \
-                X: bytes={:X?}, parsed={}, finite={}\n  \
-                Y: bytes={:X?}, parsed={}, finite={}\n  \
-                Z: bytes={:X?}, parsed={}, finite={}\n  \
-                I: bytes={:X?}, parsed={}, finite={}", 
-                i, 
-                x_bytes, x, x.is_finite(),
-                y_bytes, y, y.is_finite(),
-                z_bytes, z, z.is_finite(),
-                i_bytes, intensity, intensity.is_finite()
-            );
-            logged_points+=1;
+            // tracing::info!(
+            //     "POINT {}:\n  \
+            //     X: bytes={:X?}, parsed={}, finite={}\n  \
+            //     Y: bytes={:X?}, parsed={}, finite={}\n  \
+            //     Z: bytes={:X?}, parsed={}, finite={}\n  \
+            //     I: bytes={:X?}, parsed={}, finite={}",
+            //     i,
+            //     x_bytes, x, x.is_finite(),
+            //     y_bytes, y, y.is_finite(),
+            //     z_bytes, z, z.is_finite(),
+            //     i_bytes, intensity, intensity.is_finite()
+            // );
+            logged_points += 1;
         }
 
         // Откидываем битые точки (NaN и Infinite)
@@ -232,14 +231,20 @@ pub fn parse_coords(
             cloud.z[write_state].length += 1;
             cloud.intensity[write_state].length += 1;
 
-            i+=1;
+            i += 1;
         }
     }
 
-
     cloud.width[write_state] = message.width;
     cloud.height[write_state] = message.height;
-    cloud.timestamp[write_state] = message.header.stamp.sec as i64 * 1000000000 + message.header.stamp.nanosec as i64;
+    cloud.timestamp[write_state] =
+        message.header.stamp.sec as i64 * 1000000000 + message.header.stamp.nanosec as i64;
+
+    tracing::info!(
+        "[PARSER] Frame parsed: {} total msg pts, {} points written to WRITE, swapping WRITE -> NEXT",
+        total_points,
+        i
+    );
 
     cloud.change_state(write_state, ProcessingQueue::NEXT);
 
