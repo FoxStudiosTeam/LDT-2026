@@ -3,8 +3,9 @@ use std::sync::{Arc, RwLock};
 use shared::transport::PointCloud2;
 use shared::types::AppPointCloud;
 
-use shared::error::{AppError, ErrCtx, ErrorType};
-use tracing::{error, info};
+use shared::error::{AppError, ErrCtx};
+use std::time::{Duration, Instant};
+use tracing::{info, warn};
 
 use crate::parser::{extract_and_validate_layout, parse_coords};
 mod discovery;
@@ -18,7 +19,7 @@ pub struct PointCloudStream {
     ros2: ros::Ros,
     subscription: ros2_client::Subscription<PointCloud2>,
     cached_cloud: Arc<RwLock<AppPointCloud>>,
-    frame_num: u64
+    frame_num: u64,
 }
 
 impl PointCloudStream {
@@ -71,48 +72,47 @@ pub async fn init_sub(
     cloud: Arc<RwLock<AppPointCloud>>,
 ) -> Result<PointCloudStream, AppError> {
     let mut ros2 = ros::Ros::new(domain_id)?;
-    let receiver = ros2.node().status_receiver();
+    let participant = ros2.domain_participant();
 
-    info!("[ROS2] Ожидание топика PointCloud2 в DDS сети...");
+    info!("[ROS2] Поиск топика PointCloud2 в DDS сети...");
 
-    let mut subscribed = std::collections::HashSet::<String>::new();
+    // ВАЖНО: не ждём событие WriterDetected через `node.status_receiver()`.
+    // Оно edge-triggered и теряется (иногда -> вечное зависание после
+    // "Spinner initialized"), потому что:
+    //   1. Spinner стартует в отдельной tokio-задаче и начинает раздавать
+    //      события ДО того, как мы успеваем вызвать `status_receiver()`;
+    //      события без подписчиков молча выбрасываются.
+    //   2. Канал у подписчика `bounded(8)`, а `try_send` при переполнении
+    //      тоже молча теряет событие (у бэга десятки топиков -> пачка событий).
+    // Поэтому опрашиваем снимок discovery-базы: результат не зависит от
+    // того, когда мы начали слушать. Аллокации только на этапе инициализации.
+    const POLL_INTERVAL: Duration = Duration::from_millis(200);
+    const REPORT_EVERY: Duration = Duration::from_secs(5);
+
+    let started = Instant::now();
+    let mut last_report = started;
 
     let topic = loop {
-        let msg = match receiver.recv().await {
-            Ok(msg) => msg,
-            Err(err) => {
-                return ErrorType::message(format!(
-                    "DDS receiver channel closed: {err}"
-                ))
-                .err();
-            }
-        };
-
-        let ros2_client::NodeEvent::DDS(dds_event) = msg else {
-            continue;
-        };
-
-        if let Some(topic) = discovery::find_pointcloud_topic(dds_event) {
-            if !subscribed.insert(topic.name.clone()) {
-                info!(
-                    "[DISCOVERY] Дубликат обнаружения топика {}, пропускаю",
-                    topic.name
-                );
-                continue;
-            }
-
-            info!(
-                "[DISCOVERY] Обнаружен PointCloud2: {}",
-                topic.name
-            );
-
+        if let Some(topic) = discovery::find_pointcloud_topic(&participant) {
             break topic;
         }
+
+        if last_report.elapsed() >= REPORT_EVERY {
+            last_report = Instant::now();
+            warn!(
+                "[DISCOVERY] PointCloud2 ещё не найден ({} с). Обнаружено writer'ов: {}",
+                started.elapsed().as_secs(),
+                participant.discovered_writers().len()
+            );
+        }
+
+        tokio::time::sleep(POLL_INTERVAL).await;
     };
 
     info!(
-        "[SUBSCRIBE] Подписка на PointCloud2: {}",
-        topic.name
+        "[DISCOVERY] Обнаружен топик лидара: {} (за {:?})",
+        topic.name,
+        started.elapsed()
     );
 
     let subscription = ros::node::subscribe(
