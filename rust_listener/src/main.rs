@@ -9,7 +9,7 @@ mod engine;
 
 use std::sync::{Arc, RwLock};
 
-use shared::error::{AppError, ErrCtx, ErrorType};
+use shared::error::AppError;
 
 use shared::types::{AppPointCloud, SIZE};
 use tracing::*;
@@ -26,7 +26,8 @@ kaiv_utils::env_config! {
         TOTAL_FRAMES : u64 = u64::MAX,
         TEST_RERUN : bool = false,
         PREVIEW_FOV_X_DEG : f32 = 25.0,
-        RENDER_PATH : String = "".to_string()
+        RENDER_PATH : String = "".to_string(),
+        OBSTACLES_CONFIG : String = "".to_string()
     }
 }
 

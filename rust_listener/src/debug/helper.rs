@@ -96,6 +96,7 @@ impl DebugLine2D {
 pub struct DebugBox3D {
     pub center: [f32; 3],
     pub size: [f32; 3],
+    pub rotation_xyzw: Option<[f32; 4]>,
     pub label: Option<String>,
     pub color: [u8; 3],
 }
@@ -105,9 +106,15 @@ impl DebugBox3D {
         Self {
             center,
             size,
+            rotation_xyzw: None,
             label: None,
             color: [255, 60, 60],
         }
+    }
+
+    pub fn with_rotation(mut self, quat_xyzw: [f32; 4]) -> Self {
+        self.rotation_xyzw = Some(quat_xyzw);
+        self
     }
 
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
@@ -471,11 +478,23 @@ impl DebugStream for RecordingStream {
             .map(|b| b.label.clone().unwrap_or_default())
             .collect();
 
+        let quaternions: Vec<rerun::Quaternion> = boxes
+            .iter()
+            .map(|b| {
+                if let Some(q) = b.rotation_xyzw {
+                    rerun::Quaternion::from_xyzw(q)
+                } else {
+                    rerun::Quaternion::IDENTITY
+                }
+            })
+            .collect();
+
         self.log(
             entity_path,
             &Boxes3D::from_centers_and_sizes(centers, sizes)
                 .with_colors(colors)
-                .with_labels(labels),
+                .with_labels(labels)
+                .with_quaternions(quaternions),
         )
         .app_error()?;
 

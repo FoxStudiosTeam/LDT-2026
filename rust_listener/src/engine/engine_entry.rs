@@ -4,7 +4,7 @@ use rerun::RecordingStream;
 use ros2_data_extraction::PointCloudStream;
 use shared::types::AppPointCloud;
 use shared::{
-    error::{AppError, ErrCtx},
+    error::AppError,
     types::ProcessingQueue,
 };
 use tracing::*;
@@ -20,6 +20,13 @@ pub async fn entry(
     point_cloud: Arc<RwLock<AppPointCloud>>,
 ) -> Result<(), AppError> {
     let recording_stream = Arc::new(recording_stream);
+    let mut initial_injector = crate::debug::injector::setup_obstacles();
+    if !ENV.OBSTACLES_CONFIG.is_empty() {
+        if let Some(loaded) = crate::debug::injector::ObstacleInjector::load_from_path(&ENV.OBSTACLES_CONFIG) {
+            initial_injector = loaded;
+        }
+    }
+    let injector = Arc::new(std::sync::Mutex::new(initial_injector));
 
     while let Some(frame) = point_cloud_stream.next().await? {
         tracing::info!("Frame {frame}");
@@ -30,6 +37,7 @@ pub async fn entry(
 
         let point_cloud_lock = point_cloud.clone();
         let recording_stream = recording_stream.clone();
+        let injector = injector.clone();
 
         tokio::task::spawn_blocking(move || {
             let frame_start = std::time::Instant::now();
@@ -53,11 +61,10 @@ pub async fn entry(
                 );
             }
 
-            // 2. Вычисляем статистику, строим RangeImage и извлекаем точки ПОД READ-ЛОКОМ,
-            //    после чего НЕМЕДЛЕННО освобождаем лок, чтобы не задерживать ROS2 парсер.
+            // 2. Инъекция препятствий, статистика, RangeImage под WRITE-локом буфера READ
             let compute_start = std::time::Instant::now();
-            let (timestamp_ns, stats, rerun_points, range_image) = {
-                let point_cloud = point_cloud_lock.read().expect(&format!(
+            let (timestamp_ns, stats, rerun_points, range_image, gt_boxes) = {
+                let mut point_cloud = point_cloud_lock.write().expect(&format!(
                     "⚠️ Мутекс отравился ☠️ {} {}",
                     file!(),
                     line!()
@@ -65,6 +72,14 @@ pub async fn entry(
 
                 let number = ProcessingQueue::READ;
                 let timestamp_ns = point_cloud.timestamp[number];
+
+                // Инъекция виртуальных препятствий
+                let gt_boxes = if let Ok(mut inj_guard) = injector.lock() {
+                    inj_guard.inject(&mut point_cloud, number, timestamp_ns, frame_id)
+                } else {
+                    Vec::new()
+                };
+
                 let stats = point_cloud.compute_stats(number);
                 let rerun_points: Vec<[f32; 3]> = point_cloud.to_rerun(number).collect();
                 let range_image = shared::range_image::RangeImage::from_pandar128_organized(
@@ -73,8 +88,8 @@ pub async fn entry(
                     1,
                 );
 
-                (timestamp_ns, stats, rerun_points, range_image)
-            }; // <--- read-lock освобожден!
+                (timestamp_ns, stats, rerun_points, range_image, gt_boxes)
+            }; // <--- write-lock освобожден!
             let compute_dur = compute_start.elapsed();
 
             debug!(
@@ -98,6 +113,11 @@ pub async fn entry(
             }
             if let Err(e) = recording_stream.log_debug_centroid(&stats) {
                 error!("Ошибка логирования оверлеев в rerun: {e:?}");
+            }
+            if !gt_boxes.is_empty() {
+                if let Err(e) = recording_stream.log_boxes_3d("ground_truth/obstacle_boxes", &gt_boxes) {
+                    error!("Ошибка логирования GT боксов препятствий в rerun: {e:?}");
+                }
             }
             debug!(
                 "[FRAME {frame_id}] Rerun 3D points & overlays send duration: {:?}",

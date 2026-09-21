@@ -9959,6 +9959,8 @@ dependencies = [
  "rerun",
  "ros2-interfaces-jazzy-serde",
  "ros2_data_extraction",
+ "serde",
+ "serde_json",
  "shared",
  "tokio",
  "tracing",
