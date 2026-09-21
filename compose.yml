@@ -22,18 +22,18 @@ services:
   #     --loop
   #     --rate 0.1
 
-  bag_player:
-    build:
-      context: ./bag_player
-      dockerfile: ./Dockerfile
-    container_name: bag_player
-    network_mode: "host"
-    ipc: "host"
-    environment:
-      ROS_DOMAIN_ID: 42
-      ROS_DISTRO: humble
-    volumes:
-      - ./dataset:/app/dataset
+  # bag_player:
+  #   build:
+  #     context: ./bag_player
+  #     dockerfile: ./Dockerfile
+  #   container_name: bag_player
+  #   network_mode: "host"
+  #   ipc: "host"
+  #   environment:
+  #     ROS_DOMAIN_ID: 42
+  #     ROS_DISTRO: humble
+  #   volumes:
+  #     - ./dataset:/app/dataset
 
   rust_viewer:
     build:

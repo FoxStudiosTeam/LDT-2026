@@ -200,22 +200,6 @@ pub fn parse_coords(
             )
         };
         
-        if logged_points < 5 && (x != 0.0 || y != 0.0 || z != 0.0) {
-            tracing::info!(
-                "POINT {}:\n  \
-                X: bytes={:X?}, parsed={}, finite={}\n  \
-                Y: bytes={:X?}, parsed={}, finite={}\n  \
-                Z: bytes={:X?}, parsed={}, finite={}\n  \
-                I: bytes={:X?}, parsed={}, finite={}", 
-                i, 
-                x_bytes, x, x.is_finite(),
-                y_bytes, y, y.is_finite(),
-                z_bytes, z, z.is_finite(),
-                i_bytes, intensity, intensity.is_finite()
-            );
-            logged_points+=1;
-        }
-
         // Откидываем битые точки (NaN и Infinite)
         if x.is_finite() && y.is_finite() && z.is_finite() {
             cloud.x[write_state][i] = x;

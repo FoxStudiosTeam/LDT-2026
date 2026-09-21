@@ -47,37 +47,39 @@ pub async fn entry(
             point_cloud_write.can_write = false;
             point_cloud_write.change_state(shared::types::ProcessingQueue::NEXT, shared::types::ProcessingQueue::READ);
             
-            // if point_cloud_write.x[queue].len() > 0{
-            //     let mut ix = 0; 
-            //     let mut i = 0;
-            //     tracing::info!("[FRAME] loaded points raw:");
-            //     for point in point_cloud_write.iter(queue) {
-            //         if *point.0 > 0.0 && ix < 10{
-            //             tracing::info!("point {} (x): {:?}, point last (x): {:?}, queue: {}, length: {}, cap: {}", i, point.0, point_cloud_write.x[queue].last(), queue, point_cloud_write.len(queue),AppPointCloud::CAP);
-            //             queue.next_step();
-            //             tracing::info!("point {} (y): {:?}, point last (y): {:?}, queue: {}, length: {}, cap: {}", i, point.1, point_cloud_write.y[queue].last(), queue, point_cloud_write.len(queue),AppPointCloud::CAP);
-            //             queue.next_step();
-            //             tracing::info!("point {} (z): {:?}, point last (z): {:?}, queue: {}, length: {}, cap: {}", i, point.2, point_cloud_write.z[queue].last(), queue, point_cloud_write.len(queue),AppPointCloud::CAP);    
-            //             ix += 1;
-            //         }
-            //         i+=1;
-            //     }
-            //     tracing::info!("[FRAME] loaded points next:");
-            //     ix = 0;
-            //     i = 0;
-            //     queue.
-            //     for point in point_cloud_write.iter(queue) {
-            //         if *point.0 > 0.0 && ix < 10{
-            //             tracing::info!("point {} (x): {:?}, point last (x): {:?}, queue: {}, length: {}, cap: {}", i, point.0, point_cloud_write.x[queue].last(), queue, point_cloud_write.len(queue),AppPointCloud::CAP);
-            //             queue.next_step();
-            //             tracing::info!("point {} (y): {:?}, point last (y): {:?}, queue: {}, length: {}, cap: {}", i, point.1, point_cloud_write.y[queue].last(), queue, point_cloud_write.len(queue),AppPointCloud::CAP);
-            //             queue.next_step();
-            //             tracing::info!("point {} (z): {:?}, point last (z): {:?}, queue: {}, length: {}, cap: {}", i, point.2, point_cloud_write.z[queue].last(), queue, point_cloud_write.len(queue),AppPointCloud::CAP);    
-            //             ix += 1;
-            //         }
-            //         i+=1;
-            //     }
-            // }
+            let mut queue = shared::types::ProcessingQueue::NEXT;
+
+            if point_cloud_write.x[queue].len() > 0{
+                let mut ix = 0; 
+                let mut i = 0;
+                tracing::info!("[FRAME] loaded points raw:");
+                for point in point_cloud_write.iter(queue) {
+                    if *point.0 > 0.0 && ix < 10{
+                        tracing::info!("point {} (x): {:?}, point last (x): {:?}, queue: {}, length: {}, cap: {}", i, point.0, point_cloud_write.x[queue].last(), queue, point_cloud_write.len(queue),AppPointCloud::CAP);
+                        queue.next_step();
+                        tracing::info!("point {} (y): {:?}, point last (y): {:?}, queue: {}, length: {}, cap: {}", i, point.1, point_cloud_write.y[queue].last(), queue, point_cloud_write.len(queue),AppPointCloud::CAP);
+                        queue.next_step();
+                        tracing::info!("point {} (z): {:?}, point last (z): {:?}, queue: {}, length: {}, cap: {}", i, point.2, point_cloud_write.z[queue].last(), queue, point_cloud_write.len(queue),AppPointCloud::CAP);    
+                        ix += 1;
+                    }
+                    i+=1;
+                }
+                tracing::info!("[FRAME] loaded points next:");
+                ix = 0;
+                i = 0;
+                queue.next_step();
+                for point in point_cloud_write.iter(queue) {
+                    if *point.0 > 0.0 && ix < 10{
+                        tracing::info!("point {} (x): {:?}, point last (x): {:?}, queue: {}, length: {}, cap: {}", i, point.0, point_cloud_write.x[queue].last(), queue, point_cloud_write.len(queue),AppPointCloud::CAP);
+                        queue.next_step();
+                        tracing::info!("point {} (y): {:?}, point last (y): {:?}, queue: {}, length: {}, cap: {}", i, point.1, point_cloud_write.y[queue].last(), queue, point_cloud_write.len(queue),AppPointCloud::CAP);
+                        queue.next_step();
+                        tracing::info!("point {} (z): {:?}, point last (z): {:?}, queue: {}, length: {}, cap: {}", i, point.2, point_cloud_write.z[queue].last(), queue, point_cloud_write.len(queue),AppPointCloud::CAP);    
+                        ix += 1;
+                    }
+                    i+=1;
+                }
+            }
 
             point_cloud_write.can_write = true;
         }
@@ -87,7 +89,6 @@ pub async fn entry(
             // отъебнет так, что в логах не покажется
             // .map_err(|e| Error::AbstractError { msg: e.to_string() }).unwrap()
             .expect(&format!("⚠️ Мутекс отравился ☠️ {} {}", file!(), line!()));
-            
         let number = shared::types::ProcessingQueue::READ;
             
             
