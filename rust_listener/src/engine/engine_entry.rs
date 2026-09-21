@@ -11,7 +11,7 @@ use shared::types::AppPointCloud;
 use tokio::{sync::Semaphore, time};
 use tracing::*;
 
-use crate::debug;
+use crate::debug::{self, helper::DebugStream};
 
 struct TaskGuard {
     counter: Arc<AtomicUsize>,
@@ -37,85 +37,81 @@ pub async fn entry(
         .log("point", &rerun::Points3D::new([(0.0, 0.0, 0.0)]))
         .app_error()?;
 
-    // while let Some(a) = point_cloud_stream.next().await? {
-    while let Ok((pc, _msg)) = point_cloud_stream.subscription.async_take().await {
-        // info!("[Frame {a}] frame took");
-        info!("frame took");
-        let re = recording_stream.clone();
-        tokio::task::spawn_blocking(move || {
-            let parsed = parse_coords(&pc).app_error().unwrap();
-            re.log("points", &rerun::Points3D::new(&parsed))
-                .app_error()
-                .unwrap();
-        });
+    while let Some(a) = point_cloud_stream.next().await? {
+        // while let Ok((pc, _msg)) = point_cloud_stream.subscription.async_take().await {
+        info!("[Frame {a}] frame took");
+        // info!("frame took");
+        // let re = recording_stream.clone();
+        // tokio::task::spawn_blocking(move || {
+        //     let parsed = parse_coords(&pc).app_error().unwrap();
+        //     re.log("points", &rerun::Points3D::new(&parsed))
+        //         .app_error()
+        //         .unwrap();
+        // });
 
         // frame_id = a;
 
         // // 2. Проверяем лимит без блокировок
-        // if active_tasks.load(Ordering::Relaxed) >= 4 {
-        //     info!("Скипаем кадр {}, так как обработка перегружена", frame_id);
-        //     continue;
-        // }
+        if active_tasks.load(Ordering::Relaxed) >= 4 {
+            info!("Скипаем кадр {}, так как обработка перегружена", frame_id);
+            continue;
+        }
 
-        // // 3. Инкрементируем счетчик перед спавном
-        // active_tasks.fetch_add(1, Ordering::SeqCst);
+        // 3. Инкрементируем счетчик перед спавном
+        active_tasks.fetch_add(1, Ordering::SeqCst);
 
-        // let point_cloud = point_cloud.clone();
-        // let recording_stream = recording_stream.clone();
-        // let active_tasks_clone = active_tasks.clone();
+        let point_cloud = point_cloud.clone();
+        let recording_stream = recording_stream.clone();
+        let active_tasks_clone = active_tasks.clone();
 
-        // tokio::spawn(async move {
-        //     // 4. Активируем гвард. Как только таска завершится или упадет — счетчик уменьшится
-        //     let _guard = TaskGuard {
-        //         counter: active_tasks_clone,
-        //     };
-        //     let point_cloud_lock = point_cloud.clone();
-        //     tokio::task::spawn_blocking(move || {
-        //         {
-        //             let mut point_cloud_write = point_cloud_lock.write().expect(&format!(
-        //                 "⚠️ Мутекс отравился ☠️ {} {}",
-        //                 file!(),
-        //                 line!()
-        //             ));
-        //             point_cloud_write.can_write = false;
-        //             point_cloud_write.change_state(
-        //                 shared::types::ProcessingQueue::NEXT,
-        //                 shared::types::ProcessingQueue::READ,
-        //             );
-        //             point_cloud_write.can_write = true;
-        //         }
+        tokio::spawn(async move {
+            // 4. Активируем гвард. Как только таска завершится или упадет — счетчик уменьшится
+            let _guard = TaskGuard {
+                counter: active_tasks_clone,
+            };
+            let point_cloud_lock = point_cloud.clone();
+            tokio::task::spawn_blocking(move || {
+                {
+                    let mut point_cloud_write = point_cloud_lock.write().expect(&format!(
+                        "⚠️ Мутекс отравился ☠️ {} {}",
+                        file!(),
+                        line!()
+                    ));
+                    point_cloud_write.change_state(
+                        shared::types::ProcessingQueue::NEXT,
+                        shared::types::ProcessingQueue::READ,
+                    );
+                }
 
-        //         let point_cloud = point_cloud_lock.read().expect(&format!(
-        //             "⚠️ Мутекс отравился ☠️ {} {}",
-        //             file!(),
-        //             line!()
-        //         ));
+                let point_cloud = point_cloud_lock.read().expect(&format!(
+                    "⚠️ Мутекс отравился ☠️ {} {}",
+                    file!(),
+                    line!()
+                ));
 
-        //         let number = shared::types::ProcessingQueue::READ;
+                let number = shared::types::ProcessingQueue::READ;
 
-        //         let timestamp_ns = point_cloud.timestamp[number];
-        //         let stats = point_cloud.compute_stats(number);
+                let timestamp_ns = point_cloud.timestamp[number];
+                let stats = point_cloud.compute_stats(number);
 
-        //         debug::std::print_frame_info(frame_id, timestamp_ns, &stats);
-        //         recording_stream.set_time(
-        //             "ros_time",
-        //             rerun::TimeCell::from_duration_nanos(timestamp_ns),
-        //         );
-        //         recording_stream.set_time_sequence("frame", frame_id as i64);
+                debug::std::print_frame_info(frame_id, timestamp_ns, &stats);
+                recording_stream.set_time(
+                    "ros_time",
+                    rerun::TimeCell::from_duration_nanos(timestamp_ns),
+                );
+                recording_stream.set_time_sequence("frame", frame_id as i64);
 
-        //         // Пушим данные в сеть (Rerun визуализация)
-        //         if let Err(e) = debug::helper::log_raw_cloud(&recording_stream, &point_cloud) {
-        //             error!("Ошибка логирования облака точек в rerun: {e:?}");
-        //         }
-        //         if let Err(e) =
-        //             debug::helper::log_debug_overlays(&recording_stream, &point_cloud, &stats)
-        //         {
-        //             error!("Ошибка логирования оверлеев в rerun: {e:?}");
-        //         }
-        //     })
-        //     .await
-        //     .unwrap();
-        // });
+                // Пушим данные в сеть (Rerun визуализация)
+                if let Err(e) = recording_stream.log_raw_cloud(&point_cloud) {
+                    error!("Ошибка логирования облака точек в rerun: {e:?}");
+                }
+                if let Err(e) = recording_stream.log_debug_overlays(&point_cloud, &stats) {
+                    error!("Ошибка логирования оверлеев в rerun: {e:?}");
+                }
+            })
+            .await
+            .unwrap();
+        });
     }
 
     Ok(())
