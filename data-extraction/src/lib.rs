@@ -17,7 +17,7 @@ mod ros;
 
 pub struct PointCloudStream {
     ros2: ros::Ros,
-    subscription: ros2_client::Subscription<PointCloud2>,
+    pub subscription: ros2_client::Subscription<PointCloud2>,
     cached_cloud: Arc<RwLock<AppPointCloud>>,
     frame_num: u64,
 }

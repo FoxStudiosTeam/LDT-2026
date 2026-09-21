@@ -5,6 +5,7 @@ import argparse
 import sys
 import time
 import yaml
+import threading
 from dataclasses import dataclass
 
 import rclpy
@@ -12,10 +13,9 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from rclpy.serialization import deserialize_message
 from rosidl_runtime_py.utilities import get_message
-
 import rosbag2_py
 
-DATASET_DIR = "/app/dataset"
+DATASET_DIR = os.getenv("DATASET_DIR", "/app/dataset")
 
 @dataclass
 class Msg:
@@ -103,6 +103,8 @@ class BagPlayer(Node):
             pub.publish(msg)
 
     def run(self):
+        spin_thread = threading.Thread(target=rclpy.spin, args=(self,), daemon=True)
+        spin_thread.start()
         try:
             while True:
                 self.play_once()
@@ -318,4 +320,6 @@ def main():
 
 
 if __name__ == "__main__":
+    # import time
+    # time.sleep(100000000)
     main()

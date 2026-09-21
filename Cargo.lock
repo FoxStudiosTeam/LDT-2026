@@ -9957,6 +9957,7 @@ dependencies = [
  "futures",
  "kaiv_utils",
  "rerun",
+ "ros2-interfaces-jazzy-serde",
  "ros2_data_extraction",
  "shared",
  "tokio",
@@ -10448,8 +10449,10 @@ name = "shared"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "rerun",
  "ros2-client",
  "thiserror 2.0.20",
+ "tracing",
 ]
 
 [[package]]
