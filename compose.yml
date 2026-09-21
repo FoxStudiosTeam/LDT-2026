@@ -1,26 +1,39 @@
 services:
-  ros2_dataset_player:
+  # ros2_dataset_player:
+  #   build:
+  #     context: .
+  #     dockerfile: ./dataset/Dockerfile
+  #   container_name: ros2_dataset_player
+  #   network_mode: "host"
+  #   ipc: "host"
+  #   shm_size: '2gb'
+  #   ulimits:
+  #     nofile:
+  #       soft: 1024
+  #       hard: 65535
+  #   environment:
+  #     ROS_DOMAIN_ID: 42
+  #     ROS_DISTRO: humble
+  #   volumes:
+  #     - ./dataset:/app/dataset:ro
+  #   command: >
+  #     ros2 bag play
+  #     /app/dataset/doubleT_obstacle
+  #     --loop
+  #     --rate 0.1
+
+  bag_player:
     build:
-      context: .
-      dockerfile: ./dataset/Dockerfile
-    container_name: ros2_dataset_player
+      context: ./bag_player
+      dockerfile: ./Dockerfile
+    container_name: bag_player
     network_mode: "host"
     ipc: "host"
-    shm_size: '2gb'
-    ulimits:
-      nofile:
-        soft: 1024
-        hard: 65535
     environment:
       ROS_DOMAIN_ID: 42
       ROS_DISTRO: humble
     volumes:
-      - ./dataset:/app/dataset:ro
-    command: >
-      ros2 bag play
-      /app/dataset/doubleT_obstacle
-      --loop
-      --rate 1.0
+      - ./dataset:/app/dataset
 
   rust_viewer:
     build:
@@ -39,8 +52,8 @@ services:
     environment:
       ROS_DOMAIN_ID: 42
       ROS_DISTRO: humble
-    depends_on:
-      - ros2_dataset_player
+    # depends_on:
+    #   - ros2_dataset_player
     deploy:
       resources:
         reservations:

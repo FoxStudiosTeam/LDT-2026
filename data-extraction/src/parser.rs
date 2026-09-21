@@ -163,47 +163,74 @@ pub fn parse_coords(
     let z_off = layout.z_offset;
     let i_off = layout.intensity_offset;
 
+    let mut i = 0;
+
+    let mut logged_points = 0;
+
     for point_buf in point_chunks {
         if point_buf.len() < point_step {
             break;
         }
+        
+        // Безопасное чтение 4-байтовых кусков, устойчивое к невыровненному point_step = 26
+        let x_bytes: [u8; 4] = point_buf[x_off..x_off + 4].try_into().unwrap();
+        let y_bytes: [u8; 4] = point_buf[y_off..y_off + 4].try_into().unwrap();
+        let z_bytes: [u8; 4] = point_buf[z_off..z_off + 4].try_into().unwrap();
+        let i_bytes: [u8; 4] = point_buf[i_off..i_off + 4].try_into().unwrap();
 
-        // Высокопроизводительное чтение памяти по сырым указателям через регистры CPU
-        let (x, y, z, intensity) = unsafe {
-            let px = *(point_buf.as_ptr().add(x_off) as *const u32);
-            let py = *(point_buf.as_ptr().add(y_off) as *const u32);
-            let pz = *(point_buf.as_ptr().add(z_off) as *const u32);
-            let pi = *(point_buf.as_ptr().add(i_off) as *const u32);
+        // Превращаем байты в u32 с учетом родного порядка байт процессора (Native Endian)
+        let px = u32::from_ne_bytes(x_bytes);
+        let py = u32::from_ne_bytes(y_bytes);
+        let pz = u32::from_ne_bytes(z_bytes);
+        let pi = u32::from_ne_bytes(i_bytes);
 
-            if is_bigendian {
-                (
-                    f32::from_bits(u32::from_be(px)),
-                    f32::from_bits(u32::from_be(py)),
-                    f32::from_bits(u32::from_be(pz)),
-                    f32::from_bits(u32::from_be(pi)),
-                )
-            } else {
-                (
-                    f32::from_bits(u32::from_le(px)),
-                    f32::from_bits(u32::from_le(py)),
-                    f32::from_bits(u32::from_le(pz)),
-                    f32::from_bits(u32::from_le(pi)),
-                )
-            }
+        let (x, y, z, intensity) = if is_bigendian {
+            (
+                f32::from_bits(u32::from_be(px)),
+                f32::from_bits(u32::from_be(py)),
+                f32::from_bits(u32::from_be(pz)),
+                f32::from_bits(u32::from_be(pi)),
+            )
+        } else {
+            (
+                f32::from_bits(u32::from_le(px)),
+                f32::from_bits(u32::from_le(py)),
+                f32::from_bits(u32::from_le(pz)),
+                f32::from_bits(u32::from_le(pi)),
+            )
         };
+        
+        if logged_points < 5 && (x != 0.0 || y != 0.0 || z != 0.0) {
+            tracing::info!(
+                "POINT {}:\n  \
+                X: bytes={:X?}, parsed={}, finite={}\n  \
+                Y: bytes={:X?}, parsed={}, finite={}\n  \
+                Z: bytes={:X?}, parsed={}, finite={}\n  \
+                I: bytes={:X?}, parsed={}, finite={}", 
+                i, 
+                x_bytes, x, x.is_finite(),
+                y_bytes, y, y.is_finite(),
+                z_bytes, z, z.is_finite(),
+                i_bytes, intensity, intensity.is_finite()
+            );
+            logged_points+=1;
+        }
 
+        // Откидываем битые точки (NaN и Infinite)
         if x.is_finite() && y.is_finite() && z.is_finite() {
-            //cloud.x[write_state][valid_count] = x;
-            //cloud.y[write_state][valid_count] = y;
-            //cloud.z[write_state][valid_count] = z;
-            //cloud.intensity[write_state][valid_count] = intensity;
+            cloud.x[write_state][i] = x;
+            cloud.y[write_state][i] = y;
+            cloud.z[write_state][i] = z;
+            cloud.intensity[write_state][i] = intensity;
+            cloud.x[write_state].length += 1;
+            cloud.y[write_state].length += 1;
+            cloud.z[write_state].length += 1;
+            cloud.intensity[write_state].length += 1;
 
-            cloud.x[write_state].push(x);
-            cloud.y[write_state].push(y);
-            cloud.z[write_state].push(z);
-            cloud.intensity[write_state].push(intensity);
+            i+=1;
         }
     }
+
 
     cloud.width[write_state] = message.width;
     cloud.height[write_state] = message.height;

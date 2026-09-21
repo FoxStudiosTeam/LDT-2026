@@ -1,21 +1,21 @@
-use shared::types::AppPointCloud;
+use std::sync::{Arc, RwLock};
+
+use shared::{error::AppError, types::AppPointCloud};
 
 use crate::engine::types::Engine;
 
-pub struct CPUEngine<'a> {
-    point_cloud: &'a AppPointCloud,
+pub struct CPUEngine {
+    point_cloud: Arc<RwLock<AppPointCloud>>,
 }
 
-impl<'a> CPUEngine<'a> {
-    pub fn new(point_cloud: &'a AppPointCloud) -> Self {
-        Self {
-            point_cloud: point_cloud,
-        }
+impl CPUEngine {
+    pub fn new(point_cloud: Arc<RwLock<AppPointCloud>>) -> Self {
+        Self { point_cloud }
     }
 }
 
-impl<'a> Engine for CPUEngine<'a> {
-    fn check(&self) -> Result<bool, anyhow::Error> {
+impl Engine for CPUEngine{
+    fn check(&self) -> Result<bool, AppError> {
         Ok(false)
     }
 }

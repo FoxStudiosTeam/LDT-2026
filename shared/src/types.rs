@@ -99,7 +99,7 @@ impl<const SIZE : usize> Deref for CudaArray<SIZE> {
             panic!("Попытка разыменовать пустой указатель")
         }
         // Создаем слайс только до РЕАЛЬНОЙ заполненной длины
-        unsafe { std::slice::from_raw_parts(self.ptr, self.length) }
+        unsafe { std::slice::from_raw_parts(self.ptr, SIZE) }
     }
 }
 
@@ -110,7 +110,7 @@ impl<const SIZE: usize> DerefMut for CudaArray<SIZE> {
             panic!("Попытка разыменовать пустой указатель")
         }
         // Создаем слайс только до РЕАЛЬНОЙ заполненной длины
-        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.length) }
+        unsafe { std::slice::from_raw_parts_mut(self.ptr, SIZE) }
     }
 }
 
@@ -272,27 +272,37 @@ impl<const SIZE : usize> PointCloud<SIZE> {
         cloud_stats
     } 
 
-    pub fn change_state(&mut self, queue_old : ProcessingQueue, queue_new : ProcessingQueue) {
+    pub fn change_state(&mut self, queue_old: ProcessingQueue, queue_new: ProcessingQueue) {
         if !self.can_write {
             return;
         }
-        
-        let mut ptr_old = self.x[queue_old].ptr;
-        let mut ptr_new = self.x[queue_new].ptr;
-        mem::swap(&mut ptr_old, &mut ptr_new);
 
-        let mut ptr_old = self.y[queue_old].ptr;
-        let mut ptr_new = self.y[queue_new].ptr;
-        mem::swap(&mut ptr_old, &mut ptr_new);
+        // Безопасно получаем мутабельные ссылки на два разных элемента TripleBuffer/массива
+        // Если ProcessingQueue — это enum, преобразуй его в usize (например, .as_index())
+        let idx_old = queue_old as usize;
+        let idx_new = queue_new as usize;
 
-        let mut ptr_old = self.z[queue_old].ptr;
-        let mut ptr_new = self.z[queue_new].ptr;
-        mem::swap(&mut ptr_old, &mut ptr_new);
+        if idx_old == idx_new {
+            return;
+        }
 
-        let mut ptr_old = self.intensity[queue_old].ptr;
-        let mut ptr_new = self.intensity[queue_new].ptr;
-        mem::swap(&mut ptr_old, &mut ptr_new);
+        // Используем raw-указатели, чтобы обойти Rust Borrow Checker на один массив
+        unsafe {
+            let self_ptr = self as *mut Self;
+            
+            // Свапаем целиком CudaArray структуры (указатель + длина) для каждого поля
+            mem::swap(&mut (*self_ptr).x.0[idx_old], &mut (*self_ptr).x.0[idx_new]);
+            mem::swap(&mut (*self_ptr).y.0[idx_old], &mut (*self_ptr).y.0[idx_new]);
+            mem::swap(&mut (*self_ptr).z.0[idx_old], &mut (*self_ptr).z.0[idx_new]);
+            mem::swap(&mut (*self_ptr).intensity.0[idx_old], &mut (*self_ptr).intensity.0[idx_new]);
+
+            // Также обязательно свапаем метаданные кадра
+            mem::swap(&mut (*self_ptr).width.0[idx_old], &mut (*self_ptr).width.0[idx_new]);
+            mem::swap(&mut (*self_ptr).height.0[idx_old], &mut (*self_ptr).height.0[idx_new]);
+            mem::swap(&mut (*self_ptr).timestamp.0[idx_old], &mut (*self_ptr).timestamp.0[idx_new]);
+        }
     }
+
 
     pub fn to_rerun(&self, queue: ProcessingQueue) -> impl Iterator<Item = [f32; 3]> + '_ {
         let xs = self.x[queue].iter();

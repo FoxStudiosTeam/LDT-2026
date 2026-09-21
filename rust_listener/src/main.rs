@@ -10,7 +10,6 @@ mod engine;
 use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
-use cuda_pipeline::pin_gpu;
 use shared::error::{AppError, ErrorType};
 use shared::types::{AppPointCloud, SIZE};
 use tracing::*;
@@ -18,6 +17,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::debug::rerun::init_rerun;
 use crate::engine::engine_entry::entry;
+use crate::engine::types::pin_ptr;
 
 kaiv_utils::env_config! {
     ".env" => pub (crate) ENV = pub (crate) Env {
@@ -38,10 +38,10 @@ async fn main() -> Result<(), AppError> {
 
     Env::fetch();
 
-    let x_ptr = pin_gpu(SIZE);
-    let y_ptr = pin_gpu(SIZE);
-    let z_ptr = pin_gpu(SIZE);
-    let i_ptr = pin_gpu(SIZE);
+    let x_ptr = pin_ptr(SIZE);
+    let y_ptr = pin_ptr(SIZE);
+    let z_ptr = pin_ptr(SIZE);
+    let i_ptr = pin_ptr(SIZE);
 
     let cloud = Arc::<RwLock<AppPointCloud>>::new(RwLock::new(AppPointCloud::new(
         x_ptr, y_ptr, z_ptr, i_ptr,
