@@ -2,6 +2,7 @@
 unsafe extern "C" {
     unsafe fn run_vector_add(a: *const f32, b: *const f32, c: *mut f32, n: i32);
     unsafe fn pin_gpu_addr(size : usize) -> *mut f32;
+    unsafe fn normalize_tunnel(x: *const f32, y: *const f32, z: *const f32) -> i32;
 }
 
 // 2. Делаем безопасную обертку для Rust
@@ -30,6 +31,12 @@ pub fn pin_gpu(size : usize) -> [*mut f32;3] {
         }
 
         [pinned_addr_frame_0, pinned_addr_frame_1, pinned_addr_frame_2]
+    }
+}
+
+pub fn normalize_tunnel_wrapped(x: *const f32, y: *const f32, z: *const f32) -> i32 {
+    unsafe {
+        normalize_tunnel(x,y,z)
     }
 }
 

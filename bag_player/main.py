@@ -252,7 +252,7 @@ def play_bag_direct(bag_path, loop, rate, topics_filter):
 def main():
     parser = argparse.ArgumentParser(description="ROS2 Bag RAM Player")
     parser.add_argument("bag_path", nargs="?", default=None, help="Пусть к папке/файлу bag. Если не указан — запуск TUI.")
-    parser.add_argument("--loop", action="store_true", default=True, help="Зациклить воспроизведение")
+    parser.add_argument("--loop", action="store_true", default=False, help="Зациклить воспроизведение")
     parser.add_argument("--rate", type=float, default=1.0, help="Множитель скорости (default: 1.0)")
     parser.add_argument("--topics", nargs="*", default=None, help="Фильтр топиков")
     args = parser.parse_args()

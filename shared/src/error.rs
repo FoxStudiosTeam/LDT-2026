@@ -43,6 +43,8 @@ pub enum ErrorType {
     MessageError(String),
     #[error("{0}")]
     ExternalError(Box<dyn std::error::Error + Send + Sync>),
+    #[error("Cuda error {0}")]
+    CudaError(i32),
 }
 
 impl ErrorType {

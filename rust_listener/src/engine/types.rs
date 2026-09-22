@@ -2,26 +2,27 @@ use std::alloc::{Layout, alloc};
 
 use shared::error::AppError;
 
-use crate::engine::cpu_engine::CPUEngine;
+use crate::engine::cpu_engine::{self, CPUEngine};
+#[cfg(feature = "gpu")]
+use crate::engine::gpu_engine::{self, GPUEngine};
 
 pub trait Engine {
-    fn check(&self) -> Result<bool, AppError>;
+    fn check(&self) -> Result<(), AppError>;
+    fn transform_tunnel(&self) -> Result<(), AppError>;
 }
 
+#[cfg(feature = "cpu")]
 pub type AppEngine = CPUEngine;
 
-pub fn pin_ptr(size : usize) -> [*mut f32; 3] {
-    unsafe {
-        let layout = Layout::array::<f32>(size).unwrap();
-            
-        let ptr1 = alloc(layout) as *mut f32;
-        let ptr2 = alloc(layout) as *mut f32;
-        let ptr3 = alloc(layout) as *mut f32;
-            
-        if ptr1.is_null() || ptr2.is_null() || ptr3.is_null() {
-            std::alloc::handle_alloc_error(layout);
-        }
+#[cfg(feature = "gpu")]
+pub type AppEngine = GPUEngine;
 
-        [ptr1, ptr2, ptr3]
-    }
+#[cfg(feature = "cpu")]
+use cpu_engine as active_engine;
+
+#[cfg(feature = "gpu")]
+use gpu_engine as active_engine;
+
+pub fn pin_ptr(size: usize) -> [*mut f32; 3] {
+    active_engine::pin_ptr(size)
 }

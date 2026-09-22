@@ -2,6 +2,7 @@ use std::sync::{Arc, RwLock};
 
 use rerun::RecordingStream;
 use ros2_data_extraction::PointCloudStream;
+use shared::error::ErrCtx;
 use shared::types::AppPointCloud;
 use shared::{
     error::AppError,
@@ -9,6 +10,7 @@ use shared::{
 };
 use tracing::*;
 
+use crate::engine::types::{AppEngine, Engine};
 use crate::{
     ENV,
     debug::{self, helper::DebugStream},
@@ -18,6 +20,7 @@ pub async fn entry(
     mut point_cloud_stream: PointCloudStream,
     recording_stream: RecordingStream,
     point_cloud: Arc<RwLock<AppPointCloud>>,
+    engine: Arc<AppEngine>,
 ) -> Result<(), AppError> {
     let recording_stream = Arc::new(recording_stream);
     let mut initial_injector = crate::debug::injector::setup_obstacles();
@@ -38,10 +41,11 @@ pub async fn entry(
         let point_cloud_lock = point_cloud.clone();
         let recording_stream = recording_stream.clone();
         let injector = injector.clone();
+        let engine = engine.clone();
 
         tokio::task::spawn_blocking(move || {
             let frame_start = std::time::Instant::now();
-
+            
             // 1. Ожидание лочки и переключение очередей (TripleBuffer swap)
             let swap_start = std::time::Instant::now();
             {
@@ -61,6 +65,8 @@ pub async fn entry(
                 );
             }
 
+            engine.transform_tunnel().app_error().unwrap();
+
             // 2. Инъекция препятствий, статистика, RangeImage под WRITE-локом буфера READ
             let compute_start = std::time::Instant::now();
             let (timestamp_ns, stats, rerun_points, range_image, gt_boxes) = {
@@ -75,7 +81,8 @@ pub async fn entry(
 
                 // Инъекция виртуальных препятствий
                 let gt_boxes = if let Ok(mut inj_guard) = injector.lock() {
-                    inj_guard.inject(&mut point_cloud, number, timestamp_ns, frame_id)
+                    //inj_guard.inject(&mut point_cloud, number, timestamp_ns, frame_id)
+                    Vec::new()
                 } else {
                     Vec::new()
                 };
@@ -91,7 +98,6 @@ pub async fn entry(
                 (timestamp_ns, stats, rerun_points, range_image, gt_boxes)
             }; // <--- write-lock освобожден!
             let compute_dur = compute_start.elapsed();
-
             debug!(
                 "[FRAME {frame_id}] Data extracted & stats & RangeImage computed in {:?}: n_points={}, centroid=({:.2}, {:.2}, {:.2})",
                 compute_dur,

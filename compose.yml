@@ -39,7 +39,7 @@ services:
       - .env
     volumes:
       - ./dataset:/app/dataset:ro
-    command: ["/app/dataset/doubleT_platform"]
+    command: ["/app/dataset/roundT_pressureGate_roundT"]
     
   # 2. Rust-приложение — без ROS2, чистый ros2-client/rustdds
   rust_viewer:

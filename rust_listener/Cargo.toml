@@ -7,6 +7,11 @@ edition.workspace = true
 name = "ros2_debug_viewer"
 path = "src/main.rs"
 
+[features]
+default = ["cpu"]
+cpu = []
+gpu = []
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
@@ -19,7 +24,6 @@ shared.workspace = true
 kaiv_utils.workspace = true
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-ros2-interfaces-jazzy-serde = { version = "0.0.5", features = ["sensor_msgs"] }
 rayon = "1.12.0"
 tracing-appender = "0.2.5"
 serde = { version = "1.0", features = ["derive"] }

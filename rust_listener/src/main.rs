@@ -17,7 +17,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::debug::rerun::init_rerun;
 use crate::engine::engine_entry::entry;
-use crate::engine::types::pin_ptr;
+use crate::engine::types::{AppEngine, pin_ptr};
 
 kaiv_utils::env_config! {
     ".env" => pub (crate) ENV = pub (crate) Env {
@@ -73,7 +73,9 @@ async fn main() -> Result<(), AppError> {
     let point_cloud_stream =
         ros2_data_extraction::init_sub(ENV.ROS_DOMAIN_ID, Arc::clone(&cloud)).await?;
 
-    let _ = entry(point_cloud_stream, rerun, Arc::clone(&cloud)).await?;
+    let engine = AppEngine::new(cloud.clone());
+
+    let _ = entry(point_cloud_stream, rerun, Arc::clone(&cloud), Arc::new(engine)).await?;
 
     info!("[POST] Поток сообщений завершён.");
     debug::std::print_banner();
