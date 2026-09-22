@@ -5,6 +5,7 @@ ros2/*
 fix.ps1
 target
 !dataset/Dockerfile
+!dataset/convert_to_mcap.py
 .env
 
 # --- Rust/Cargo ---

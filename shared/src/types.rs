@@ -258,6 +258,8 @@ impl<const SIZE: usize> PointCloud<SIZE> {
         let mut cloud_stats = CloudStats::new();
         let current_len = self.len(queue);
 
+        tracing::debug!("Len: {}", current_len);
+
         if current_len == 0 {
             return cloud_stats;
         }

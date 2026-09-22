@@ -385,19 +385,20 @@ impl RangeImage {
         let mut file = std::fs::File::create(path)?;
         // Magic NPY v1.0
         file.write_all(b"\x93NUMPY\x01\x00")?;
-        let header = format!(
-            "{{'descr': '<f4', 'fortran_order': False, 'shape': ({}, {}), }}\n",
+        let dict = format!(
+            "{{'descr': '<f4', 'fortran_order': False, 'shape': ({}, {})}}",
             self.height, self.width
         );
-        let header_len = header.len();
-        // NPY v1.0 требует, чтобы (10 + header_len + pad_len) делилось на 64
-        let pad_len = ((10 + header_len + 63) / 64) * 64 - 10 - header_len;
-        let total_header_len = (header_len + pad_len) as u16;
+        let prefix_len = 10 + dict.len() + 1; // 10 bytes prefix + dict + '\n'
+        let pad_len = ((prefix_len + 63) / 64) * 64 - prefix_len;
+        let mut header = dict;
+        for _ in 0..pad_len {
+            header.push(' ');
+        }
+        header.push('\n');
+        let total_header_len = header.len() as u16;
         file.write_all(&total_header_len.to_le_bytes())?;
         file.write_all(header.as_bytes())?;
-        for _ in 0..pad_len {
-            file.write_all(b" ")?;
-        }
         let raw_bytes: &[u8] = unsafe {
             std::slice::from_raw_parts(
                 self.data.as_ptr() as *const u8,

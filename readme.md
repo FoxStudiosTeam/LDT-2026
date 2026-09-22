@@ -4,3 +4,6 @@
 ```
 winget install Kitware.CMake
 ```
+
+### Датасеты и воспроизведение багов
+Инструкция по работе с томом `bag_data` и конвертации: см. [DATASETS.md](DATASETS.md).

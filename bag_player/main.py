@@ -6,6 +6,10 @@ import sys
 import time
 import yaml
 import threading
+import socket
+import struct
+import json
+import zlib
 from dataclasses import dataclass
 
 import rclpy
@@ -113,6 +117,132 @@ class BagPlayer(Node):
                 self.get_logger().info("Loop restart")
         except KeyboardInterrupt:
             pass
+
+
+class StreamReceiver(Node):
+    """
+    Принимает пакеты по TCP из Windows win_streamer.py и сразу публикует в ROS2.
+    - 0 байт копирования на диск
+    - Не требует загрузки всего датасета в RAM
+    - Поддерживает zlib-сжатие на лету (разгружает сетевой мост)
+    """
+    def __init__(self, port=9898):
+        super().__init__("bag_stream_receiver")
+        self.port = port
+        self.qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        self.publishers_map = {}
+        self.msg_types = {}
+
+    def recv_exact(self, conn, n):
+        buf = bytearray(n)
+        view = memoryview(buf)
+        pos = 0
+        while pos < n:
+            nbytes = conn.recv_into(view[pos:])
+            if not nbytes:
+                return None
+            pos += nbytes
+        return bytes(buf)
+
+    def handle_client(self, conn):
+        self.get_logger().info("Windows клиент подключился! Ожидание handshake...")
+        len_raw = self.recv_exact(conn, 4)
+        if not len_raw:
+            return
+        json_len = struct.unpack(">I", len_raw)[0]
+        header_json = self.recv_exact(conn, json_len)
+        if not header_json:
+            return
+
+        meta = json.loads(header_json.decode("utf-8"))
+        topics = meta.get("topics", [])
+
+        for tinfo in topics:
+            topic_id = tinfo["id"]
+            topic_name = tinfo["name"]
+            topic_type = tinfo["type"]
+            msg_cls = get_message(topic_type)
+            self.msg_types[topic_id] = msg_cls
+            if topic_id not in self.publishers_map:
+                self.publishers_map[topic_id] = self.create_publisher(msg_cls, topic_name, self.qos)
+            self.get_logger().info(f"Топик #{topic_id}: {topic_name} ({topic_type})")
+
+        conn.sendall(b'\x01')
+        self.get_logger().info("► [STREAM] Приём и публикация кадров начались!")
+
+        msg_count = 0
+        t0 = time.time()
+
+        while True:
+            header_raw = self.recv_exact(conn, 15)
+            if not header_raw:
+                break
+
+            topic_id, t_ns, flags, payload_len = struct.unpack(">HQBI", header_raw)
+            if topic_id == 0xFFFF:
+                self.get_logger().info("Получен маркер завершения потока.")
+                break
+
+            payload = self.recv_exact(conn, payload_len)
+            if not payload:
+                break
+
+            if flags & 1:
+                raw_cdr = zlib.decompress(payload)
+            else:
+                raw_cdr = payload
+
+            if topic_id in self.publishers_map:
+                msg = deserialize_message(raw_cdr, self.msg_types[topic_id])
+                self.publishers_map[topic_id].publish(msg)
+                msg_count += 1
+                if msg_count % 50 == 0:
+                    dt = time.time() - t0
+                    fps = msg_count / dt if dt > 0 else 0
+                    self.get_logger().info(f"Опубликовано {msg_count} кадров ({fps:.1f} кадров/сек)")
+
+        self.get_logger().info(f"Поток завершён. Всего передано кадров: {msg_count}")
+
+    def run_receiver(self):
+        spin_thread = threading.Thread(target=rclpy.spin, args=(self,), daemon=True)
+        spin_thread.start()
+
+        target_hosts = ["127.0.0.1", "host.docker.internal"]
+        self.get_logger().info(f"==================================================")
+        self.get_logger().info(f"► Ожидание запуска win_streamer.py на Windows (порт {self.port})...")
+        self.get_logger().info(f"  Запустите в PowerShell: python win_streamer.py <путь_к_багу>")
+        self.get_logger().info(f"==================================================")
+
+        while rclpy.ok():
+            connected = False
+            for host in target_hosts:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 16 * 1024 * 1024)
+                s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                s.settimeout(0.5)
+                try:
+                    s.connect((host, self.port))
+                    s.settimeout(None)
+                    self.get_logger().info(f"Подключено к Windows стримеру ({host}:{self.port})!")
+                    self.handle_client(s)
+                    connected = True
+                except (ConnectionRefusedError, socket.timeout, OSError):
+                    pass
+                finally:
+                    s.close()
+                if connected:
+                    break
+
+            if connected:
+                self.get_logger().info(f"Ожидание следующего запуска win_streamer.py...")
+
+            time.sleep(1.0)
+
 
 def get_key_blocking():
     if sys.platform == 'win32':
@@ -250,12 +380,27 @@ def play_bag_direct(bag_path, loop, rate, topics_filter):
     rclpy.shutdown()
 
 def main():
-    parser = argparse.ArgumentParser(description="ROS2 Bag RAM Player")
-    parser.add_argument("bag_path", nargs="?", default=None, help="Пусть к папке/файлу bag. Если не указан — запуск TUI.")
+    parser = argparse.ArgumentParser(description="ROS2 Bag RAM Player / Stream Server")
+    parser.add_argument("bag_path", nargs="?", default=None, help="Путь к папке/файлу bag или --server. Если не указан — запуск TUI.")
+    parser.add_argument("--server", action="store_true", help="Запустить TCP сервер приёма потока из Windows")
+    parser.add_argument("--port", type=int, default=9898, help="Порт для стриминг сервера (default: 9898)")
     parser.add_argument("--loop", action="store_true", default=True, help="Зациклить воспроизведение")
     parser.add_argument("--rate", type=float, default=1.0, help="Множитель скорости (default: 1.0)")
     parser.add_argument("--topics", nargs="*", default=None, help="Фильтр топиков")
     args = parser.parse_args()
+
+    # Запуск сервера приёма потока из Windows
+    if args.server or args.bag_path in ("--server", "server") or os.getenv("STREAM_SERVER") == "1":
+        rclpy.init()
+        receiver = StreamReceiver(port=args.port)
+        receiver.run_receiver()
+        receiver.destroy_node()
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except Exception:
+            pass
+        return
 
     # Запуск без TUI, если передан аргумент bag_path
     if args.bag_path:
@@ -263,10 +408,8 @@ def main():
         return
 
     # Запуск TUI-меню
-    replays = get_replays(DATASET_DIR)
-    if not replays:
-        print(f"Ошибка: Директория '{DATASET_DIR}' пуста или не найдена.")
-        sys.exit(1)
+    dataset_replays = get_replays(DATASET_DIR)
+    replays = ["[STREAM SERVER] (Ожидание стрима из Windows, порт 9898)"] + dataset_replays
 
     selected_idx = 0
     loop_mode = args.loop
@@ -297,6 +440,19 @@ def main():
                 loop_mode = not loop_mode
             elif key == 'ENTER':
                 selected_replay = replays[selected_idx]
+                if selected_replay.startswith("[STREAM SERVER]"):
+                    clear()
+                    rclpy.init()
+                    receiver = StreamReceiver(port=args.port)
+                    receiver.run_receiver()
+                    receiver.destroy_node()
+                    try:
+                        if rclpy.ok():
+                            rclpy.shutdown()
+                    except Exception:
+                        pass
+                    break
+
                 bag_full_path = os.path.join(DATASET_DIR, selected_replay)
 
                 while True:

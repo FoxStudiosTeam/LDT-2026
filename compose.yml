@@ -1,6 +1,6 @@
 services:
   # 1. Сервис плеера — остаётся на ROS2
-  # АСТМАТИК 👎
+  # 1. Сервис плеера через Docker-том (если нужно проигрывать из bag_data)
   # ros2_dataset_player:
   #   build:
   #     context: .
@@ -19,12 +19,26 @@ services:
   #   env_file:
   #     - .env
   #   volumes:
-  #     - ./dataset:/app/dataset:ro
+  #     - bag_data:/app/dataset:ro
   #   command: >
   #     bash -c "
   #       echo '► [DATASET] Поехали!' &&
-  #       ros2 bag play /app/dataset/roundT_doubleT --loop --read-ahead-queue-size 50
+  #       ros2 bag play /app/dataset/doubleT_platform_mcap --loop --read-ahead-queue-size 30
   #     "
+
+  # 0. Утилита для быстрой конвертации багов из .db3 (sqlite3) в .mcap
+  # Запуск для всех: docker compose run --rm ros2_converter
+  # Запуск для одного: docker compose run --rm ros2_converter python3 /app/dataset/convert_to_mcap.py doubleT_obstacle
+  ros2_converter:
+    build:
+      context: .
+      dockerfile: ./dataset/Dockerfile
+    container_name: ros2_converter
+    volumes:
+      - ./dataset:/app/dataset
+    command: ["python3", "/app/dataset/convert_to_mcap.py"]
+
+  # 1. Быстрый RAM-плеер (оригинальный)
   ros2_fast_player:
     build:
       context: .
@@ -39,7 +53,24 @@ services:
       - .env
     volumes:
       - ./dataset:/app/dataset:ro
-    command: ["/app/dataset/doubleT_platform"]
+      - ./frames:/frames:ro
+    command: ["/app/dataset/roundT_doubleT"]
+
+  # 2. Стрим-ресивер из Windows (для огромных датасетов без копирования)
+  # Ждёт запуск в PowerShell: python win_streamer.py <путь_к_багу>
+  ros2_stream_player:
+    build:
+      context: .
+      dockerfile: ./bag_player/Dockerfile
+    container_name: ros2_stream_player
+    network_mode: "host"
+    ipc: "host"
+    environment:
+      - ROS_DOMAIN_ID=42
+      - ROS_LOCALHOST_ONLY=1
+    env_file:
+      - .env
+    command: ["--server"]
     
   # 2. Rust-приложение — без ROS2, чистый ros2-client/rustdds
   rust_viewer:
@@ -74,3 +105,7 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+ 
+volumes:
+  bag_data:
+    external: true
