@@ -1,3 +1,6 @@
+# ==============================================================================
+# 🛠️ СТЕЙДЖ 1: СБОРКА (Тяжелый образ со всеми компиляторами)
+# ==============================================================================
 FROM nvidia/cuda:12.2.2-devel-ubuntu22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -10,19 +13,16 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Rust
+# Установка Rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 SHELL ["/bin/bash", "-c"]
-
 WORKDIR /app
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 🛠️ КЭШ ЗАВИСИМОСТЕЙ
 # ──────────────────────────────────────────────────────────────────────────────
-
 COPY Cargo.toml Cargo.lock* ./
 COPY cuda-pipeline/Cargo.toml ./cuda-pipeline/
 COPY shared/Cargo.toml ./shared/
@@ -40,12 +40,17 @@ RUN mkdir -p \
         shared/src/lib.rs \
         data-extraction/src/lib.rs
 
+# ⚡ Оптимизируем Cargo прямо на лету во время кэширования сборки
+ENV CARGO_PROFILE_RELEASE_LTO=true
+ENV CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+ENV CARGO_PROFILE_RELEASE_STRIP=true
+ENV CARGO_PROFILE_RELEASE_OPT_LEVEL=3
+
 RUN cargo build --release
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 📦 РЕАЛЬНЫЙ ИСХОДНЫЙ КОД
 # ──────────────────────────────────────────────────────────────────────────────
-
 RUN rm -rf \
     cuda-pipeline/src \
     shared/src \
@@ -57,7 +62,6 @@ COPY shared/ ./shared/
 COPY data-extraction/ ./data-extraction/
 COPY rust_listener/ ./rust_listener/
 
-# Чтобы Cargo точно пересобрал изменившиеся workspace crates
 RUN rm -rf \
     target/release/.fingerprint/shared-* \
     target/release/.fingerprint/cuda_pipeline-* \
@@ -65,23 +69,24 @@ RUN rm -rf \
     target/release/.fingerprint/rust_listener-* \
     || true
 
+# ⚡ Переменные для принудительного статического связывания CUDA-компонентов в Rust
+ENV CUDA_STATIC=true
 RUN cargo build --release
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 🏁 RUNTIME
-# ──────────────────────────────────────────────────────────────────────────────
+# Дополнительно вычищаем остаточные отладочные символы из готового бинарника
+RUN strip /app/target/release/ros2_debug_viewer
 
-FROM nvidia/cuda:12.2.2-runtime-ubuntu22.04
+# ==============================================================================
+# 🏁 СТЕЙДЖ 2: МИНИМАЛЬНЫЙ RUNTIME (Образ похудеет на ~1.5 ГБ)
+# ==============================================================================
+FROM nvidia/cuda:12.2.2-base-ubuntu22.04
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    libcublas-12-2 \
-    && rm -rf /var/lib/apt/lists/*
-
+# Копируем только ОДИН бинарник. Никаких лишних тяжелых .so
 COPY --from=builder /app/target/release/ros2_debug_viewer /app/ros2_debug_viewer
 
+# Оставляем системные пути для работы NVidia контейнера через драйвер хоста
 ENV LD_LIBRARY_PATH="/usr/local/cuda-12.2/lib64:${LD_LIBRARY_PATH}"
 
-# Запускаем Rust-приложение
 ENTRYPOINT ["/app/ros2_debug_viewer"]

@@ -1,6 +1,6 @@
 use std::sync::{Arc, RwLock};
 
-use ros2_interfaces_jazzy_serde::sensor_msgs::msg::PointCloud2;
+use shared::transport::PointCloud2;
 use shared::types::AppPointCloud;
 
 use shared::error::{AppError, ErrCtx};
@@ -25,9 +25,43 @@ pub struct PointCloudStream {
 impl PointCloudStream {
     pub async fn next(&mut self) -> Result<Option<u64>, AppError> {
         self.frame_num += 1;
-        let (point_cloud, _msg) = self.subscription.async_take().await.app_error()?;
+
+        tracing::info!("Waiting for PointCloud2...");
+
+        let result = self.subscription.async_take().await;
+
+        if let Err(ref e) = result {
+            tracing::error!(
+                error = ?e,
+                "PointCloud2 deserialization failed"
+            );
+        }
+
+        let (point_cloud, _msg) = result.app_error()?;
+
+        tracing::info!(
+            width = point_cloud.width,
+            height = point_cloud.height,
+            fields = point_cloud.fields.len(),
+            point_step = point_cloud.point_step,
+            row_step = point_cloud.row_step,
+            data_len = point_cloud.data.len(),
+            "Received PointCloud2"
+        );
+
+        // for field in &point_cloud.fields {
+        //     tracing::info!(
+        //         name = %field.name,
+        //         offset = field.offset,
+        //         datatype = field.datatype,
+        //         count = field.count,
+        //         "PointCloud2 field"
+        //     );
+        // }
+
         let layout = extract_and_validate_layout(&point_cloud)?;
         parse_coords(&point_cloud, Arc::clone(&self.cached_cloud), &layout)?;
+
         Ok(Some(self.frame_num))
     }
 }

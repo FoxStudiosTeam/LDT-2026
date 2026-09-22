@@ -1,8 +1,7 @@
 use crate::discovery::DiscoveredTopic;
 use ros2_client::{Context, Name, Node, NodeName, NodeOptions, Subscription};
-use ros2_interfaces_jazzy_serde::sensor_msgs::msg::PointCloud2;
 use rustdds::qos::HasQoSPolicy;
-use shared::error::{AppError, ErrCtx, ErrorType};
+use shared::{error::{AppError, ErrCtx, ErrorType}, transport::PointCloud2};
 use tracing::*;
 
 pub fn create_node(context: &Context) -> Result<Node, AppError> {
