@@ -31,8 +31,11 @@ impl Engine for CPUEngine{
 
         debug!("[TRANSFORM TUNNEL] entry");
 
-        // 1. Находим базовую ось тоннеля
-        let a_point = (cloud.x[q], cloud.y[q], cloud.z[q]);
+        // 1. Фиксируем начальную точку A
+        let a_point = (cloud.x[q][0], cloud.y[q][0], cloud.z[q][0]);
+
+        // Находим точку B, которая физически дальше всего удалена от точки A в пространстве фрейма.
+        // Это гарантирует, что вектор AB пройдет через ВСЮ длину тоннеля, а не схлопнется из-за шума.
         let mut max_dist_sq = 0.0;
         let mut b_point = a_point;
 
@@ -41,9 +44,9 @@ impl Engine for CPUEngine{
             let py = cloud.y[q][id];
             let pz = cloud.z[q][id];
             
-            let dx = px - a_point.0[id];
-            let dy = py - a_point.1[id];
-            let dz = pz - a_point.2[id];
+            let dx = px - a_point.0;
+            let dy = py - a_point.1;
+            let dz = pz - a_point.2;
             let dist_sq = dx * dx + dy * dy + dz * dz;
             
             if dist_sq > max_dist_sq {
@@ -52,72 +55,49 @@ impl Engine for CPUEngine{
             }
         }
 
-        // Вектор направления тоннеля (AB)
-        let mut ab_x = b_point.0 - a_point.0;
-        let mut ab_y = b_point.1 - a_point.1;
-        let mut ab_z = b_point.2 - a_point.2;
+        // 2. Считаем вектор идеальной оси AB
+        let ab_x = b_point.0 - a_point.0;
+        let ab_y = b_point.1 - a_point.1;
+        let ab_z = b_point.2 - a_point.2;
         
-        let len_sq = max_dist_sq;
+        let len_sq = max_dist_sq; // Квадрат длины тоннеля равен максимальному расстоянию
         let len = len_sq.sqrt();
         
+        // Порог безопасности увеличен до 1 см (0.0001 м²). 
+        // Если фрейм короче 10 см, выпрямлять в нём нечего.
         if len_sq < 0.0001 {
             return Ok(()); 
         }
-
-        // Нормализуем вектор оси (делаем его длину равной 1.0)
-        let dir_x = ab_x / len;
-        let dir_y = ab_y / len;
-        let dir_z = ab_z / len;
-
-        // 2. СТРОИМ ЛОКАЛЬНЫЙ БАЗИС ДЛЯ ТРУБЫ (чтобы избежать сплющивания)
-        // Нам нужны два вектора (Up и Right), которые строго перпендикулярны оси тоннеля
-        let mut up_x = 0.0;
-        let mut up_y = 1.0;
-        let mut up_z = 0.0;
-
-        // Если тоннель идет вертикально вверх, меняем опорный вектор, чтобы не было деления на ноль
-        if dir_y.abs() > 0.9 {
-            up_x = 1.0;
-            up_y = 0.0;
-        }
-
-        // Вектор Right (вбок от оси тоннеля) через векторное произведение
-        let r_x = dir_y * up_z - dir_z * up_y;
-        let r_y = dir_z * up_x - dir_x * up_z;
-        let r_z = dir_x * up_y - dir_y * up_x;
-        let r_len = (r_x * r_x + r_y * r_y + r_z * r_z).sqrt();
-        let r_x = r_x / r_len;
-        let r_y = r_y / r_len;
-        let r_z = r_z / r_len;
-
-        // Вектор Up (вверх от оси тоннеля) под честным углом 90 градусов
-        let u_x = r_y * dir_z - r_z * dir_y;
-        let u_y = r_z * dir_x - r_x * dir_z;
-        let u_z = r_x * dir_y - r_y * dir_x;
-
-        // 3. ТРАНСФОРМАЦИЯ
+        
+        // 3. Выпрямляем каждую точку тоннеля, сохраняя геометрию трубы
         for id in 0..count {
+            // Читаем текущие кривые координаты
             let px = cloud.x[q][id];
             let py = cloud.y[q][id];
             let pz = cloud.z[q][id];
 
+            // Вектор от начала тоннеля (A) до текущей точки
             let ap_x = px - a_point.0;
             let ap_y = py - a_point.1;
             let ap_z = pz - a_point.2;
 
-            // Координата `t_dist` — это честное расстояние в метрах вдоль тоннеля
-            let t_dist = ap_x * dir_x + ap_y * dir_y + ap_z * dir_z;
+            // Скалярное произведение и коэффициент проекции `t`
+            let t = (ap_x * ab_x + ap_y * ab_y + ap_z * ab_z) / len_sq;
 
-            // Проецируем точку на наши новые перпендикулярные оси, чтобы узнать 
-            // её реальный сдвиг ВБОК (lateral) и ВВЕРХ (vertical) относительно трубы
-            let lateral = ap_x * r_x + ap_y * r_y + ap_z * r_z;
-            let vertical = ap_x * u_x + ap_y * u_y + ap_z * u_z;
+            // Идеологически правильная точка на центральной оси
+            let a_ideal_x = a_point.0 + t * ab_x;
+            let a_ideal_y = a_point.1 + t * ab_y;
 
-            // Записываем выпрямленные координаты:
-            // Теперь труба гарантированно круглая, не плоская и идет ровно по оси Z
-            cloud.x[q][id] = lateral;
-            cloud.y[q][id] = vertical;
-            cloud.z[q][id] = t_dist;
+            // Вектор отклонения стенки тоннеля от центральной оси (сечение трубы)
+            let ox = px - a_ideal_x;
+            let oy = py - a_ideal_y;
+
+            // 4. Перезаписываем выпрямленные координаты на месте
+            // ox и oy — сохраняют радиус и форму тоннеля вокруг оси
+            cloud.x[q][id] = ox;
+            cloud.y[q][id] = oy;
+            // Координата Z превращается в идеальный продольный километраж (от 0.0 до len)
+            cloud.z[q][id] = t * len;
         }
 
         debug!("[TRANSFORM TUNNEL] end");
