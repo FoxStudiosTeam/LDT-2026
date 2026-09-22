@@ -1,5 +1,5 @@
-use core::fmt;
-use std::{mem, ops::{Deref, DerefMut, Index, IndexMut}};
+use std::fmt;
+use std::ops::{Deref, DerefMut, Index, IndexMut};
 
 /// Статистика по облаку точек
 pub struct CloudStats {
@@ -19,7 +19,7 @@ pub struct CloudStats {
 
 impl CloudStats {
     pub fn new() -> Self {
-        Self{ 
+        Self {
             centroid_x: 0.0,
             centroid_y: 0.0,
             centroid_z: 0.0,
@@ -36,25 +36,28 @@ impl CloudStats {
     }
 }
 
-
-#[repr(C)]
-pub struct CudaArray<const SIZE : usize> {
-    pub ptr : *mut f32,
-    pub length : usize
+/// Проверка, является ли точка началом координат с запасом 5 мм (0.005 м)
+#[inline(always)]
+pub fn is_zero_point(x: f32, y: f32, z: f32) -> bool {
+    x.abs() <= 0.005 && y.abs() <= 0.005 && z.abs() <= 0.005
 }
 
-impl<const SIZE : usize> CudaArray<SIZE> {
-    pub fn get(&self, index : usize) -> Option<f32> {
+#[repr(C)]
+pub struct CudaArray<const SIZE: usize> {
+    pub ptr: *mut f32,
+    pub length: usize,
+}
+
+impl<const SIZE: usize> CudaArray<SIZE> {
+    pub fn get(&self, index: usize) -> Option<f32> {
         if index >= self.length || self.ptr.is_null() {
             return None;
         }
-        unsafe {
-            Some(*self.ptr.add(index))
-        }
+        unsafe { Some(*self.ptr.add(index)) }
     }
 
     // Теперь берет истинный последний элемент, а не физический конец капы
-    pub fn last(&self) -> Option<&f32>{
+    pub fn last(&self) -> Option<&f32> {
         if self.length == 0 || self.ptr.is_null() {
             return None;
         }
@@ -91,8 +94,8 @@ impl<const SIZE : usize> CudaArray<SIZE> {
 unsafe impl<const SIZE: usize> Send for CudaArray<SIZE> {}
 unsafe impl<const SIZE: usize> Sync for CudaArray<SIZE> {}
 
-impl<const SIZE : usize> Deref for CudaArray<SIZE> {
-     type Target = [f32];
+impl<const SIZE: usize> Deref for CudaArray<SIZE> {
+    type Target = [f32];
 
     fn deref(&self) -> &Self::Target {
         if self.ptr.is_null() {
@@ -118,7 +121,7 @@ pub struct TripleBuffer<T>(pub [T; 3]);
 
 impl<T> Index<ProcessingQueue> for TripleBuffer<T> {
     type Output = T;
-    
+
     #[inline(always)]
     fn index(&self, queue: ProcessingQueue) -> &Self::Output {
         &self.0[queue as usize]
@@ -132,7 +135,7 @@ impl<T> IndexMut<ProcessingQueue> for TripleBuffer<T> {
     }
 }
 
-pub const SIZE : usize = 2_000_000;
+pub const SIZE: usize = 2_000_000;
 pub type AppPointCloud = PointCloud<SIZE>;
 
 pub struct PointCloud<const SIZE: usize> {
@@ -141,20 +144,20 @@ pub struct PointCloud<const SIZE: usize> {
     pub z: TripleBuffer<CudaArray<SIZE>>,
     pub intensity: TripleBuffer<CudaArray<SIZE>>,
 
-    pub can_write : bool,
+    pub can_write: bool,
 
-    pub ring : TripleBuffer<u16>,
+    pub ring: TripleBuffer<u16>,
     // Дублирующее поле "pub length: TripleBuffer<usize>" удалено, чтобы избежать рассинхронизации.
-    pub height : TripleBuffer<u32>,
-    pub width : TripleBuffer<u32>,
+    pub height: TripleBuffer<u32>,
+    pub width: TripleBuffer<u32>,
     pub is_dense: TripleBuffer<bool>,
     pub timestamp: TripleBuffer<i64>,
 }
 
-impl<const SIZE : usize> PointCloud<SIZE> {
-    pub const CAP : usize = SIZE;
+impl<const SIZE: usize> PointCloud<SIZE> {
+    pub const CAP: usize = SIZE;
 
-    pub fn clear(&mut self, queue : ProcessingQueue) {
+    pub fn clear(&mut self, queue: ProcessingQueue) {
         self.x[queue].clear();
         self.y[queue].clear();
         self.z[queue].clear();
@@ -167,11 +170,22 @@ impl<const SIZE : usize> PointCloud<SIZE> {
         z_ptrs: [*mut f32; 3],
         i_ptrs: [*mut f32; 3],
     ) -> Self {
-        let make_fields = |ptrs: [*mut f32; 3]| [
-            CudaArray { ptr: ptrs[0], length: 0 },
-            CudaArray { ptr: ptrs[1], length: 0 },
-            CudaArray { ptr: ptrs[2], length: 0 }
-        ];
+        let make_fields = |ptrs: [*mut f32; 3]| {
+            [
+                CudaArray {
+                    ptr: ptrs[0],
+                    length: 0,
+                },
+                CudaArray {
+                    ptr: ptrs[1],
+                    length: 0,
+                },
+                CudaArray {
+                    ptr: ptrs[2],
+                    length: 0,
+                },
+            ]
+        };
 
         Self {
             x: TripleBuffer(make_fields(x_ptrs)),
@@ -180,21 +194,21 @@ impl<const SIZE : usize> PointCloud<SIZE> {
             intensity: TripleBuffer(make_fields(i_ptrs)),
             can_write: true,
 
-            width: TripleBuffer([0;3]),
-            height: TripleBuffer([0;3]),
-            ring: TripleBuffer([0;3]),
-            timestamp: TripleBuffer([0;3]),
-            is_dense: TripleBuffer([false;3]),
+            width: TripleBuffer([0; 3]),
+            height: TripleBuffer([0; 3]),
+            ring: TripleBuffer([0; 3]),
+            timestamp: TripleBuffer([0; 3]),
+            is_dense: TripleBuffer([false; 3]),
         }
     }
 
     #[inline(always)]
-    pub fn is_empty(&self, queue : ProcessingQueue) -> bool {
+    pub fn is_empty(&self, queue: ProcessingQueue) -> bool {
         self.len(queue) == 0
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProcessingQueue {
     WRITE = 0,
     NEXT = 1,
@@ -203,31 +217,35 @@ pub enum ProcessingQueue {
 
 impl ProcessingQueue {
     #[inline(always)]
-    pub fn next_step(&mut self){
+    pub fn next_step(&mut self) {
         *self = match *self {
             ProcessingQueue::WRITE => ProcessingQueue::NEXT,
-            ProcessingQueue::NEXT  => ProcessingQueue::READ,
-            ProcessingQueue::READ  => ProcessingQueue::WRITE,
+            ProcessingQueue::NEXT => ProcessingQueue::READ,
+            ProcessingQueue::READ => ProcessingQueue::WRITE,
         };
     }
 }
 
 impl fmt::Display for ProcessingQueue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let numeric_value = *self as u8; 
+        let numeric_value = *self as u8;
         write!(f, "Current state: {}", numeric_value)
     }
 }
 
-impl<const SIZE : usize> PointCloud<SIZE> {
+impl<const SIZE: usize> PointCloud<SIZE> {
     pub fn iter(&self, queue: ProcessingQueue) -> impl Iterator<Item = (&f32, &f32, &f32, &f32)> {
-        let x_iter = self.x[queue].iter();
-        let y_iter = self.y[queue].iter();
-        let z_iter = self.z[queue].iter();
-        let int_iter = self.intensity[queue].iter();
+        let len = self.len(queue);
+        let x_iter = self.x[queue][..len].iter();
+        let y_iter = self.y[queue][..len].iter();
+        let z_iter = self.z[queue][..len].iter();
+        let int_iter = self.intensity[queue][..len].iter();
 
-        x_iter.zip(y_iter).zip(z_iter).zip(int_iter)
-        .map(|(((x, y), z), intensity)| (x, y, z, intensity))
+        x_iter
+            .zip(y_iter)
+            .zip(z_iter)
+            .zip(int_iter)
+            .map(|(((x, y), z), intensity)| (x, y, z, intensity))
     }
 
     #[inline(always)]
@@ -239,16 +257,19 @@ impl<const SIZE : usize> PointCloud<SIZE> {
     pub fn compute_stats(&self, queue: ProcessingQueue) -> CloudStats {
         let mut cloud_stats = CloudStats::new();
         let current_len = self.len(queue);
-        
+
         if current_len == 0 {
-            return cloud_stats
+            return cloud_stats;
         }
 
-        cloud_stats.n_points = current_len;
-
         let (mut sum_x, mut sum_y, mut sum_z) = (0.0f32, 0.0f32, 0.0f32);
+        let mut valid_count = 0usize;
 
-        for (&x,&y,&z,_) in self.iter(queue) {
+        for (&x, &y, &z, _) in self.iter(queue) {
+            if is_zero_point(x, y, z) {
+                continue;
+            }
+            valid_count += 1;
             sum_x += x;
             sum_y += y;
             sum_z += z;
@@ -262,23 +283,27 @@ impl<const SIZE : usize> PointCloud<SIZE> {
             cloud_stats.max_z = cloud_stats.max_z.max(z);
         }
 
-        let count = current_len as f32;
-        cloud_stats.centroid_x = sum_x / count;
-        cloud_stats.centroid_y = sum_y / count;
-        cloud_stats.centroid_z = sum_z / count;
+        cloud_stats.n_points = valid_count;
+        if valid_count > 0 {
+            let count = valid_count as f32;
+            cloud_stats.centroid_x = sum_x / count;
+            cloud_stats.centroid_y = sum_y / count;
+            cloud_stats.centroid_z = sum_z / count;
+        } else {
+            cloud_stats.min_x = 0.0;
+            cloud_stats.min_y = 0.0;
+            cloud_stats.min_z = 0.0;
+            cloud_stats.max_x = 0.0;
+            cloud_stats.max_y = 0.0;
+            cloud_stats.max_z = 0.0;
+        }
         cloud_stats.width = self.width[queue];
         cloud_stats.height = self.height[queue];
 
         cloud_stats
-    } 
+    }
 
     pub fn change_state(&mut self, queue_old: ProcessingQueue, queue_new: ProcessingQueue) {
-        if !self.can_write {
-            return;
-        }
-
-        // Безопасно получаем мутабельные ссылки на два разных элемента TripleBuffer/массива
-        // Если ProcessingQueue — это enum, преобразуй его в usize (например, .as_index())
         let idx_old = queue_old as usize;
         let idx_new = queue_new as usize;
 
@@ -286,29 +311,27 @@ impl<const SIZE : usize> PointCloud<SIZE> {
             return;
         }
 
-        // Используем raw-указатели, чтобы обойти Rust Borrow Checker на один массив
-        unsafe {
-            let self_ptr = self as *mut Self;
-            
-            // Свапаем целиком CudaArray структуры (указатель + длина) для каждого поля
-            mem::swap(&mut (*self_ptr).x.0[idx_old], &mut (*self_ptr).x.0[idx_new]);
-            mem::swap(&mut (*self_ptr).y.0[idx_old], &mut (*self_ptr).y.0[idx_new]);
-            mem::swap(&mut (*self_ptr).z.0[idx_old], &mut (*self_ptr).z.0[idx_new]);
-            mem::swap(&mut (*self_ptr).intensity.0[idx_old], &mut (*self_ptr).intensity.0[idx_new]);
+        self.x.0.swap(idx_old, idx_new);
+        self.y.0.swap(idx_old, idx_new);
+        self.z.0.swap(idx_old, idx_new);
+        self.intensity.0.swap(idx_old, idx_new);
 
-            // Также обязательно свапаем метаданные кадра
-            mem::swap(&mut (*self_ptr).width.0[idx_old], &mut (*self_ptr).width.0[idx_new]);
-            mem::swap(&mut (*self_ptr).height.0[idx_old], &mut (*self_ptr).height.0[idx_new]);
-            mem::swap(&mut (*self_ptr).timestamp.0[idx_old], &mut (*self_ptr).timestamp.0[idx_new]);
-        }
+        self.width.0.swap(idx_old, idx_new);
+        self.height.0.swap(idx_old, idx_new);
+        self.timestamp.0.swap(idx_old, idx_new);
+        self.ring.0.swap(idx_old, idx_new);
+        self.is_dense.0.swap(idx_old, idx_new);
     }
 
-
     pub fn to_rerun(&self, queue: ProcessingQueue) -> impl Iterator<Item = [f32; 3]> + '_ {
-        let xs = self.x[queue].iter();
-        let ys = self.y[queue].iter();
-        let zs = self.z[queue].iter();
+        let len = self.len(queue);
+        let xs = self.x[queue][..len].iter();
+        let ys = self.y[queue][..len].iter();
+        let zs = self.z[queue][..len].iter();
 
-        xs.zip(ys).zip(zs).map(|((&x, &y), &z)| [x, y, z])
+        xs.zip(ys)
+            .zip(zs)
+            .filter(|((x, y), z)| !is_zero_point(**x, **y, **z))
+            .map(|((&x, &y), &z)| [x, y, z])
     }
 }

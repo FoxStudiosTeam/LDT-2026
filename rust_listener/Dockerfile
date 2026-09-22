@@ -42,9 +42,9 @@ RUN mkdir -p \
 
 # ⚡ Оптимизируем Cargo прямо на лету во время кэширования сборки
 ENV CARGO_PROFILE_RELEASE_LTO=true
-ENV CARGO_PROFILE_RELEASE_OPT_LEVEL=z
 ENV CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
 ENV CARGO_PROFILE_RELEASE_STRIP=true
+ENV CARGO_PROFILE_RELEASE_OPT_LEVEL=3
 
 RUN cargo build --release
 

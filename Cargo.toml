@@ -16,3 +16,9 @@ cuda-pipeline = { path = "cuda-pipeline" }
 ros2_data_extraction = { path = "data-extraction" }
 kaiv_utils = { git = "https://github.com/kaiv-dev/kaiv_utils.git", rev = "fdaf82e", features = ["env_config_macro", "trace_err"] }
 shared = {path = "shared"}
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

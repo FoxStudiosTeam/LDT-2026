@@ -1,112 +1,158 @@
-use std::{
-    sync::{
-        Arc, RwLock,
-        atomic::{AtomicUsize, Ordering},
-    },
-    time::Duration,
-};
+use std::sync::{Arc, RwLock};
 
 use rerun::RecordingStream;
 use ros2_data_extraction::PointCloudStream;
-use shared::error::AppError;
 use shared::types::AppPointCloud;
-use tokio::{sync::Semaphore, time};
+use shared::{
+    error::AppError,
+    types::ProcessingQueue,
+};
 use tracing::*;
 
-use crate::debug;
-
-struct TaskGuard {
-    counter: Arc<AtomicUsize>,
-}
-
-impl Drop for TaskGuard {
-    fn drop(&mut self) {
-        // Гарантированный декремент при любом исходе (паника, ошибка, выход)
-        self.counter.fetch_sub(1, Ordering::SeqCst);
-    }
-}
+use crate::{
+    ENV,
+    debug::{self, helper::DebugStream},
+};
 
 pub async fn entry(
     mut point_cloud_stream: PointCloudStream,
     recording_stream: RecordingStream,
     point_cloud: Arc<RwLock<AppPointCloud>>,
 ) -> Result<(), AppError> {
-    let mut frame_id: u64 = 0;
     let recording_stream = Arc::new(recording_stream);
+    let mut initial_injector = crate::debug::injector::setup_obstacles();
+    if !ENV.OBSTACLES_CONFIG.is_empty() {
+        if let Some(loaded) = crate::debug::injector::ObstacleInjector::load_from_path(&ENV.OBSTACLES_CONFIG) {
+            initial_injector = loaded;
+        }
+    }
+    let injector = Arc::new(std::sync::Mutex::new(initial_injector));
 
-    while let Some(a) = point_cloud_stream.next().await? {
-        frame_id = a;
+    while let Some(frame) = point_cloud_stream.next().await? {
+        tracing::info!("Frame {frame}");
+        if frame >= ENV.TOTAL_FRAMES {
+            return Ok(());
+        }
+        let frame_id = frame;
 
-        info!("[Frame {a}] frame took");
-
-        let point_cloud = point_cloud.clone();
+        let point_cloud_lock = point_cloud.clone();
         let recording_stream = recording_stream.clone();
+        let injector = injector.clone();
 
-        {
-            let mut point_cloud_write = point_cloud.write().expect(&format!("⚠️ Мутекс отравился ☠️ {} {}", file!(), line!()));
-            point_cloud_write.can_write = false;
-            point_cloud_write.change_state(shared::types::ProcessingQueue::NEXT, shared::types::ProcessingQueue::READ);
-            
-            let mut queue = shared::types::ProcessingQueue::NEXT;
+        tokio::task::spawn_blocking(move || {
+            let frame_start = std::time::Instant::now();
 
-            if point_cloud_write.x[queue].len() > 0{
-                let mut ix = 0; 
-                let mut i = 0;
-                tracing::info!("[FRAME] loaded points raw:");
-                for point in point_cloud_write.iter(queue) {
-                    if *point.0 > 0.0 && ix < 10{
-                        tracing::info!("point {} (x): {:?}, point last (x): {:?}, queue: {}, length: {}, cap: {}", i, point.0, point_cloud_write.x[queue].last(), queue, point_cloud_write.len(queue),AppPointCloud::CAP);
-                        queue.next_step();
-                        tracing::info!("point {} (y): {:?}, point last (y): {:?}, queue: {}, length: {}, cap: {}", i, point.1, point_cloud_write.y[queue].last(), queue, point_cloud_write.len(queue),AppPointCloud::CAP);
-                        queue.next_step();
-                        tracing::info!("point {} (z): {:?}, point last (z): {:?}, queue: {}, length: {}, cap: {}", i, point.2, point_cloud_write.z[queue].last(), queue, point_cloud_write.len(queue),AppPointCloud::CAP);    
-                        ix += 1;
-                    }
-                    i+=1;
+            // 1. Ожидание лочки и переключение очередей (TripleBuffer swap)
+            let swap_start = std::time::Instant::now();
+            {
+                let mut point_cloud_write = point_cloud_lock.write().expect(&format!(
+                    "⚠️ Мутекс отравился ☠️ {} {}",
+                    file!(),
+                    line!()
+                ));
+                let next_pts = point_cloud_write.len(ProcessingQueue::NEXT);
+                let read_pts_old = point_cloud_write.len(ProcessingQueue::READ);
+                point_cloud_write.change_state(ProcessingQueue::NEXT, ProcessingQueue::READ);
+                let read_pts_new = point_cloud_write.len(ProcessingQueue::READ);
+
+                debug!(
+                    "[FRAME {frame_id}] Swapped queues in {:?}: NEXT had {next_pts} pts -> READ now has {read_pts_new} pts (was {read_pts_old})",
+                    swap_start.elapsed()
+                );
+            }
+
+            // 2. Инъекция препятствий, статистика, RangeImage под WRITE-локом буфера READ
+            let compute_start = std::time::Instant::now();
+            let (timestamp_ns, stats, rerun_points, range_image, gt_boxes) = {
+                let mut point_cloud = point_cloud_lock.write().expect(&format!(
+                    "⚠️ Мутекс отравился ☠️ {} {}",
+                    file!(),
+                    line!()
+                ));
+
+                let number = ProcessingQueue::READ;
+                let timestamp_ns = point_cloud.timestamp[number];
+
+                // Инъекция виртуальных препятствий
+                let gt_boxes = if let Ok(mut inj_guard) = injector.lock() {
+                    inj_guard.inject(&mut point_cloud, number, timestamp_ns, frame_id)
+                } else {
+                    Vec::new()
+                };
+
+                let stats = point_cloud.compute_stats(number);
+                let rerun_points: Vec<[f32; 3]> = point_cloud.to_rerun(number).collect();
+                let range_image = shared::range_image::RangeImage::from_pandar128_organized(
+                    &point_cloud,
+                    number,
+                    1,
+                );
+
+                (timestamp_ns, stats, rerun_points, range_image, gt_boxes)
+            }; // <--- write-lock освобожден!
+            let compute_dur = compute_start.elapsed();
+
+            debug!(
+                "[FRAME {frame_id}] Data extracted & stats & RangeImage computed in {:?}: n_points={}, centroid=({:.2}, {:.2}, {:.2})",
+                compute_dur,
+                stats.n_points,
+                stats.centroid_x, stats.centroid_y, stats.centroid_z
+            );
+
+            debug::std::print_frame_info(frame_id, timestamp_ns, &stats);
+            recording_stream.set_time(
+                "ros_time",
+                rerun::TimeCell::from_duration_nanos(timestamp_ns),
+            );
+            recording_stream.set_time_sequence("frame", frame_id as i64);
+
+            // 3. Отправка 3D облака и оверлеев в Rerun (БЕЗ удержания лока point_cloud!)
+            let rerun_cloud_start = std::time::Instant::now();
+            if let Err(e) = recording_stream.log_raw_points(&rerun_points) {
+                error!("Ошибка логирования облака точек в rerun: {e:?}");
+            }
+            if let Err(e) = recording_stream.log_debug_centroid(&stats) {
+                error!("Ошибка логирования оверлеев в rerun: {e:?}");
+            }
+            if !gt_boxes.is_empty() {
+                if let Err(e) = recording_stream.log_boxes_3d("ground_truth/obstacle_boxes", &gt_boxes) {
+                    error!("Ошибка логирования GT боксов препятствий в rerun: {e:?}");
                 }
-                tracing::info!("[FRAME] loaded points next:");
-                ix = 0;
-                i = 0;
-                queue.next_step();
-                for point in point_cloud_write.iter(queue) {
-                    if *point.0 > 0.0 && ix < 10{
-                        tracing::info!("point {} (x): {:?}, point last (x): {:?}, queue: {}, length: {}, cap: {}", i, point.0, point_cloud_write.x[queue].last(), queue, point_cloud_write.len(queue),AppPointCloud::CAP);
-                        queue.next_step();
-                        tracing::info!("point {} (y): {:?}, point last (y): {:?}, queue: {}, length: {}, cap: {}", i, point.1, point_cloud_write.y[queue].last(), queue, point_cloud_write.len(queue),AppPointCloud::CAP);
-                        queue.next_step();
-                        tracing::info!("point {} (z): {:?}, point last (z): {:?}, queue: {}, length: {}, cap: {}", i, point.2, point_cloud_write.z[queue].last(), queue, point_cloud_write.len(queue),AppPointCloud::CAP);    
-                        ix += 1;
-                    }
-                    i+=1;
+            }
+            debug!(
+                "[FRAME {frame_id}] Rerun 3D points & overlays send duration: {:?}",
+                rerun_cloud_start.elapsed()
+            );
+
+            // 4. Отправка 2D карты глубины и 4:3 превью в Rerun (БЕЗ удержания лока point_cloud!)
+            let rerun_depth_start = std::time::Instant::now();
+            if let Err(e) = recording_stream.log_depth_image(&range_image, ENV.PREVIEW_FOV_X_DEG) {
+                error!("Ошибка логирования карты глубины в rerun: {e:?}");
+            }
+            debug!(
+                "[FRAME {frame_id}] Rerun depth image send duration: {:?}",
+                rerun_depth_start.elapsed()
+            );
+
+            // 5. Сохранение сырых кадров без интерполяции для прототипирования на Python
+            if !ENV.RENDER_PATH.is_empty() {
+                let crop_raw = range_image.crop_fov(ENV.PREVIEW_FOV_X_DEG);
+                let _ = std::fs::create_dir_all(&ENV.RENDER_PATH);
+                let file_path = format!("{}/frame_{frame_id:06}.npy", ENV.RENDER_PATH);
+                if let Err(e) = crop_raw.save_npy(&file_path) {
+                    error!("Ошибка сохранения кадра {file_path}: {e}");
+                } else {
+                    debug!("[FRAME {frame_id}] Saved raw frame to {file_path}");
                 }
             }
 
-            point_cloud_write.can_write = true;
-        }
-            
-        let point_cloud = point_cloud
-            .read()
-            // отъебнет так, что в логах не покажется
-            // .map_err(|e| Error::AbstractError { msg: e.to_string() }).unwrap()
-            .expect(&format!("⚠️ Мутекс отравился ☠️ {} {}", file!(), line!()));
-        let number = shared::types::ProcessingQueue::READ;
-            
-            
-        let timestamp_ns = point_cloud.timestamp[number];
-        let stats = point_cloud.compute_stats(number);
-            
-        //debug::std::print_frame_info(frame_id, timestamp_ns, &stats);
-        recording_stream.set_time(
-            "ros_time",
-                rerun::TimeCell::from_duration_nanos(timestamp_ns),
-        );
-        recording_stream.set_time_sequence("frame", frame_id as i64);
-        // Пушим данные в сеть (Rerun визуализация)
-        debug::helper::log_raw_cloud(&recording_stream, &point_cloud).unwrap();
-        debug::helper::log_debug_overlays(&recording_stream, &point_cloud, &stats)
-        // .map_err(|e| Error::AbstractError { msg: e.to_string() })
-        .expect(&format!("⚠️ Мутекс отравился ☠️ {} {}", file!(), line!()));
+            debug!(
+                "[FRAME {frame_id}] >>> TOTAL frame processing latency: {:?}",
+                frame_start.elapsed()
+            );
+        })
+        .await
+        .unwrap();
     }
-
     Ok(())
 }

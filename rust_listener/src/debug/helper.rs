@@ -1,153 +1,532 @@
 //! debug_viz.rs — генерация отладочных примитивов для Rerun
 
-use anyhow::Result;
-use rerun::{Color, LineStrips3D, Points3D, Radius, RecordingStream};
+use rerun::{
+    Boxes2D, Boxes3D, Color, LineStrips2D, LineStrips3D, Points2D, Points3D, Radius,
+    RecordingStream,
+};
 use shared::error::{AppError, ErrCtx};
-use shared::types::{AppPointCloud, CloudStats};
+use shared::types::{AppPointCloud, CloudStats, ProcessingQueue, is_zero_point};
 
 // ─── Пороги ───────────────────────────────────────────────────────────────────
 const NEAR_RANGE_M: f32 = 1.0; // точки ближе этого — "опасные"
 const HIGH_Z_M: f32 = 2.0; // точки выше этого — "верхний слой"
 
-/// Логируем всё облако точек в rerun
-pub fn log_raw_cloud(rec: &RecordingStream, point_cloud: &AppPointCloud) -> Result<(), AppError> {
-    if point_cloud.is_empty(shared::types::ProcessingQueue::READ) {
-        return Ok(());
+/// 2D прямоугольник (bounding box) для отладки поверх кадров глубины
+#[derive(Clone, Debug)]
+pub struct DebugBox2D {
+    pub min_x: f32,
+    pub min_y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub label: Option<String>,
+    pub color: [u8; 3],
+    pub stroke_width: f32,
+}
+
+impl DebugBox2D {
+    pub fn new(min_x: f32, min_y: f32, width: f32, height: f32) -> Self {
+        Self {
+            min_x,
+            min_y,
+            width,
+            height,
+            label: None,
+            color: [255, 60, 60],
+            stroke_width: 1.5,
+        }
     }
 
-    let points = point_cloud.to_rerun(shared::types::ProcessingQueue::READ);
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
 
-    rec.log(
-        "lidar/raw",
-        &Points3D::new(points)
-            .with_colors([Color::from_rgb(160, 185, 220)])
-            .with_radii([Radius::new_ui_points(1.2)]),
-    )
-    .app_error()?;
+    pub fn with_color(mut self, color: [u8; 3]) -> Self {
+        self.color = color;
+        self
+    }
 
-    Ok(())
+    pub fn with_stroke_width(mut self, width: f32) -> Self {
+        self.stroke_width = width;
+        self
+    }
 }
 
-/// Логируем отладочные оверлеи
-pub fn log_debug_overlays(
-    rec: &RecordingStream,
-    point_cloud: &AppPointCloud,
-    stats: &CloudStats,
-) -> Result<()> {
-    // 1. Центр масс
-    log_centroid(rec, stats)?;
-    //2. Bounding box
-    log_bbox(rec, stats)?;
-    //3. Близкие точки (< NEAR_RANGE_M)
-    log_near_points(rec, point_cloud)?;
-    //4. Высокие точки (Z > HIGH_Z_M)
-    log_high_points(rec, point_cloud)?;
-    Ok(())
+/// 2D ломаная линия / отрезок для отладки поверх кадров глубины
+#[derive(Clone, Debug)]
+pub struct DebugLine2D {
+    pub points: Vec<[f32; 2]>,
+    pub label: Option<String>,
+    pub color: [u8; 3],
+    pub stroke_width: f32,
 }
 
-/// Центр масс — одна большая зелёная точка
-fn log_centroid(rec: &RecordingStream, stats: &CloudStats) -> Result<()> {
-    rec.log(
-        "lidar/debug/centroid",
-        &Points3D::new(&[[stats.centroid_x, stats.centroid_y, stats.centroid_z]])
-            .with_colors([Color::from_rgb(50, 255, 80)])
-            .with_radii([Radius::new_scene_units(0.25)])
-            .with_labels(["centroid"]),
-    )?;
-    Ok(())
+impl DebugLine2D {
+    pub fn new(points: Vec<[f32; 2]>) -> Self {
+        Self {
+            points,
+            label: None,
+            color: [0, 230, 180],
+            stroke_width: 1.5,
+        }
+    }
+
+    pub fn segment(p1: [f32; 2], p2: [f32; 2]) -> Self {
+        Self::new(vec![p1, p2])
+    }
+
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    pub fn with_color(mut self, color: [u8; 3]) -> Self {
+        self.color = color;
+        self
+    }
+
+    pub fn with_stroke_width(mut self, width: f32) -> Self {
+        self.stroke_width = width;
+        self
+    }
 }
 
-/// Wireframe bounding box — 12 рёбер жёлтым
-fn log_bbox(rec: &RecordingStream, stats: &CloudStats) -> Result<()> {
-    let x0 = stats.min_x;
-    let y0 = stats.min_y;
-    let z0 = stats.min_z;
-
-    let x1 = stats.max_x;
-    let y1 = stats.max_y;
-    let z1 = stats.max_z;
-
-    // 12 рёбер куба (каждое ребро — отдельная полилиния из 2 точек)
-    let edges: Vec<Vec<[f32; 3]>> = vec![
-        // нижняя грань
-        vec![[x0, y0, z0], [x1, y0, z0]],
-        vec![[x1, y0, z0], [x1, y1, z0]],
-        vec![[x1, y1, z0], [x0, y1, z0]],
-        vec![[x0, y1, z0], [x0, y0, z0]],
-        // верхняя грань
-        vec![[x0, y0, z1], [x1, y0, z1]],
-        vec![[x1, y0, z1], [x1, y1, z1]],
-        vec![[x1, y1, z1], [x0, y1, z1]],
-        vec![[x0, y1, z1], [x0, y0, z1]],
-        // вертикальные рёбра
-        vec![[x0, y0, z0], [x0, y0, z1]],
-        vec![[x1, y0, z0], [x1, y0, z1]],
-        vec![[x1, y1, z0], [x1, y1, z1]],
-        vec![[x0, y1, z0], [x0, y1, z1]],
-    ];
-
-    let n_edges = edges.len();
-    rec.log(
-        "lidar/debug/bbox",
-        &LineStrips3D::new(edges)
-            .with_colors(vec![Color::from_rgb(255, 210, 0); n_edges])
-            .with_radii(vec![Radius::new_ui_points(1.5); n_edges]),
-    )?;
-    Ok(())
+/// 3D бокс для отладки в 3D пространстве лидара
+#[derive(Clone, Debug)]
+pub struct DebugBox3D {
+    pub center: [f32; 3],
+    pub size: [f32; 3],
+    pub rotation_xyzw: Option<[f32; 4]>,
+    pub label: Option<String>,
+    pub color: [u8; 3],
 }
 
-/// Точки ближе NEAR_RANGE_M к началу координат — красным
-fn log_near_points(rec: &RecordingStream, point_cloud: &AppPointCloud) -> Result<()> {
-    let near: Vec<[f32; 3]> = point_cloud
-        .iter(shared::types::ProcessingQueue::READ)
-        .filter(|p| {
-            let x = *p.0;
-            let y = *p.1;
-            let z = *p.2;
-            let dist2 = x * x + y * y + z * z;
-            dist2 < NEAR_RANGE_M * NEAR_RANGE_M
-        })
-        .map(|p| [*p.0, *p.1, *p.2])
-        .collect();
+impl DebugBox3D {
+    pub fn new(center: [f32; 3], size: [f32; 3]) -> Self {
+        Self {
+            center,
+            size,
+            rotation_xyzw: None,
+            label: None,
+            color: [255, 60, 60],
+        }
+    }
 
-    if near.is_empty() {
-        rec.log(
+    pub fn with_rotation(mut self, quat_xyzw: [f32; 4]) -> Self {
+        self.rotation_xyzw = Some(quat_xyzw);
+        self
+    }
+
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    pub fn with_color(mut self, color: [u8; 3]) -> Self {
+        self.color = color;
+        self
+    }
+}
+
+pub trait DebugStream {
+    fn log_raw_cloud(&self, point_cloud: &AppPointCloud) -> Result<(), AppError>;
+    fn log_raw_points(&self, points: &[[f32; 3]]) -> Result<(), AppError>;
+    fn log_debug_overlays(
+        &self,
+        point_cloud: &AppPointCloud,
+        stats: &CloudStats,
+    ) -> Result<(), AppError>;
+    fn log_debug_centroid(&self, stats: &CloudStats) -> Result<(), AppError>;
+    fn log_debug_bbox(&self, stats: &CloudStats) -> Result<(), AppError>;
+    fn log_debug_near_points(&self, point_cloud: &AppPointCloud) -> Result<(), AppError>;
+    fn log_debug_high_points(&self, point_cloud: &AppPointCloud) -> Result<(), AppError>;
+    fn log_depth_image(
+        &self,
+        range_image: &shared::range_image::RangeImage,
+        fov_x_deg: f32,
+    ) -> Result<(), AppError>;
+
+    // ─── API отладки поверх 2D кадров и в 3D ───
+    fn log_boxes_2d(&self, entity_path: &str, boxes: &[DebugBox2D]) -> Result<(), AppError>;
+    fn log_lines_2d(&self, entity_path: &str, lines: &[DebugLine2D]) -> Result<(), AppError>;
+    fn log_points_2d(
+        &self,
+        entity_path: &str,
+        points: &[[f32; 2]],
+        color: [u8; 3],
+        radius_ui: f32,
+    ) -> Result<(), AppError>;
+    fn log_boxes_3d(&self, entity_path: &str, boxes: &[DebugBox3D]) -> Result<(), AppError>;
+    fn log_demo_overlay_on_frame(&self, fov_w: usize, fov_h: usize) -> Result<(), AppError>;
+}
+
+impl DebugStream for RecordingStream {
+    /// Логируем всё облако точек в rerun
+    fn log_raw_cloud(&self, point_cloud: &AppPointCloud) -> Result<(), AppError> {
+        if point_cloud.is_empty(ProcessingQueue::READ) {
+            tracing::info!("PointCloud is empty");
+            return Ok(());
+        }
+
+        let points = point_cloud.to_rerun(ProcessingQueue::READ);
+        self.log(
+            "lidar/raw",
+            &Points3D::new(points)
+                .with_colors([Color::from_rgb(160, 185, 220)])
+                .with_radii([Radius::new_ui_points(1.2)]),
+        )
+        .app_error()?;
+
+        Ok(())
+    }
+
+    /// Логируем готовый срез точек без удержания лочки AppPointCloud
+    fn log_raw_points(&self, points: &[[f32; 3]]) -> Result<(), AppError> {
+        if points.is_empty() {
+            return Ok(());
+        }
+
+        self.log(
+            "lidar/raw",
+            &Points3D::new(points)
+                .with_colors([Color::from_rgb(160, 185, 220)])
+                .with_radii([Radius::new_ui_points(1.2)]),
+        )
+        .app_error()?;
+
+        Ok(())
+    }
+
+    /// Логируем отладочные оверлеи
+    fn log_debug_overlays(
+        &self,
+        point_cloud: &AppPointCloud,
+        stats: &CloudStats,
+    ) -> Result<(), AppError> {
+        self.log_debug_centroid(stats)?;
+        // self.log_debug_bbox(stats)?;
+        // self.log_debug_near_points(point_cloud)?;
+        // self.log_debug_high_points(point_cloud)?;
+
+        Ok(())
+    }
+
+    /// Центр масс — одна большая зелёная точка
+    fn log_debug_centroid(&self, stats: &CloudStats) -> Result<(), AppError> {
+        self.log(
+            "lidar/debug/centroid",
+            &Points3D::new(&[[stats.centroid_x, stats.centroid_y, stats.centroid_z]])
+                .with_colors([Color::from_rgb(50, 255, 80)])
+                .with_radii([Radius::new_scene_units(0.25)])
+                .with_labels(["centroid"]),
+        )
+        .app_error()?;
+
+        Ok(())
+    }
+
+    /// Wireframe bounding box из 12 рёбер
+    fn log_debug_bbox(&self, stats: &CloudStats) -> Result<(), AppError> {
+        let x0 = stats.min_x;
+        let y0 = stats.min_y;
+        let z0 = stats.min_z;
+
+        let x1 = stats.max_x;
+        let y1 = stats.max_y;
+        let z1 = stats.max_z;
+
+        let edges = [
+            // нижняя грань
+            [[x0, y0, z0], [x1, y0, z0]],
+            [[x1, y0, z0], [x1, y1, z0]],
+            [[x1, y1, z0], [x0, y1, z0]],
+            [[x0, y1, z0], [x0, y0, z0]],
+            // верхняя грань
+            [[x0, y0, z1], [x1, y0, z1]],
+            [[x1, y0, z1], [x1, y1, z1]],
+            [[x1, y1, z1], [x0, y1, z1]],
+            [[x0, y1, z1], [x0, y0, z1]],
+            // вертикальные рёбра
+            [[x0, y0, z0], [x0, y0, z1]],
+            [[x1, y0, z0], [x1, y0, z1]],
+            [[x1, y1, z0], [x1, y1, z1]],
+            [[x0, y1, z0], [x0, y1, z1]],
+        ];
+
+        self.log(
+            "lidar/debug/bbox",
+            &LineStrips3D::new(edges)
+                .with_colors([Color::from_rgb(255, 210, 0)])
+                .with_radii([Radius::new_ui_points(1.5)]),
+        )
+        .app_error()?;
+
+        Ok(())
+    }
+
+    /// Точки ближе NEAR_RANGE_M к началу координат — красным
+    fn log_debug_near_points(&self, point_cloud: &AppPointCloud) -> Result<(), AppError> {
+        let near_sq = NEAR_RANGE_M * NEAR_RANGE_M;
+        let near: Vec<[f32; 3]> = point_cloud
+            .iter(ProcessingQueue::READ)
+            .filter_map(|p| {
+                let (x, y, z) = (*p.0, *p.1, *p.2);
+                if is_zero_point(x, y, z) {
+                    return None;
+                }
+                if x * x + y * y + z * z < near_sq {
+                    Some([x, y, z])
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if near.is_empty() {
+            self.log(
+                "lidar/debug/near_range",
+                &Points3D::new([] as [[f32; 3]; 0]),
+            )
+            .app_error()?;
+            return Ok(());
+        }
+
+        self.log(
             "lidar/debug/near_range",
-            &Points3D::new([] as [[f32; 3]; 0]),
-        )?;
-        return Ok(());
+            &Points3D::new(&near)
+                .with_colors([Color::from_rgb(255, 60, 60)])
+                .with_radii([Radius::new_ui_points(2.5)]),
+        )
+        .app_error()?;
+
+        Ok(())
     }
 
-    // ВЫКИДЫВАЕМ МИЛЛИОНЫ СТРОК И ЦВЕТОВ!
-    // Points3D умеет принимать ОДИН цвет и ОДИН радиус на все точки сразу!
-    rec.log(
-        "lidar/debug/near_range",
-        &Points3D::new(&near)
-            .with_colors([Color::from_rgb(255, 60, 60)]) // Один цвет на весь массив (0 аллокаций!)
-            .with_radii([Radius::new_ui_points(2.5)]), // Один радиус на весь массив (0 аллокаций!)
-    )?;
-    Ok(())
-}
+    /// Точки выше HIGH_Z_M — бирюзовым
+    fn log_debug_high_points(&self, point_cloud: &AppPointCloud) -> Result<(), AppError> {
+        let high: Vec<[f32; 3]> = point_cloud
+            .iter(ProcessingQueue::READ)
+            .filter_map(|p| {
+                let (x, y, z) = (*p.0, *p.1, *p.2);
+                if is_zero_point(x, y, z) {
+                    return None;
+                }
+                if z > HIGH_Z_M { Some([x, y, z]) } else { None }
+            })
+            .collect();
 
-/// Точки выше HIGH_Z_M — бирюзовым
-fn log_high_points(rec: &RecordingStream, point_cloud: &AppPointCloud) -> Result<()> {
-    let high: Vec<[f32; 3]> = point_cloud
-        .iter(shared::types::ProcessingQueue::READ)
-        .filter(|&(_, _, &z, _)| z > HIGH_Z_M)
-        .map(|(&x, &y, &z, _)| [x, y, z])
-        .collect();
+        if high.is_empty() {
+            self.log("lidar/debug/high_z", &Points3D::new([] as [[f32; 3]; 0]))
+                .app_error()?;
+            return Ok(());
+        }
 
-    if high.is_empty() {
-        rec.log("lidar/debug/high_z", &Points3D::new([] as [[f32; 3]; 0]))?;
-        return Ok(());
+        self.log(
+            "lidar/debug/high_z",
+            &Points3D::new(&high)
+                .with_colors([Color::from_rgb(0, 230, 180)])
+                .with_radii([Radius::new_ui_points(2.0)]),
+        )
+        .app_error()?;
+
+        Ok(())
     }
 
-    // ВЫКИДЫВАЕМ МИЛЛИОНЫ СТРОК И ЦВЕТОВ!
-    rec.log(
-        "lidar/debug/high_z",
-        &Points3D::new(&high)
-            .with_colors([Color::from_rgb(0, 230, 180)]) // Один цвет на весь массив (0 аллокаций!)
-            .with_radii([Radius::new_ui_points(2.0)]), // One radius to rule them all
-    )?;
-    Ok(())
+    /// 2D Карта глубины (Range Image)
+    fn log_depth_image(
+        &self,
+        range_image: &shared::range_image::RangeImage,
+        fov_x_deg: f32,
+    ) -> Result<(), AppError> {
+        let depth_img = range_image.to_rerun()?;
+        // Логируем в отдельный корень "depth_image/...", чтобы Rerun не требовал Pinhole для 3D
+        self.log("depth_image/raw", &depth_img).app_error()?;
+
+        // Сырой (без интерполяции) урезанный кадр
+        let cropped = range_image.crop_fov(fov_x_deg);
+        let crop_img = cropped.to_rerun()?;
+        self.log("depth_image/crop", &crop_img).app_error()?;
+
+        // Логируем сглаженный фронтальный превью высокого разрешения (800x600, 4:3) с настраиваемым углом обзора
+        let preview = range_image.front_view_preview_fov(fov_x_deg, 800, 600); // 800x600 с билинейной интерполяцией
+        let preview_img = preview.to_rerun()?;
+        self.log("depth_image/front_preview", &preview_img)
+            .app_error()?;
+
+        // Демонстрационный оверлей линий и боксов поверх превью
+        self.log_demo_overlay_on_frame(preview.width, preview.height)?;
+
+        Ok(())
+    }
+
+    /// Логирование 2D боксов (прямоугольников) поверх указанной 2D сущности (например "depth_image/front_preview/boxes")
+    fn log_boxes_2d(&self, entity_path: &str, boxes: &[DebugBox2D]) -> Result<(), AppError> {
+        if boxes.is_empty() {
+            self.log(
+                entity_path,
+                &Boxes2D::from_mins_and_sizes([] as [[f32; 2]; 0], [] as [[f32; 2]; 0]),
+            )
+            .app_error()?;
+            return Ok(());
+        }
+
+        let mins: Vec<[f32; 2]> = boxes.iter().map(|b| [b.min_x, b.min_y]).collect();
+        let sizes: Vec<[f32; 2]> = boxes.iter().map(|b| [b.width, b.height]).collect();
+        let colors: Vec<Color> = boxes
+            .iter()
+            .map(|b| Color::from_rgb(b.color[0], b.color[1], b.color[2]))
+            .collect();
+        let radii: Vec<Radius> = boxes
+            .iter()
+            .map(|b| Radius::new_ui_points(b.stroke_width))
+            .collect();
+        let labels: Vec<String> = boxes
+            .iter()
+            .map(|b| b.label.clone().unwrap_or_default())
+            .collect();
+
+        self.log(
+            entity_path,
+            &Boxes2D::from_mins_and_sizes(mins, sizes)
+                .with_colors(colors)
+                .with_radii(radii)
+                .with_labels(labels),
+        )
+        .app_error()?;
+
+        Ok(())
+    }
+
+    /// Логирование 2D линий поверх указанной 2D сущности (например "depth_image/front_preview/lines")
+    fn log_lines_2d(&self, entity_path: &str, lines: &[DebugLine2D]) -> Result<(), AppError> {
+        if lines.is_empty() {
+            self.log(entity_path, &LineStrips2D::new([] as [Vec<[f32; 2]>; 0]))
+                .app_error()?;
+            return Ok(());
+        }
+
+        let strips: Vec<Vec<[f32; 2]>> = lines.iter().map(|l| l.points.clone()).collect();
+        let colors: Vec<Color> = lines
+            .iter()
+            .map(|l| Color::from_rgb(l.color[0], l.color[1], l.color[2]))
+            .collect();
+        let radii: Vec<Radius> = lines
+            .iter()
+            .map(|l| Radius::new_ui_points(l.stroke_width))
+            .collect();
+        let labels: Vec<String> = lines
+            .iter()
+            .map(|l| l.label.clone().unwrap_or_default())
+            .collect();
+
+        self.log(
+            entity_path,
+            &LineStrips2D::new(strips)
+                .with_colors(colors)
+                .with_radii(radii)
+                .with_labels(labels),
+        )
+        .app_error()?;
+
+        Ok(())
+    }
+
+    /// Логирование 2D точек поверх указанной 2D сущности
+    fn log_points_2d(
+        &self,
+        entity_path: &str,
+        points: &[[f32; 2]],
+        color: [u8; 3],
+        radius_ui: f32,
+    ) -> Result<(), AppError> {
+        if points.is_empty() {
+            self.log(entity_path, &Points2D::new([] as [[f32; 2]; 0]))
+                .app_error()?;
+            return Ok(());
+        }
+
+        self.log(
+            entity_path,
+            &Points2D::new(points)
+                .with_colors([Color::from_rgb(color[0], color[1], color[2])])
+                .with_radii([Radius::new_ui_points(radius_ui)]),
+        )
+        .app_error()?;
+
+        Ok(())
+    }
+
+    /// Логирование 3D боксов
+    fn log_boxes_3d(&self, entity_path: &str, boxes: &[DebugBox3D]) -> Result<(), AppError> {
+        if boxes.is_empty() {
+            self.log(
+                entity_path,
+                &Boxes3D::from_centers_and_sizes([] as [[f32; 3]; 0], [] as [[f32; 3]; 0]),
+            )
+            .app_error()?;
+            return Ok(());
+        }
+
+        let centers: Vec<[f32; 3]> = boxes.iter().map(|b| b.center).collect();
+        let sizes: Vec<[f32; 3]> = boxes.iter().map(|b| b.size).collect();
+        let colors: Vec<Color> = boxes
+            .iter()
+            .map(|b| Color::from_rgb(b.color[0], b.color[1], b.color[2]))
+            .collect();
+        let labels: Vec<String> = boxes
+            .iter()
+            .map(|b| b.label.clone().unwrap_or_default())
+            .collect();
+
+        let quaternions: Vec<rerun::Quaternion> = boxes
+            .iter()
+            .map(|b| {
+                if let Some(q) = b.rotation_xyzw {
+                    rerun::Quaternion::from_xyzw(q)
+                } else {
+                    rerun::Quaternion::IDENTITY
+                }
+            })
+            .collect();
+
+        self.log(
+            entity_path,
+            &Boxes3D::from_centers_and_sizes(centers, sizes)
+                .with_colors(colors)
+                .with_labels(labels)
+                .with_quaternions(quaternions),
+        )
+        .app_error()?;
+
+        Ok(())
+    }
+
+    /// Демонстрационный оверлей: направляющие рельсов и зона препятствия прямо поверх кадра
+    fn log_demo_overlay_on_frame(&self, fov_w: usize, fov_h: usize) -> Result<(), AppError> {
+        let w = fov_w as f32;
+        let h = fov_h as f32;
+
+        // 1. Направляющие линии колеи (рельсы)
+        let left_rail = DebugLine2D::segment([w * 0.38, h * 0.98], [w * 0.46, h * 0.48])
+            .with_label("left_rail")
+            .with_color([255, 215, 0]) // золотисто-желтый
+            .with_stroke_width(2.0);
+
+        let right_rail = DebugLine2D::segment([w * 0.62, h * 0.98], [w * 0.54, h * 0.48])
+            .with_label("right_rail")
+            .with_color([255, 215, 0])
+            .with_stroke_width(2.0);
+
+        self.log_lines_2d("depth_image/front_preview/rails", &[left_rail, right_rail])?;
+
+        // 2. Детектированная зона / габарит препятствия
+        let obstacle_box = DebugBox2D::new(w * 0.44, h * 0.42, w * 0.12, h * 0.18)
+            .with_label("Track Clearance ROI")
+            .with_color([0, 255, 128]) // зеленый контур
+            .with_stroke_width(2.0);
+
+        self.log_boxes_2d("depth_image/front_preview/clearance_box", &[obstacle_box])?;
+
+        Ok(())
+    }
 }
