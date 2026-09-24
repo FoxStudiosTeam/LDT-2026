@@ -25,7 +25,7 @@ kaiv_utils::env_config! {
         ROS_DOMAIN_ID : u16 = 42,
         TOTAL_FRAMES : u64 = u64::MAX,
         TEST_RERUN : bool = false,
-        PREVIEW_FOV_X_DEG : f32 = 180.0,
+        PREVIEW_FOV_X_DEG : f32 = 40.0,
         RENDER_PATH : String = "".to_string()
     }
 }
