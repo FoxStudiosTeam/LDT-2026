@@ -43,6 +43,81 @@ pub fn is_zero_point(x: f32, y: f32, z: f32) -> bool {
 }
 
 #[repr(C)]
+pub struct CudaU16Array<const SIZE: usize> {
+    pub ptr: *mut u16,
+    pub length: usize,
+}
+
+impl<const SIZE: usize> CudaU16Array<SIZE> {
+    pub fn get(&self, index: usize) -> Option<u16> {
+        if index >= self.length || self.ptr.is_null() {
+            return None;
+        }
+        unsafe { Some(*self.ptr.add(index)) }
+    }
+
+    // Теперь берет истинный последний элемент, а не физический конец капы
+    pub fn last(&self) -> Option<&u16> {
+        if self.length == 0 || self.ptr.is_null() {
+            return None;
+        }
+
+        unsafe {
+            let last_ptr = self.ptr.add(self.length - 1);
+            Some(&*last_ptr)
+        }
+    }
+
+    pub fn push(&mut self, value: u16) {
+        if self.length == SIZE {
+            return;
+        }
+        unsafe {
+            let write_ptr = self.ptr.add(self.length);
+            *write_ptr = value;
+        }
+        self.length += 1;
+    }
+
+    // Сброс счетчика перед новым циклом записи из ROS2
+    #[inline(always)]
+    pub fn clear(&mut self) {
+        self.length = 0;
+    }
+
+    #[inline(always)]
+    pub fn cap(&self) -> usize {
+        SIZE
+    }
+}
+
+unsafe impl<const SIZE: usize> Send for CudaU16Array<SIZE> {}
+unsafe impl<const SIZE: usize> Sync for CudaU16Array<SIZE> {}
+
+impl<const SIZE: usize> Deref for CudaU16Array<SIZE> {
+    type Target = [u16];
+
+    fn deref(&self) -> &Self::Target {
+        if self.ptr.is_null() {
+            panic!("Попытка разыменовать пустой указатель")
+        }
+        // Создаем слайс только до РЕАЛЬНОЙ заполненной длины
+        unsafe { std::slice::from_raw_parts(self.ptr, SIZE) }
+    }
+}
+
+impl<const SIZE: usize> DerefMut for CudaU16Array<SIZE> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        if self.ptr.is_null() {
+            panic!("Попытка разыменовать пустой указатель")
+        }
+        // Создаем слайс только до РЕАЛЬНОЙ заполненной длины
+        unsafe { std::slice::from_raw_parts_mut(self.ptr, SIZE) }
+    }
+}
+
+#[repr(C)]
 pub struct CudaArray<const SIZE: usize> {
     pub ptr: *mut f32,
     pub length: usize,
@@ -146,7 +221,7 @@ pub struct PointCloud<const SIZE: usize> {
 
     pub can_write: bool,
 
-    pub ring: TripleBuffer<u16>,
+    pub ring: TripleBuffer<CudaU16Array<SIZE>>,
     // Дублирующее поле "pub length: TripleBuffer<usize>" удалено, чтобы избежать рассинхронизации.
     pub height: TripleBuffer<u32>,
     pub width: TripleBuffer<u32>,
@@ -162,6 +237,7 @@ impl<const SIZE: usize> PointCloud<SIZE> {
         self.y[queue].clear();
         self.z[queue].clear();
         self.intensity[queue].clear();
+        self.ring[queue].clear();
     }
 
     pub fn new(
@@ -169,6 +245,7 @@ impl<const SIZE: usize> PointCloud<SIZE> {
         y_ptrs: [*mut f32; 3],
         z_ptrs: [*mut f32; 3],
         i_ptrs: [*mut f32; 3],
+        r_ptrs: [*mut u16; 3],
     ) -> Self {
         let make_fields = |ptrs: [*mut f32; 3]| {
             [
@@ -187,6 +264,23 @@ impl<const SIZE: usize> PointCloud<SIZE> {
             ]
         };
 
+        let make_ring_fields = |ptrs: [*mut u16; 3]| {
+            [
+                CudaU16Array {
+                    ptr: ptrs[0],
+                    length: 0,
+                },
+                CudaU16Array {
+                    ptr: ptrs[1],
+                    length: 0,
+                },
+                CudaU16Array {
+                    ptr: ptrs[2],
+                    length: 0,
+                },
+            ]
+        };
+
         Self {
             x: TripleBuffer(make_fields(x_ptrs)),
             y: TripleBuffer(make_fields(y_ptrs)),
@@ -196,7 +290,7 @@ impl<const SIZE: usize> PointCloud<SIZE> {
 
             width: TripleBuffer([0; 3]),
             height: TripleBuffer([0; 3]),
-            ring: TripleBuffer([0; 3]),
+            ring: TripleBuffer(make_ring_fields(r_ptrs)),
             timestamp: TripleBuffer([0; 3]),
             is_dense: TripleBuffer([false; 3]),
         }
@@ -234,18 +328,20 @@ impl fmt::Display for ProcessingQueue {
 }
 
 impl<const SIZE: usize> PointCloud<SIZE> {
-    pub fn iter(&self, queue: ProcessingQueue) -> impl Iterator<Item = (&f32, &f32, &f32, &f32)> {
+    pub fn iter(&self, queue: ProcessingQueue) -> impl Iterator<Item = (&f32, &f32, &f32, &f32, &u16)> {
         let len = self.len(queue);
         let x_iter = self.x[queue][..len].iter();
         let y_iter = self.y[queue][..len].iter();
         let z_iter = self.z[queue][..len].iter();
         let int_iter = self.intensity[queue][..len].iter();
+        let r_iter = self.ring[queue][..len].iter();
 
         x_iter
             .zip(y_iter)
             .zip(z_iter)
             .zip(int_iter)
-            .map(|(((x, y), z), intensity)| (x, y, z, intensity))
+            .zip(r_iter)
+            .map(|((((x, y), z), intensity), ring)| (x, y, z, intensity, ring))
     }
 
     #[inline(always)]
@@ -267,7 +363,7 @@ impl<const SIZE: usize> PointCloud<SIZE> {
         let (mut sum_x, mut sum_y, mut sum_z) = (0.0f32, 0.0f32, 0.0f32);
         let mut valid_count = 0usize;
 
-        for (&x, &y, &z, _) in self.iter(queue) {
+        for (&x, &y, &z, _, _) in self.iter(queue) {
             if is_zero_point(x, y, z) {
                 continue;
             }

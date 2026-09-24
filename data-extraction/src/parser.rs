@@ -10,7 +10,7 @@ pub struct PointLayout {
     pub y_offset: usize,
     pub z_offset: usize,
     pub intensity_offset: usize,
-    pub ring_offset: Option<usize>,
+    pub ring_offset: usize,
     pub timestamp_offset: Option<usize>,
 }
 
@@ -79,17 +79,21 @@ fn create_layout(message: &PointCloud2) -> Result<PointLayout, AppError> {
     let intensity = find_field(message, "intensity")
         .ok_or(ErrorType::NoneError("intensity field not found"))?;
 
+    let ring = find_field(message, "ring")
+        .ok_or(ErrorType::NoneError("ring field not found"))?;
+
     validate_field(x, PointField::FLOAT32)?;
     validate_field(y, PointField::FLOAT32)?;
     validate_field(z, PointField::FLOAT32)?;
     validate_field(intensity, PointField::FLOAT32)?;
+    validate_field(ring, PointField::UINT16)?;
 
     Ok(PointLayout {
         x_offset: x.offset as usize,
         y_offset: y.offset as usize,
         z_offset: z.offset as usize,
         intensity_offset: intensity.offset as usize,
-        ring_offset: None,
+        ring_offset: ring.offset as usize,
         timestamp_offset: None,
     })
 }
@@ -166,6 +170,7 @@ pub fn parse_coords(
     let y_off = layout.y_offset;
     let z_off = layout.z_offset;
     let i_off = layout.intensity_offset;
+    let r_off = layout.ring_offset;
 
     let mut i = 0;
 
@@ -181,19 +186,22 @@ pub fn parse_coords(
         let y_bytes: [u8; 4] = point_buf[y_off..y_off + 4].try_into().unwrap();
         let z_bytes: [u8; 4] = point_buf[z_off..z_off + 4].try_into().unwrap();
         let i_bytes: [u8; 4] = point_buf[i_off..i_off + 4].try_into().unwrap();
+        let r_bytes: [u8; 2] = point_buf[r_off..r_off + 2].try_into().unwrap();
 
         // Превращаем байты в u32 с учетом родного порядка байт процессора (Native Endian)
         let px = u32::from_ne_bytes(x_bytes);
         let py = u32::from_ne_bytes(y_bytes);
         let pz = u32::from_ne_bytes(z_bytes);
         let pi = u32::from_ne_bytes(i_bytes);
+        let pr = u16::from_ne_bytes(r_bytes);
 
-        let (x, y, z, intensity) = if is_bigendian {
+        let (x, y, z, intensity, ring) = if is_bigendian {
             (
                 f32::from_bits(u32::from_be(px)),
                 f32::from_bits(u32::from_be(py)),
                 f32::from_bits(u32::from_be(pz)),
                 f32::from_bits(u32::from_be(pi)),
+                u16::from_be(pr),
             )
         } else {
             (
@@ -201,6 +209,7 @@ pub fn parse_coords(
                 f32::from_bits(u32::from_le(py)),
                 f32::from_bits(u32::from_le(pz)),
                 f32::from_bits(u32::from_le(pi)),
+                u16::from_le(pr),
             )
         };
 
@@ -226,10 +235,12 @@ pub fn parse_coords(
             cloud.y[write_state][i] = y;
             cloud.z[write_state][i] = z;
             cloud.intensity[write_state][i] = intensity;
+            cloud.ring[write_state][i] = ring;
             cloud.x[write_state].length += 1;
             cloud.y[write_state].length += 1;
             cloud.z[write_state].length += 1;
             cloud.intensity[write_state].length += 1;
+            cloud.ring[write_state].length += 1;
 
             i += 1;
         }

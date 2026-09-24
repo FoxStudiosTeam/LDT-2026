@@ -17,7 +17,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::debug::rerun::init_rerun;
 use crate::engine::engine_entry::entry;
-use crate::engine::types::pin_ptr;
+use crate::engine::types::{pin_ptr, pin_u16_ptr};
 
 kaiv_utils::env_config! {
     ".env" => pub (crate) ENV = pub (crate) Env {
@@ -25,7 +25,7 @@ kaiv_utils::env_config! {
         ROS_DOMAIN_ID : u16 = 42,
         TOTAL_FRAMES : u64 = u64::MAX,
         TEST_RERUN : bool = false,
-        PREVIEW_FOV_X_DEG : f32 = 25.0,
+        PREVIEW_FOV_X_DEG : f32 = 180.0,
         RENDER_PATH : String = "".to_string()
     }
 }
@@ -38,7 +38,7 @@ async fn main() -> Result<(), AppError> {
     let (non_blocking_writer, _guard) = tracing_appender::non_blocking(std::io::stdout());
     let filter = EnvFilter::try_from_default_env()
         //  формат: package=level "," - разделитель
-        .unwrap_or_else(|_| EnvFilter::new("debug,rustdds=off,h2=off"));
+        .unwrap_or_else(|_| EnvFilter::new("ros2_data_extraction=info,ros2_debug_viewer=info,shared=info"));
 
     tracing_subscriber::fmt()
         .with_writer(non_blocking_writer)
@@ -53,9 +53,10 @@ async fn main() -> Result<(), AppError> {
     let y_ptr = pin_ptr(SIZE);
     let z_ptr = pin_ptr(SIZE);
     let i_ptr = pin_ptr(SIZE);
+    let r_ptr = pin_u16_ptr(SIZE);
 
     let cloud = Arc::<RwLock<AppPointCloud>>::new(RwLock::new(AppPointCloud::new(
-        x_ptr, y_ptr, z_ptr, i_ptr,
+        x_ptr, y_ptr, z_ptr, i_ptr, r_ptr
     )));
 
     debug::std::print_banner();

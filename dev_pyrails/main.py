@@ -191,8 +191,21 @@ def main():
     )
 
     args = parser.parse_args()
+    paths = get_frame_paths(args.frames_dir)
 
-    geo = LidarGeometry()
+    if not paths:
+        print(f"Error: No frame_*.npy found in {args.frames_dir}")
+        return
+
+    sample_frame = np.load(paths[0])
+    height, width = sample_frame.shape
+
+    print(f"Loaded range image geometry: {height}x{width}")
+
+    geo = LidarGeometry(
+        height=height,
+        width=width,
+    )
     detector = RailTrackDetector(geometry=geo)
     visualizer = RailVisualizer(geometry=geo)
 

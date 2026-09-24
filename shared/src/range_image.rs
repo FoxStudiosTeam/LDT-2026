@@ -1,6 +1,28 @@
 use crate::error::AppError;
 use crate::types::{AppPointCloud, ProcessingQueue};
 use rerun::DepthImage;
+use tracing::info;
+
+const PANDAR128_CHANNELS: usize = 128;
+
+// Вертикальные интервалы между каналами.
+const PANDAR128_VERTICAL_STEP_EDGE_DEG: f32 = 1.0;
+const PANDAR128_VERTICAL_STEP_STANDARD_DEG: f32 = 0.5;
+const PANDAR128_VERTICAL_STEP_HIGH_RES_DEG: f32 = 0.125;
+
+// Границы high-resolution области.
+const PANDAR128_HR_FIRST_CHANNEL: usize = 26;
+const PANDAR128_HR_LAST_CHANNEL: usize = 89;
+
+// Вертикальный FOV.
+const PANDAR128_FOV_UP_DEG: f32 = 15.0;
+const PANDAR128_FOV_DOWN_DEG: f32 = -25.0;
+
+// Горизонтальное разрешение.
+const PANDAR128_HORIZONTAL_RES_HR_DEG: f32 = 0.1;
+const PANDAR128_HORIZONTAL_RES_STANDARD_DEG: f32 = 0.2;
+
+const PANDAR128_RANGE_IMAGE_WIDTH: usize = 3600;
 
 #[derive(Clone, Copy, Debug)]
 pub struct RangeImageConfig {
@@ -40,6 +62,90 @@ pub struct RangeImage {
     /// Прямой буфер глубин в метрах. Размер `width * height`.
     /// Непоражённые лучи / пропуски хранятся как `0.0`.
     pub data: Vec<f32>,
+}
+
+/// Расчётная вертикальная геометрия Pandar128E3X.
+///
+/// Каналы нумеруются сверху вниз: 1..128.
+///
+/// Из документации:
+/// - Ch 1 -> Ch 2:       1.0°
+/// - Ch 2 -> Ch 26:      0.5°
+/// - Ch 26 -> Ch 90:     0.125°
+/// - Ch 90 -> Ch 127:    0.5°
+/// - Ch 127 -> Ch 128:   1.0°
+pub struct Pandar128VerticalGeometry {
+    pub pitch_rad: [f32; 128],
+}
+
+impl Pandar128VerticalGeometry {
+    pub fn new() -> Self {
+        let mut pitch_rad = [0.0f32; PANDAR128_CHANNELS];
+
+        // Ch1 находится на верхней границе FOV.
+        pitch_rad[0] = PANDAR128_FOV_UP_DEG.to_radians();
+
+        for channel in 1..PANDAR128_CHANNELS {
+            let step_deg: f32 = match channel {
+                // Ch1 -> Ch2
+                1 => 1.0,
+
+                // Ch2 -> Ch26
+                2..=25 => 0.5,
+
+                // Ch26 -> Ch90
+                26..=89 => 0.125,
+
+                // Ch90 -> Ch127
+                90..=126 => 0.5,
+
+                // Ch127 -> Ch128
+                127 => 1.0,
+
+                _ => unreachable!(),
+            };
+
+            pitch_rad[channel] =
+                pitch_rad[channel - 1] - step_deg.to_radians();
+        }
+
+        Self { pitch_rad }
+    }
+
+    #[inline(always)]
+    pub fn pitch(&self, row: usize) -> f32 {
+        self.pitch_rad[row]
+    }
+
+    #[inline(always)]
+    pub fn nearest_channel(&self, pitch_rad: f32) -> usize {
+        let mut best_channel = 0;
+        let mut best_error = f32::MAX;
+
+        for channel in 0..PANDAR128_CHANNELS {
+            let error = (self.pitch_rad[channel] - pitch_rad).abs();
+
+            if error < best_error {
+                best_error = error;
+                best_channel = channel;
+            }
+        }
+
+        best_channel
+    }
+}
+
+#[inline(always)]
+fn horizontal_resolution_deg(channel: usize) -> f32 {
+    match channel {
+        // Ch 26..89 = 0.1°
+        26..=89 => PANDAR128_HORIZONTAL_RES_HR_DEG,
+
+        // Ch 1..25 и Ch 90..128 = 0.2°
+        1..=25 | 90..=128 => PANDAR128_HORIZONTAL_RES_STANDARD_DEG,
+
+        _ => unreachable!(),
+    }
 }
 
 /// Быстрое вычисление atan2(y, x) через полиномиальную аппроксимацию.
@@ -108,59 +214,146 @@ impl RangeImage {
         downsample_x: usize,
     ) -> Self {
         const CHANNELS: usize = 128;
+        const BASE_WIDTH: usize = 3600;
+
+        const VERTICAL_RESOLUTION_DEG: f32 = 0.125;
+        const VERTICAL_FOV_DEG: f32 = 40.0; // +15° ... -25°
 
         let total_pts = cloud.len(queue);
-        // Динамическое число колонок из истинного числа точек сенсора:
-        // Pandar128: 307 200 точек -> 2400 колонок (0.15° шаг).
-        // При 921 600 точках -> 7200 колонок (0.05° шаг).
-        let total_columns = (total_pts / CHANNELS).max(2400);
 
         let ds = downsample_x.max(1);
-        let width = total_columns / ds;
-        let height = CHANNELS;
+        let width = BASE_WIDTH / ds;
+        let height = (VERTICAL_FOV_DEG / PANDAR128_VERTICAL_STEP_HIGH_RES_DEG) as usize + 1;
 
         let mut image = Self::new(width, height);
+
+        let geometry = Pandar128VerticalGeometry::new();
+
         let pi = std::f32::consts::PI;
         let inv_two_pi = 0.5 * std::f32::consts::FRAC_1_PI;
         let width_f = width as f32;
 
-        // В Pandar128 кольцо 0..127 строго задает вертикальный угол (+15° .. -25°).
-        // Лазеры стреляют с индивидуальными азимутальными сдвигами (до 15.4°).
-        // Направление движения поезда вперед — ось -Y (yaw = 0).
-        // Влево — ось -X (yaw > 0), вправо — ось +X (yaw < 0).
-        // Центрируем курс движения вперед строго по центру изображения: col = width / 2.
-        for (i, (&x, &y, &z, _)) in cloud.iter(queue).enumerate() {
+        for (i, (&x, &y, &z, _, &r)) in cloud.iter(queue).enumerate() {
             if i >= total_pts {
                 break;
             }
-            // Отсеиваем шум, битые/пустые возвраты сенсора (y=0, z=0) и дальности < 0.2 м
-            if (y.abs() < 1e-4 && z.abs() < 1e-4) || (x == 0.0 && y == 0.0 && z == 0.0) {
+
+            if (y.abs() < 1e-4 && z.abs() < 1e-4)
+                || (x == 0.0 && y == 0.0 && z == 0.0)
+            {
                 continue;
             }
+
             let r2 = x * x + y * y + z * z;
+
             if r2 < 0.04 {
                 continue;
             }
 
-            let ring = i % CHANNELS; // строка: 0 (верх) .. 127 (низ)
             let range = r2.sqrt();
 
             let yaw = fast_atan2(-x, -y);
-            let norm = (-yaw + pi) * inv_two_pi; // [0.0 .. 1.0], 0.5 = вперед по ходу поезда
-            let col = ((norm * width_f) as usize).min(width - 1);
-            let row = ring;
+            let norm = (-yaw + pi) * inv_two_pi;
+
+            let col = ((norm * width_f) as usize)
+                .min(width - 1);
+
+            let ring = r as usize;
+
+            if ring >= CHANNELS {
+                continue;
+            }
+
+            let pitch_rad = geometry.pitch(ring);
+
+            let row = (
+                (PANDAR128_FOV_UP_DEG.to_radians() - pitch_rad)
+                    / PANDAR128_VERTICAL_STEP_HIGH_RES_DEG.to_radians()
+            )
+                .round() as usize;
+
+            if row >= height {
+                continue;
+            }
 
             let idx = row * width + col;
+
             let current = image.data[idx];
+
             if current == 0.0 || range < current {
                 image.data[idx] = range;
             }
         }
 
-        // Заполняем одиночные горизонтальные пропуски (1-2 пиксельные дыры) для гладкой картинки
         image.fill_single_pixel_holes();
 
+        image.fill_vertical_holes();
+
         image
+    }
+
+    pub fn fill_vertical_holes(&mut self) {
+        let w = self.width;
+        let h = self.height;
+
+        for r in 1..h - 1 {
+            let row_start = r * w;
+            let row_end = row_start + w;
+
+            // Реальная строка канала — ничего не делаем.
+            if self.data[row_start..row_end]
+                .iter()
+                .any(|&v| v > 0.0)
+            {
+                continue;
+            }
+
+            // Ближайшая заполненная строка сверху.
+            let mut top = r;
+            while top > 0 {
+                top -= 1;
+
+                let start = top * w;
+                let end = start + w;
+
+                if self.data[start..end].iter().any(|&v| v > 0.0) {
+                    break;
+                }
+            }
+
+            // Ближайшая заполненная строка снизу.
+            let mut bottom = r;
+            while bottom + 1 < h {
+                bottom += 1;
+
+                let start = bottom * w;
+                let end = start + w;
+
+                if self.data[start..end].iter().any(|&v| v > 0.0) {
+                    break;
+                }
+            }
+
+            if top == r || bottom == r {
+                continue;
+            }
+
+            let gap = (bottom - top) as f32;
+            let t = (r - top) as f32 / gap;
+
+            for c in 0..w {
+                let top_value = self.data[top * w + c];
+                let bottom_value = self.data[bottom * w + c];
+
+                if top_value > 0.0
+                    && bottom_value > 0.0
+                    && (top_value - bottom_value).abs() < 2.0
+                {
+                    self.data[row_start + c] =
+                        top_value * (1.0 - t) + bottom_value * t;
+                }
+            }
+        }
     }
 
     /// Заполнение одиночных 1- и 2-пиксельных пропусков по горизонтали для устранения шума и артефактов
@@ -210,7 +403,7 @@ impl RangeImage {
         let fov_v_inv = 1.0 / total_fov_v;
         let two_pi = 2.0 * std::f32::consts::PI;
 
-        for (&x, &y, &z, _) in cloud.iter(queue) {
+        for (&x, &y, &z, _, &r) in cloud.iter(queue) {
             let r2 = x * x + y * y + z * z;
             if r2 < config.min_range_m * config.min_range_m
                 || r2 > config.max_range_m * config.max_range_m
@@ -224,11 +417,13 @@ impl RangeImage {
 
             // Проекция по вертикали: pitch -> [0..height-1]
             // pitch = fov_up -> row 0 (верх), pitch = fov_down -> row height-1 (низ)
-            let v_norm = (config.fov_up_rad - pitch) * fov_v_inv;
-            if !(0.0..=1.0).contains(&v_norm) {
+            let vertical_geometry = Pandar128VerticalGeometry::new();
+
+            let row = r as usize;
+
+            if row >= height {
                 continue;
             }
-            let row = ((v_norm * (height as f32)).floor() as usize).min(height - 1);
 
             // Проекция по горизонтали: yaw -> [0..width-1]
             // yaw = 0 (вперед) -> центр изображения (width / 2)
@@ -486,5 +681,36 @@ mod tests {
         assert!(is_zero_point(0.004, -0.003, 0.005));
         assert!(!is_zero_point(0.006, 0.0, 0.0));
         assert!(!is_zero_point(0.0, 10.0, 0.0));
+    }
+
+    #[test]
+    fn test_pandar128_vertical_geometry() {
+        let geometry = Pandar128VerticalGeometry::new();
+
+        for channel in 0..128 {
+            println!(
+                "Ch {:3}: {:8.4}°",
+                channel + 1,
+                geometry.pitch_rad[channel].to_degrees(),
+            );
+        }
+
+        let ch1 = geometry.pitch_rad[0].to_degrees();
+        let ch2 = geometry.pitch_rad[1].to_degrees();
+        let ch26 = geometry.pitch_rad[25].to_degrees();
+        let ch27 = geometry.pitch_rad[26].to_degrees();
+        let ch89 = geometry.pitch_rad[88].to_degrees();
+        let ch90 = geometry.pitch_rad[89].to_degrees();
+        let ch127 = geometry.pitch_rad[126].to_degrees();
+        let ch128 = geometry.pitch_rad[127].to_degrees();
+
+        assert!((ch1 - 15.0).abs() < 1e-5);
+        assert!((ch2 - 14.0).abs() < 1e-5);
+
+        assert!((ch27 - ch26 + 0.125).abs() < 1e-5);
+
+        assert!((ch90 - ch89 + 0.125).abs() < 1e-5);
+
+        assert!((ch128 + 25.0).abs() < 1e-5);
     }
 }

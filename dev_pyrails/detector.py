@@ -67,22 +67,27 @@ class RailTrackDetector:
     def __init__(
         self,
         geometry: Optional[LidarGeometry] = None,
-        nominal_gauge: float = 0.38,
-        min_gauge: float = 0.28,
-        max_gauge: float = 0.52,
+        nominal_gauge: float = 1.520,
+        min_gauge: float = 1.515,
+        max_gauge: float = 1.55,
         depth_step_thresh: float = 0.10,
-        row_start: int = 124,
-        row_end: int = 74,
-        max_lateral_jump: float = 0.35,
+        max_depth_step_thresh: float = 0.9,
+        row_start_pct: float = 0.85,
+        row_end_pct: float = 0.5,
+        max_lateral_jump: float = 0.3,
+        max_lateral_rail_jump: float = 0.1
     ):
         self.geo = geometry or LidarGeometry()
         self.nominal_gauge = nominal_gauge
         self.min_gauge = min_gauge
         self.max_gauge = max_gauge
         self.depth_step_thresh = depth_step_thresh
-        self.row_start = row_start
-        self.row_end = row_end
+        self.max_depth_step_thresh = max_depth_step_thresh
+        self.row_start_pct = row_start_pct
+        self.row_end_pct = row_end_pct
         self.max_lateral_jump = max_lateral_jump
+        self.max_lateral_rail_jump = max_lateral_rail_jump
+
 
     def detect(self, frame: np.ndarray, frame_idx: int = 0) -> Optional[DetectionResult]:
         """
@@ -93,14 +98,27 @@ class RailTrackDetector:
 
         candidates: List[RailPoint] = []
         prev_y_center: Optional[float] = None
+        prev_y_right: Optional[float] = None
+        prev_y_left: Optional[float] = None
+        prev_x_center: Optional[float] = None
+
+        row_start = int(h * self.row_start_pct)
+        row_end = int(h * self.row_end_pct)
 
         # Scan rows from near (row_start) to far (row_end)
-        for row in range(self.row_start, self.row_end, -1):
+        for row in range(row_start, row_end, -2):
             r_row = frame[row, :]
             diff_r = np.diff(r_row)
 
-            pos_steps = np.where(diff_r > self.depth_step_thresh)[0]
-            neg_steps = np.where(diff_r < -self.depth_step_thresh)[0]
+            pos_steps = np.where(
+                (diff_r > self.depth_step_thresh)
+                & (diff_r <= self.max_depth_step_thresh)
+            )[0]
+
+            neg_steps = np.where(
+                (diff_r < -self.depth_step_thresh)
+                & (diff_r >= -self.max_depth_step_thresh)
+            )[0]
 
             pairs = []
             for p in pos_steps:
@@ -112,11 +130,18 @@ class RailTrackDetector:
                         xl, yl, zl = X[row, col_l], Y[row, col_l], Z[row, col_l]
                         xr, yr, zr = X[row, col_r], Y[row, col_r], Z[row, col_r]
 
-                        gauge = np.sqrt((xr - xl) ** 2 + (yr - yl) ** 2)
-                        if self.min_gauge <= gauge <= self.max_gauge:
+                        gauge = np.sqrt((xr - xl) ** 2 + (yr - yl) ** 2 + (zr - zl) ** 2)
+                        h_diff = abs(zr-zl)
+                        x_diff = abs(xr-xl)
+                        if ((self.min_gauge <= gauge <= self.max_gauge) and h_diff < 0.05 and x_diff < 0.3):
                             xm = 0.5 * (xl + xr)
                             ym = 0.5 * (yl + yr)
                             zm = 0.5 * (zl + zr)
+
+                            if prev_x_center is None:
+                                prev_x_center = xm
+                            elif xm < prev_x_center:
+                                continue
 
                             pairs.append(
                                 RailPoint(
@@ -140,19 +165,52 @@ class RailTrackDetector:
                 continue
 
             # Prioritize continuity from previous scanline
-            if prev_y_center is not None:
-                pairs.sort(key=lambda item: abs(item.y_center - prev_y_center))
+            if (
+                prev_y_center is not None
+                and prev_y_left is not None
+                and prev_y_right is not None
+            ):
+                pairs.sort(key=lambda item: (
+                    abs(item.y_center - prev_y_center),
+                    abs(item.y_right - prev_y_right),
+                    abs(item.y_left - prev_y_left)))
             else:
-                # First valid scanline: select pair closest to centerline Y ~ 0
-                pairs.sort(key=lambda item: abs(item.y_center))
+                pairs.sort(key=lambda item: (
+                    abs(item.gauge - self.nominal_gauge),
+                    abs(item.x_right - item.x_left),
+                    abs(item.z_left - item.z_right)))
 
-            best = pairs[0]
+            best:RailPoint = pairs[0]
 
-            # Reject sudden lateral discontinuities
-            if prev_y_center is not None and abs(best.y_center - prev_y_center) > self.max_lateral_jump:
+            if prev_y_center is not None:
+                lateral_jump = abs(best.y_center - prev_y_center)
+            else:
+                lateral_jump = best.y_center
+
+            # Reject sudden lateral discontinuity of center
+            if prev_y_center is not None and lateral_jump > self.max_lateral_jump:
                 continue
 
+            # Reject sudden lateral discontinuity of left rail
+            if prev_y_left is not None:
+                left_lateral_jump = abs(best.y_left - prev_y_left)
+
+                if left_lateral_jump > self.max_lateral_rail_jump:
+                    continue
+
+            # Reject sudden lateral discontinuity of right rail
+            if prev_y_right is not None:
+                right_lateral_jump = abs(best.y_right - prev_y_right)
+
+                if right_lateral_jump > self.max_lateral_rail_jump:
+                    continue
+
             prev_y_center = best.y_center
+            prev_y_left = best.y_left
+            prev_y_right = best.y_right
+
+            
+
             candidates.append(best)
 
         # Require a minimum number of valid scanlines
@@ -203,7 +261,7 @@ class RailTrackDetector:
         x_right = x_curve - half_w * np.sin(theta)
         y_right = y_center + half_w * np.cos(theta)
 
-        total_checked_rows = abs(self.row_start - self.row_end) + 1
+        total_checked_rows = abs(row_start - row_end) + 1
         confidence = min(1.0, len(candidates) / float(total_checked_rows))
 
         return DetectionResult(
