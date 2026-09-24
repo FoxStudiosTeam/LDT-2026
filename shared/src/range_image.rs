@@ -352,84 +352,9 @@ impl RangeImage {
             }
         }
 
-            // let idx = row * width + col;
-            //
-            // let current = image.data[idx];
-            //
-            // if current == 0.0 || range < current {
-            //     image.data[idx] = range;
-            // }
-        // }
-
-        // image.fill_single_pixel_holes();
-        //
-        // image.fill_vertical_holes();
+        image.fill_single_pixel_holes();
 
         image
-    }
-
-    pub fn fill_vertical_holes(&mut self) {
-        let w = self.width;
-        let h = self.height;
-
-        for r in 1..h - 1 {
-            let row_start = r * w;
-            let row_end = row_start + w;
-
-            // Реальная строка канала — ничего не делаем.
-            if self.data[row_start..row_end]
-                .iter()
-                .any(|&v| v > 0.0)
-            {
-                continue;
-            }
-
-            // Ближайшая заполненная строка сверху.
-            let mut top = r;
-            while top > 0 {
-                top -= 1;
-
-                let start = top * w;
-                let end = start + w;
-
-                if self.data[start..end].iter().any(|&v| v > 0.0) {
-                    break;
-                }
-            }
-
-            // Ближайшая заполненная строка снизу.
-            let mut bottom = r;
-            while bottom + 1 < h {
-                bottom += 1;
-
-                let start = bottom * w;
-                let end = start + w;
-
-                if self.data[start..end].iter().any(|&v| v > 0.0) {
-                    break;
-                }
-            }
-
-            if top == r || bottom == r {
-                continue;
-            }
-
-            let gap = (bottom - top) as f32;
-            let t = (r - top) as f32 / gap;
-
-            for c in 0..w {
-                let top_value = self.data[top * w + c];
-                let bottom_value = self.data[bottom * w + c];
-
-                if top_value > 0.0
-                    && bottom_value > 0.0
-                    && (top_value - bottom_value).abs() < 2.0
-                {
-                    self.data[row_start + c] =
-                        top_value * (1.0 - t) + bottom_value * t;
-                }
-            }
-        }
     }
 
     /// Заполнение одиночных 1- и 2-пиксельных пропусков по горизонтали для устранения шума и артефактов
