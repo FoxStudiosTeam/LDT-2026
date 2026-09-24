@@ -17,6 +17,7 @@ const PANDAR128_HR_LAST_CHANNEL: usize = 89;
 // Вертикальный FOV.
 const PANDAR128_FOV_UP_DEG: f32 = 15.0;
 const PANDAR128_FOV_DOWN_DEG: f32 = -25.0;
+const VERTICAL_FOV_DEG: f32 = 40.0;
 
 // Горизонтальное разрешение.
 const PANDAR128_HORIZONTAL_RES_HR_DEG: f32 = 0.1;
@@ -43,12 +44,12 @@ pub struct RangeImageConfig {
 impl Default for RangeImageConfig {
     fn default() -> Self {
         Self {
-            width: 1800,
-            height: 128,
+            width: 3600,
+            height: (VERTICAL_FOV_DEG / PANDAR128_VERTICAL_STEP_HIGH_RES_DEG) as usize + 1,
             fov_up_rad: 15.0_f32.to_radians(),
             fov_down_rad: -25.0_f32.to_radians(),
             min_range_m: 0.5,
-            max_range_m: 150.0,
+            max_range_m: 250.0,
         }
     }
 }
@@ -148,6 +149,28 @@ fn horizontal_resolution_deg(channel: usize) -> f32 {
     }
 }
 
+#[inline(always)]
+fn vertical_resolution_deg(channel: usize) -> f32 {
+    match channel {
+        // Ch1 -> Ch2
+        1 => 1.0,
+
+        // Ch2 -> Ch26
+        2..=25 => 0.5,
+
+        // Ch26 -> Ch90
+        26..=89 => 0.125,
+
+        // Ch90 -> Ch127
+        90..=126 => 0.5,
+
+        // Ch127 -> Ch128
+        127 => 1.0,
+
+        _ => unreachable!(),
+    }
+}
+
 /// Быстрое вычисление atan2(y, x) через полиномиальную аппроксимацию.
 /// Максимальная абсолютная погрешность < 0.0008 радиана (~0.04°),
 /// что существенно меньше шага азимута лидара (~0.2°).
@@ -214,10 +237,7 @@ impl RangeImage {
         downsample_x: usize,
     ) -> Self {
         const CHANNELS: usize = 128;
-        const BASE_WIDTH: usize = 3600;
-
-        const VERTICAL_RESOLUTION_DEG: f32 = 0.125;
-        const VERTICAL_FOV_DEG: f32 = 40.0; // +15° ... -25°
+        const BASE_WIDTH: usize = 3600; // +15° ... -25°
 
         let total_pts = cloud.len(queue);
 
@@ -276,18 +296,74 @@ impl RangeImage {
                 continue;
             }
 
-            let idx = row * width + col;
+            let center_row = row as isize;
+            let center_col = col as isize;
 
-            let current = image.data[idx];
+            // Сколько пикселей между соседними каналами по вертикали.
+            let row_radius =
+                (vertical_resolution_deg(ring+1) / PANDAR128_VERTICAL_STEP_HIGH_RES_DEG)
+                    .round() as isize
+                    - 1;
 
-            if current == 0.0 || range < current {
-                image.data[idx] = range;
+            // Сколько пикселей между соседними измерениями по горизонтали.
+            //
+            // При width = 3600:
+            // 360° / 3600 = 0.1° на пиксель.
+            let horizontal_step_deg = 360.0 / width as f32;
+
+            let col_radius =
+                (horizontal_resolution_deg(ring+1) / horizontal_step_deg)
+                    .round() as isize
+                    - 1;
+
+            for dr in -row_radius..=row_radius {
+                for dc in -col_radius..=col_radius {
+                    // Реальный радиус — окружность, а не квадрат.
+                    let distance2 = dr * dr + dc * dc;
+
+                    if distance2 > row_radius * row_radius {
+                        continue;
+                    }
+
+                    let target_row = center_row + dr;
+                    let target_col = center_col + dc;
+
+                    // Проверяем границы.
+                    if target_row < 0
+                        || target_row >= height as isize
+                        || target_col < 0
+                        || target_col >= width as isize
+                    {
+                        continue;
+                    }
+
+                    let target_row = target_row as usize;
+                    let target_col = target_col as usize;
+
+                    let idx = target_row * width + target_col;
+
+                    // Оставляем ближайшую точку.
+                    let current = image.data[idx];
+
+                    if current == 0.0 || range < current {
+                        image.data[idx] = range;
+                    }
+                }
             }
         }
 
-        image.fill_single_pixel_holes();
+            // let idx = row * width + col;
+            //
+            // let current = image.data[idx];
+            //
+            // if current == 0.0 || range < current {
+            //     image.data[idx] = range;
+            // }
+        // }
 
-        image.fill_vertical_holes();
+        // image.fill_single_pixel_holes();
+        //
+        // image.fill_vertical_holes();
 
         image
     }
