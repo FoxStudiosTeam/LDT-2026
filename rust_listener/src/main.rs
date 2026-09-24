@@ -9,6 +9,7 @@ mod engine;
 
 use std::sync::{Arc, RwLock};
 
+use rerun::Color;
 use shared::error::{AppError, ErrCtx, ErrorType};
 
 use shared::types::{AppPointCloud, SIZE};
@@ -17,7 +18,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::debug::rerun::init_rerun;
 use crate::engine::engine_entry::entry;
-use crate::engine::types::{pin_ptr, pin_u16_ptr};
+use crate::engine::types::{AppEngine, pin_ptr};
 
 kaiv_utils::env_config! {
     ".env" => pub (crate) ENV = pub (crate) Env {
@@ -49,14 +50,16 @@ async fn main() -> Result<(), AppError> {
 
     info!("[START] Запуск клиента");
 
-    let x_ptr = pin_ptr(SIZE);
-    let y_ptr = pin_ptr(SIZE);
-    let z_ptr = pin_ptr(SIZE);
-    let i_ptr = pin_ptr(SIZE);
-    let r_ptr = pin_u16_ptr(SIZE);
+    let x_ptr = pin_ptr::<f32>(SIZE);
+    let y_ptr = pin_ptr::<f32>(SIZE);
+    let z_ptr = pin_ptr::<f32>(SIZE);
+    let i_ptr = pin_ptr::<f32>(SIZE);
+    let r_ptr = pin_ptr::<u16>(SIZE);
+    let c1_ptr = pin_ptr::<Color>(SIZE);
+
 
     let cloud = Arc::<RwLock<AppPointCloud>>::new(RwLock::new(AppPointCloud::new(
-        x_ptr, y_ptr, z_ptr, i_ptr, r_ptr
+        x_ptr, y_ptr, z_ptr, i_ptr, r_ptr, c1_ptr,
     )));
 
     debug::std::print_banner();
@@ -73,7 +76,9 @@ async fn main() -> Result<(), AppError> {
     let point_cloud_stream =
         ros2_data_extraction::init_sub(ENV.ROS_DOMAIN_ID, Arc::clone(&cloud)).await?;
 
-    let _ = entry(point_cloud_stream, rerun, Arc::clone(&cloud)).await?;
+    let engine = Arc::new(AppEngine::new(cloud.clone()));
+
+    let _ = entry(point_cloud_stream, rerun, Arc::clone(&cloud), engine).await?;
 
     info!("[POST] Поток сообщений завершён.");
     debug::std::print_banner();

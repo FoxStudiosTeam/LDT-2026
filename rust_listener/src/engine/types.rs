@@ -6,33 +6,19 @@ use crate::engine::cpu_engine::CPUEngine;
 
 pub trait Engine {
     fn check(&self) -> Result<bool, AppError>;
+    fn check_tunnel(&self) -> Result<(),AppError>;
 }
 
 pub type AppEngine = CPUEngine;
 
-pub fn pin_ptr(size : usize) -> [*mut f32; 3] {
+pub fn pin_ptr<T: Copy>(size : usize) -> [*mut T; 3] {
     unsafe {
-        let layout = Layout::array::<f32>(size).unwrap();
+        let layout = Layout::array::<T>(size).unwrap();
             
-        let ptr1 = alloc(layout) as *mut f32;
-        let ptr2 = alloc(layout) as *mut f32;
-        let ptr3 = alloc(layout) as *mut f32;
+        let ptr1 = alloc(layout) as *mut T;
+        let ptr2 = alloc(layout) as *mut T;
+        let ptr3 = alloc(layout) as *mut T;
             
-        if ptr1.is_null() || ptr2.is_null() || ptr3.is_null() {
-            std::alloc::handle_alloc_error(layout);
-        }
-
-        [ptr1, ptr2, ptr3]
-    }
-}
-pub fn pin_u16_ptr(size : usize) -> [*mut u16; 3] {
-    unsafe {
-        let layout = Layout::array::<u16>(size).unwrap();
-
-        let ptr1 = alloc(layout) as *mut u16;
-        let ptr2 = alloc(layout) as *mut u16;
-        let ptr3 = alloc(layout) as *mut u16;
-
         if ptr1.is_null() || ptr2.is_null() || ptr3.is_null() {
             std::alloc::handle_alloc_error(layout);
         }

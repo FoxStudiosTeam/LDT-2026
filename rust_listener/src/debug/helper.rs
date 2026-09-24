@@ -123,7 +123,7 @@ impl DebugBox3D {
 
 pub trait DebugStream {
     fn log_raw_cloud(&self, point_cloud: &AppPointCloud) -> Result<(), AppError>;
-    fn log_raw_points(&self, points: &[[f32; 3]]) -> Result<(), AppError>;
+    fn log_raw_points(&self, point_cloud: &AppPointCloud) -> Result<(), AppError>;
     fn log_debug_overlays(
         &self,
         point_cloud: &AppPointCloud,
@@ -161,11 +161,15 @@ impl DebugStream for RecordingStream {
             return Ok(());
         }
 
-        let points = point_cloud.to_rerun(ProcessingQueue::READ);
+        let q = ProcessingQueue::READ;
+
+        let points = point_cloud.to_rerun(q);
+        let colors = point_cloud.to_rerun_colors(q);
+
         self.log(
             "lidar/raw",
             &Points3D::new(points)
-                .with_colors([Color::from_rgb(160, 185, 220)])
+                .with_colors(colors)
                 .with_radii([Radius::new_ui_points(1.2)]),
         )
         .app_error()?;
@@ -174,15 +178,19 @@ impl DebugStream for RecordingStream {
     }
 
     /// Логируем готовый срез точек без удержания лочки AppPointCloud
-    fn log_raw_points(&self, points: &[[f32; 3]]) -> Result<(), AppError> {
-        if points.is_empty() {
+    fn log_raw_points(&self, point_cloud: &AppPointCloud) -> Result<(), AppError> {
+        let q = ProcessingQueue::READ;
+        
+        if point_cloud.is_empty(q) {
             return Ok(());
         }
 
+        let colors = point_cloud.to_rerun_colors(q);
+
         self.log(
             "lidar/raw",
-            &Points3D::new(points)
-                .with_colors([Color::from_rgb(160, 185, 220)])
+            &Points3D::new(point_cloud.to_rerun(q))
+                .with_colors(colors)
                 .with_radii([Radius::new_ui_points(1.2)]),
         )
         .app_error()?;

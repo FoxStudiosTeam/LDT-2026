@@ -18,4 +18,7 @@ impl Engine for GPUEngine {
     fn check(&self) -> Result<bool, AppError> {
         Ok(false)
     }
+    fn check_tunnel(&self) -> Result<(),AppError> {
+        Ok(())
+    }
 }
