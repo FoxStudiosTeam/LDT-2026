@@ -42,14 +42,15 @@ pub fn is_zero_point(x: f32, y: f32, z: f32) -> bool {
     x.abs() <= 0.005 && y.abs() <= 0.005 && z.abs() <= 0.005
 }
 
+
 #[repr(C)]
-pub struct CudaU16Array<const SIZE: usize> {
-    pub ptr: *mut u16,
+pub struct CudaArray<const SIZE: usize, T : Copy> {
+    pub ptr: *mut T,
     pub length: usize,
 }
 
-impl<const SIZE: usize> CudaU16Array<SIZE> {
-    pub fn get(&self, index: usize) -> Option<u16> {
+impl<const SIZE: usize, T : Copy> CudaArray<SIZE, T> {
+    pub fn get(&self, index: usize) -> Option<T> {
         if index >= self.length || self.ptr.is_null() {
             return None;
         }
@@ -57,7 +58,7 @@ impl<const SIZE: usize> CudaU16Array<SIZE> {
     }
 
     // Теперь берет истинный последний элемент, а не физический конец капы
-    pub fn last(&self) -> Option<&u16> {
+    pub fn last(&self) -> Option<&T> {
         if self.length == 0 || self.ptr.is_null() {
             return None;
         }
@@ -68,7 +69,7 @@ impl<const SIZE: usize> CudaU16Array<SIZE> {
         }
     }
 
-    pub fn push(&mut self, value: u16) {
+    pub fn push(&mut self, value: T) {
         if self.length == SIZE {
             return;
         }
@@ -91,86 +92,11 @@ impl<const SIZE: usize> CudaU16Array<SIZE> {
     }
 }
 
-unsafe impl<const SIZE: usize> Send for CudaU16Array<SIZE> {}
-unsafe impl<const SIZE: usize> Sync for CudaU16Array<SIZE> {}
+unsafe impl<const SIZE: usize, T : Copy> Send for CudaArray<SIZE, T> {}
+unsafe impl<const SIZE: usize, T : Copy> Sync for CudaArray<SIZE, T> {}
 
-impl<const SIZE: usize> Deref for CudaU16Array<SIZE> {
-    type Target = [u16];
-
-    fn deref(&self) -> &Self::Target {
-        if self.ptr.is_null() {
-            panic!("Попытка разыменовать пустой указатель")
-        }
-        // Создаем слайс только до РЕАЛЬНОЙ заполненной длины
-        unsafe { std::slice::from_raw_parts(self.ptr, SIZE) }
-    }
-}
-
-impl<const SIZE: usize> DerefMut for CudaU16Array<SIZE> {
-    #[inline]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        if self.ptr.is_null() {
-            panic!("Попытка разыменовать пустой указатель")
-        }
-        // Создаем слайс только до РЕАЛЬНОЙ заполненной длины
-        unsafe { std::slice::from_raw_parts_mut(self.ptr, SIZE) }
-    }
-}
-
-#[repr(C)]
-pub struct CudaArray<const SIZE: usize> {
-    pub ptr: *mut f32,
-    pub length: usize,
-}
-
-impl<const SIZE: usize> CudaArray<SIZE> {
-    pub fn get(&self, index: usize) -> Option<f32> {
-        if index >= self.length || self.ptr.is_null() {
-            return None;
-        }
-        unsafe { Some(*self.ptr.add(index)) }
-    }
-
-    // Теперь берет истинный последний элемент, а не физический конец капы
-    pub fn last(&self) -> Option<&f32> {
-        if self.length == 0 || self.ptr.is_null() {
-            return None;
-        }
-
-        unsafe {
-            let last_ptr = self.ptr.add(self.length - 1);
-            Some(&*last_ptr)
-        }
-    }
-
-    pub fn push(&mut self, value: f32) {
-        if self.length == SIZE {
-            return;
-        }
-        unsafe {
-            let write_ptr = self.ptr.add(self.length);
-            *write_ptr = value;
-        }
-        self.length += 1;
-    }
-
-    // Сброс счетчика перед новым циклом записи из ROS2
-    #[inline(always)]
-    pub fn clear(&mut self) {
-        self.length = 0;
-    }
-
-    #[inline(always)]
-    pub fn cap(&self) -> usize {
-        SIZE
-    }
-}
-
-unsafe impl<const SIZE: usize> Send for CudaArray<SIZE> {}
-unsafe impl<const SIZE: usize> Sync for CudaArray<SIZE> {}
-
-impl<const SIZE: usize> Deref for CudaArray<SIZE> {
-    type Target = [f32];
+impl<const SIZE: usize, T : Copy> Deref for CudaArray<SIZE, T> {
+    type Target = [T];
 
     fn deref(&self) -> &Self::Target {
         if self.ptr.is_null() {
@@ -181,7 +107,7 @@ impl<const SIZE: usize> Deref for CudaArray<SIZE> {
     }
 }
 
-impl<const SIZE: usize> DerefMut for CudaArray<SIZE> {
+impl<const SIZE: usize, T : Copy> DerefMut for CudaArray<SIZE, T> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         if self.ptr.is_null() {
@@ -214,14 +140,14 @@ pub const SIZE: usize = 2_000_000;
 pub type AppPointCloud = PointCloud<SIZE>;
 
 pub struct PointCloud<const SIZE: usize> {
-    pub x: TripleBuffer<CudaArray<SIZE>>,
-    pub y: TripleBuffer<CudaArray<SIZE>>,
-    pub z: TripleBuffer<CudaArray<SIZE>>,
-    pub intensity: TripleBuffer<CudaArray<SIZE>>,
+    pub x: TripleBuffer<CudaArray<SIZE, f32>>,
+    pub y: TripleBuffer<CudaArray<SIZE, f32>>,
+    pub z: TripleBuffer<CudaArray<SIZE, f32>>,
+    pub intensity: TripleBuffer<CudaArray<SIZE, f32>>,
 
     pub can_write: bool,
 
-    pub ring: TripleBuffer<CudaU16Array<SIZE>>,
+    pub ring: TripleBuffer<CudaArray<SIZE, u16>>,
     // Дублирующее поле "pub length: TripleBuffer<usize>" удалено, чтобы избежать рассинхронизации.
     pub height: TripleBuffer<u32>,
     pub width: TripleBuffer<u32>,
@@ -266,15 +192,15 @@ impl<const SIZE: usize> PointCloud<SIZE> {
 
         let make_ring_fields = |ptrs: [*mut u16; 3]| {
             [
-                CudaU16Array {
+                CudaArray {
                     ptr: ptrs[0],
                     length: 0,
                 },
-                CudaU16Array {
+                CudaArray {
                     ptr: ptrs[1],
                     length: 0,
                 },
-                CudaU16Array {
+                CudaArray {
                     ptr: ptrs[2],
                     length: 0,
                 },
