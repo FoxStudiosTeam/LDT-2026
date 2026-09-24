@@ -20,25 +20,57 @@ class RailVisualizer:
         self,
         geometry: Optional[LidarGeometry] = None,
         scale: int = 4,
-        max_dist_m: float = 25.0,
+        max_dist_m: float = 200.0,
         colormap: int = cv2.COLORMAP_TURBO,
     ):
         self.geo = geometry or LidarGeometry()
         self.scale = scale
         self.max_dist_m = max_dist_m
         self.colormap = colormap
+        self._turbo_lut = cv2.applyColorMap(
+            np.arange(256, dtype=np.uint8).reshape(-1, 1),
+            self.colormap,
+        ).reshape(256, 3)
 
     def render_range_view(
         self, frame: np.ndarray, res: Optional[DetectionResult]
     ) -> np.ndarray:
-        """Renders perspective range image with overlaid curves, corridor, and raw points."""
         h, w = frame.shape
-        clipped = np.clip(frame, 0.0, self.max_dist_m)
-        norm = ((clipped / self.max_dist_m) * 255.0).astype(np.uint8)
-        color_img = cv2.applyColorMap(norm, self.colormap)
 
+        # float32 distance -> [0, 1]
+        normalized = np.clip(
+            frame / self.max_dist_m,
+            0.0,
+            1.0,
+            )
+
+        # Позиция внутри 256-цветной Turbo LUT
+        pos = normalized * 255.0
+
+        # Два соседних цвета
+        idx0 = np.floor(pos).astype(np.int32)
+        idx1 = np.minimum(idx0 + 1, 255)
+
+        # Дробная часть между ними
+        alpha = pos - idx0
+
+        color0 = self._turbo_lut[idx0]
+        color1 = self._turbo_lut[idx1]
+
+        # Интерполируем цвет
+        color_img = (
+                color0 * (1.0 - alpha[..., None])
+                + color1 * alpha[..., None]
+        ).astype(np.uint8)
+
+        # 0 = нет измерения
+        color_img[frame <= 0.0] = 0
+
+        # Увеличение
         vis = cv2.resize(
-            color_img, (w * self.scale, h * self.scale), interpolation=cv2.INTER_NEAREST
+            color_img,
+            (w * self.scale, h * self.scale),
+            interpolation=cv2.INTER_NEAREST,
         )
 
         if res is None:
@@ -361,14 +393,31 @@ class RailVisualizer:
         return hud
 
     def render_composite(
-        self, frame: np.ndarray, res: Optional[DetectionResult]
+            self,
+            frame: np.ndarray,
+            res: Optional[DetectionResult],
     ) -> np.ndarray:
-        """Assembles Range View, BEV Map, and Telemetry HUD into one composite frame."""
+
         range_view = self.render_range_view(frame, res)
+
         h = range_view.shape[0]
 
-        bev_view = self.render_bev_view(res, width=360, height=h)
-        hud_view = self.render_hud(res, width=320, height=h)
+        bev_view = self.render_bev_view(
+            res,
+            width=360,
+            height=h,
+        )
 
-        composite = np.hstack([range_view, bev_view, hud_view])
+        hud_view = self.render_hud(
+            res,
+            width=320,
+            height=h,
+        )
+
+        composite = np.hstack([
+            range_view,
+            bev_view,
+            hud_view,
+        ])
+
         return composite
