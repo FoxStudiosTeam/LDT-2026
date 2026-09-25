@@ -27,7 +27,7 @@ import time
 import numpy as np
 
 try:
-    import rerun as rr
+    import rerun_sdk as rr
 except ImportError:
     print("Error: 'rerun-sdk' is not installed. Run: pip install rerun-sdk")
     sys.exit(1)
