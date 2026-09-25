@@ -10,6 +10,7 @@ futures = "0.3.34"
 
 ros2-client = { version = "0.10.1", default-features = false, features = ["humble"] }
 rustdds = "0.14.2"
+rerun = "0.37.2"
 
 # Логирование и воркспейс
 shared.workspace = true

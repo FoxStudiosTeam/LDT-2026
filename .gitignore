@@ -50,3 +50,4 @@ Makefile
 # --- ПИТОНЧИК ---
 venv
 /frames
+__pycache__

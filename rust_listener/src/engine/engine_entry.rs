@@ -9,6 +9,7 @@ use shared::{
 };
 use tracing::*;
 
+use crate::engine::types::{AppEngine, Engine};
 use crate::{
     ENV,
     debug::{self, helper::DebugStream},
@@ -18,6 +19,7 @@ pub async fn entry(
     mut point_cloud_stream: PointCloudStream,
     recording_stream: RecordingStream,
     point_cloud: Arc<RwLock<AppPointCloud>>,
+    engine: Arc<AppEngine>,
 ) -> Result<(), AppError> {
     let recording_stream = Arc::new(recording_stream);
 
@@ -58,6 +60,7 @@ pub async fn entry(
 
         let point_cloud_lock = point_cloud.clone();
         let recording_stream: Arc<RecordingStream> = recording_stream.clone();
+        let engine = engine.clone();
 
         tokio::task::spawn_blocking(move || {
             let frame_start = std::time::Instant::now();
@@ -79,6 +82,7 @@ pub async fn entry(
                     swap_start.elapsed()
                 );
             }
+            engine.check_tunnel().unwrap();
 
             // 2. Вычисляем статистику, строим RangeImage и извлекаем точки ПОД READ-ЛОКОМ,
             //    после чего НЕМЕДЛЕННО освобождаем лок, чтобы не задерживать ROS2 парсер.
@@ -137,6 +141,11 @@ pub async fn entry(
 
             // 3. Отправка 3D облака (раскрашенного по intensity) и оверлеев в Rerun (БЕЗ удержания лока point_cloud!)
             let rerun_cloud_start = std::time::Instant::now();
+            let point_cloud = point_cloud_lock.read().expect(&format!(
+                "⚠️ Мутекс отравился ☠️ {} {}",
+                file!(),
+                line!()
+            ));
             if let Err(e) = recording_stream.log_points_with_colors(&rerun_points, &rerun_colors) {
                 error!("Ошибка логирования облака точек в rerun: {e:?}");
             }

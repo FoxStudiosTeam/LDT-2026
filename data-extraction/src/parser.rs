@@ -5,6 +5,8 @@ use shared::transport::{PointCloud2, PointField};
 use shared::types::{AppPointCloud, ProcessingQueue};
 use tracing::warn;
 
+use rerun::Color;
+
 #[derive(Debug, Clone, Copy)]
 pub struct PointLayout {
     pub x_offset: usize,
@@ -332,6 +334,7 @@ pub fn parse_coords(
             cloud.z[write_state].length += 1;
             cloud.intensity[write_state].length += 1;
             cloud.ring[write_state].length += 1;
+            cloud.colors[write_state][i] = Color::from_rgb(160, 185, 220);
 
             i += 1;
         }
