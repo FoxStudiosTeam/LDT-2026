@@ -4,9 +4,6 @@
 //!   source /opt/ros/humble/setup.bash
 //!   cargo run --bin ros2_debug_viewer
 
-mod debug;
-mod engine;
-
 use std::sync::{Arc, RwLock};
 
 use rerun::Color;
@@ -16,20 +13,10 @@ use shared::types::{AppPointCloud, SIZE};
 use tracing::*;
 use tracing_subscriber::EnvFilter;
 
-use crate::debug::rerun::init_rerun;
-use crate::engine::engine_entry::entry;
-use crate::engine::types::{AppEngine, pin_ptr};
-
-kaiv_utils::env_config! {
-    ".env" => pub (crate) ENV = pub (crate) Env {
-        RERUN_URL : String = "rerun+http://host.docker.internal:9876/proxy".to_string(),
-        ROS_DOMAIN_ID : u16 = 42,
-        TOTAL_FRAMES : u64 = u64::MAX,
-        TEST_RERUN : bool = false,
-        PREVIEW_FOV_X_DEG : f32 = 180.0,
-        RENDER_PATH : String = "".to_string()
-    }
-}
+use rust_listener::debug::{self, rerun::init_rerun};
+use rust_listener::engine::engine_entry::entry;
+use rust_listener::engine::types::{pin_ptr, AppEngine};
+use rust_listener::{ENV, Env};
 
 // ─── Точка входа ──────────────────────────────────────────────────────────────
 
