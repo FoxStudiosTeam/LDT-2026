@@ -246,10 +246,16 @@ impl EguiRangePainter {
                 let (r_l, c_l) = geo.xyz_to_row_col(x, y - half_w, z);
                 let (r_r, c_r) = geo.xyz_to_row_col(x, y + half_w, z);
                 if r_l >= 0 && (r_l as usize) < h && c_l >= 0 && (c_l as usize) < w {
-                    clear_l.push(((c_l as usize * self.scale) as i32, (r_l as usize * self.scale) as i32));
+                    clear_l.push((
+                        (c_l as usize * self.scale) as i32,
+                        (r_l as usize * self.scale) as i32,
+                    ));
                 }
                 if r_r >= 0 && (r_r as usize) < h && c_r >= 0 && (c_r as usize) < w {
-                    clear_r.push(((c_r as usize * self.scale) as i32, (r_r as usize * self.scale) as i32));
+                    clear_r.push((
+                        (c_r as usize * self.scale) as i32,
+                        (r_r as usize * self.scale) as i32,
+                    ));
                 }
             }
             draw_line_rgb(&mut rgb, out_w, out_h, &clear_l, [240, 200, 50], 1);
@@ -298,27 +304,87 @@ impl EguiRangePainter {
                 draw_rect_rgb(&mut rgb, out_w, out_h, x0, y0, x1, y1, col, 2);
 
                 // Corner bracket accents (White) for high visibility against turbo background
-                let c_len = (6 * self.scale as i32 / 3).max(4).min((x1 - x0).abs() / 2).min((y1 - y0).abs() / 2);
+                let c_len = (6 * self.scale as i32 / 3)
+                    .max(4)
+                    .min((x1 - x0).abs() / 2)
+                    .min((y1 - y0).abs() / 2);
                 if c_len > 1 {
                     // Top-left
-                    draw_line_rgb(&mut rgb, out_w, out_h, &[(x0, y0), (x0 + c_len, y0)], [255, 255, 255], 2);
-                    draw_line_rgb(&mut rgb, out_w, out_h, &[(x0, y0), (x0, y0 + c_len)], [255, 255, 255], 2);
+                    draw_line_rgb(
+                        &mut rgb,
+                        out_w,
+                        out_h,
+                        &[(x0, y0), (x0 + c_len, y0)],
+                        [255, 255, 255],
+                        2,
+                    );
+                    draw_line_rgb(
+                        &mut rgb,
+                        out_w,
+                        out_h,
+                        &[(x0, y0), (x0, y0 + c_len)],
+                        [255, 255, 255],
+                        2,
+                    );
                     // Top-right
-                    draw_line_rgb(&mut rgb, out_w, out_h, &[(x1, y0), (x1 - c_len, y0)], [255, 255, 255], 2);
-                    draw_line_rgb(&mut rgb, out_w, out_h, &[(x1, y0), (x1, y0 + c_len)], [255, 255, 255], 2);
+                    draw_line_rgb(
+                        &mut rgb,
+                        out_w,
+                        out_h,
+                        &[(x1, y0), (x1 - c_len, y0)],
+                        [255, 255, 255],
+                        2,
+                    );
+                    draw_line_rgb(
+                        &mut rgb,
+                        out_w,
+                        out_h,
+                        &[(x1, y0), (x1, y0 + c_len)],
+                        [255, 255, 255],
+                        2,
+                    );
                     // Bottom-left
-                    draw_line_rgb(&mut rgb, out_w, out_h, &[(x0, y1), (x0 + c_len, y1)], [255, 255, 255], 2);
-                    draw_line_rgb(&mut rgb, out_w, out_h, &[(x0, y1), (x0, y1 - c_len)], [255, 255, 255], 2);
+                    draw_line_rgb(
+                        &mut rgb,
+                        out_w,
+                        out_h,
+                        &[(x0, y1), (x0 + c_len, y1)],
+                        [255, 255, 255],
+                        2,
+                    );
+                    draw_line_rgb(
+                        &mut rgb,
+                        out_w,
+                        out_h,
+                        &[(x0, y1), (x0, y1 - c_len)],
+                        [255, 255, 255],
+                        2,
+                    );
                     // Bottom-right
-                    draw_line_rgb(&mut rgb, out_w, out_h, &[(x1, y1), (x1 - c_len, y1)], [255, 255, 255], 2);
-                    draw_line_rgb(&mut rgb, out_w, out_h, &[(x1, y1), (x1, y1 - c_len)], [255, 255, 255], 2);
+                    draw_line_rgb(
+                        &mut rgb,
+                        out_w,
+                        out_h,
+                        &[(x1, y1), (x1 - c_len, y1)],
+                        [255, 255, 255],
+                        2,
+                    );
+                    draw_line_rgb(
+                        &mut rgb,
+                        out_w,
+                        out_h,
+                        &[(x1, y1), (x1, y1 - c_len)],
+                        [255, 255, 255],
+                        2,
+                    );
                 }
 
                 // If critical, fill top 3-pixel badge
                 if o.is_critical {
                     for ty in y0..=(y0 + 3).min(y1) {
                         for tx in x0..=x1 {
-                            if tx >= 0 && (tx as usize) < out_w && ty >= 0 && (ty as usize) < out_h {
+                            if tx >= 0 && (tx as usize) < out_w && ty >= 0 && (ty as usize) < out_h
+                            {
                                 let idx = (ty as usize * out_w + tx as usize) * 3;
                                 rgb[idx] = 255;
                                 rgb[idx + 1] = 30;
@@ -745,7 +811,10 @@ impl RailTuner2DApp {
                     } else {
                         let _ = rec.log(
                             "tracks/3d/obstacles",
-                            &Boxes3D::from_centers_and_sizes([] as [[f32; 3]; 0], [] as [[f32; 3]; 0]),
+                            &Boxes3D::from_centers_and_sizes(
+                                [] as [[f32; 3]; 0],
+                                [] as [[f32; 3]; 0],
+                            ),
                         );
                     }
                 } else {

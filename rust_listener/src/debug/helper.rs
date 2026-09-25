@@ -700,11 +700,13 @@ impl DebugStream for RecordingStream {
                 let centers: Vec<[f32; 3]> = r
                     .obstacles
                     .iter()
-                    .map(|o| [
-                        (o.bbox_3d_min[0] + o.bbox_3d_max[0]) * 0.5,
-                        (o.bbox_3d_min[1] + o.bbox_3d_max[1]) * 0.5,
-                        (o.bbox_3d_min[2] + o.bbox_3d_max[2]) * 0.5,
-                    ])
+                    .map(|o| {
+                        [
+                            (o.bbox_3d_min[0] + o.bbox_3d_max[0]) * 0.5,
+                            (o.bbox_3d_min[1] + o.bbox_3d_max[1]) * 0.5,
+                            (o.bbox_3d_min[2] + o.bbox_3d_max[2]) * 0.5,
+                        ]
+                    })
                     .collect();
                 let sizes: Vec<[f32; 3]> = r.obstacles.iter().map(|o| o.size_m).collect();
                 let colors: Vec<Color> = r
@@ -1053,7 +1055,10 @@ impl DebugStream for RecordingStream {
                 "depth_map/tracks/extrapolation_right",
                 &LineStrips2D::new([] as [Vec<[f32; 2]>; 0]),
             );
-            let _ = self.log("depth_map/tracks/points_left", &Points2D::new([] as [[f32; 2]; 0]));
+            let _ = self.log(
+                "depth_map/tracks/points_left",
+                &Points2D::new([] as [[f32; 2]; 0]),
+            );
             let _ = self.log(
                 "depth_map/tracks/points_right",
                 &Points2D::new([] as [[f32; 2]; 0]),

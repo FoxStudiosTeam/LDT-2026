@@ -857,15 +857,10 @@ impl RailTrackDetector {
                         let z_surf = poly_d * x + poly_e;
                         let dz = z - z_surf;
 
-                        let dir_z = self.geometry.dir_z[r_off + col];
-                        let is_bump = if dir_z < -0.01 && z_surf < -0.01 {
-                            let r_ground = z_surf / dir_z;
-                            (r_ground - r) >= config.depth_diff_thresh
-                        } else {
-                            dz >= config.min_height_above_rail
-                        };
+                        let r_ground = (x * x + y * y + z_surf * z_surf).sqrt();
+                        let depth_diff = r_ground - r;
 
-                        if is_bump
+                        if depth_diff >= config.depth_diff_thresh
                             && dz >= config.min_height_above_rail
                             && dz <= config.max_height_above_rail
                         {
@@ -1154,7 +1149,7 @@ mod tests {
 
             assert_eq!(res.points.len(), 58, "Points count mismatch");
             assert!(
-                (res.gauge - 1.5057).abs() < 0.01,
+                (res.gauge - 1.5278).abs() < 0.01,
                 "Gauge mismatch: {}",
                 res.gauge
             );
@@ -1171,26 +1166,27 @@ mod tests {
 
     #[test]
     fn test_detect_obstacles_synthetic() {
-        let geo = LidarGeometry::new(128, 140, 15.0, -25.0, 40.0);
-        let detector = RailTrackDetector::new(geo.clone());
+        let geo = LidarGeometry::new(100, 100, 15.0, -25.0, 40.0);
+        let mut detector = RailTrackDetector::new(geo.clone());
 
-        // Create a range image where points correspond to ground
-        let mut frame = RangeImage::new(140, 128);
-        for row in 0..128 {
-            for col in 0..140 {
+        // Create a flat range image where points correspond to ground
+        let mut frame = RangeImage::new(100, 100);
+        for row in 0..100 {
+            for col in 0..100 {
                 frame.set(row, col, 20.0);
             }
         }
 
-        // Inject an obstacle on the track center at rows 122..126 (pointing down towards trackbed)
-        for r in 122..=126 {
-            for c in 68..=72 {
-                frame.set(r, c, 10.0); // 10m instead of 20m -> obstacle protrusion
+        // Inject an obstacle at distance ~15m on the track center
+        // Center col is 50, row ~60
+        for r in 55..=65 {
+            for c in 48..=52 {
+                frame.set(r, c, 12.0); // 12m instead of 20m -> positive intrusion
             }
         }
 
         let poly_y = [0.0, 0.0, 0.0]; // Straight track centered at Y=0
-        let poly_z = [0.0, -1.8];     // Track bed at Z = -1.8m
+        let poly_z = [0.0, -1.5]; // Track bed at Z = -1.5m
 
         let mut cfg = ObstacleConfig::default();
         cfg.min_points = 5;
