@@ -1,6 +1,7 @@
 use std::sync::{Arc, RwLock};
 
 use rerun::Color;
+use tracing::info;
 use shared::{error::AppError, types::{AppPointCloud, CudaArray, SIZE}};
 
 use crate::engine::types::Engine;
@@ -281,7 +282,7 @@ impl Engine for CPUEngine{
         let origin_z =
             smoothed_z[first_slice];
 
-        println!(
+        info!(
             "TUNNEL ORIGIN: slice={}, X={}, Z={}",
             first_slice,
             origin_x,
@@ -410,7 +411,7 @@ impl Engine for CPUEngine{
         let total_counted: usize =
             debug_counts.iter().sum();
 
-        println!(
+        info!(
             "ВЫПРЯМЛЕННЫЙ ТУННЕЛЬ: \
             обработано точек={}, \
             первые 10 чанков={}",
@@ -418,7 +419,7 @@ impl Engine for CPUEngine{
             total_counted
         );
 
-        println!(
+        info!(
             "SMOOTHING: window={}, passes={}",
             window,
             smoothing_passes
