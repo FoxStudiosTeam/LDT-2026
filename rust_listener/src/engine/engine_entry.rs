@@ -20,20 +20,48 @@ pub async fn entry(
     point_cloud: Arc<RwLock<AppPointCloud>>,
 ) -> Result<(), AppError> {
     let recording_stream = Arc::new(recording_stream);
+    
+    let mut processed_frames: u64 = 0;
+    let mut begin_lock = ENV.BEGIN_TIMESTAMP > 0;
 
     while let Some(frame) = point_cloud_stream.next().await? {
-        tracing::info!("Frame {frame}");
-        if frame >= ENV.TOTAL_FRAMES {
+        // info!("A");
+        if begin_lock {
+            // info!("B");
+            let timestamp_ns = {
+                // info!("C");
+                let pc = point_cloud.read().expect("Mutex poisoned");
+                pc.timestamp[ProcessingQueue::NEXT]
+            };
+            // info!("D");
+            if timestamp_ns != ENV.BEGIN_TIMESTAMP {
+                // info!("E");
+                tracing::info!(
+                    "[SKIP] Кадр {frame}: timestamp {timestamp_ns} < BEGIN_TIMESTAMP {} (осталось {} мс)",
+                    ENV.BEGIN_TIMESTAMP,
+                    (ENV.BEGIN_TIMESTAMP - timestamp_ns) / 1_000_000
+                );
+                continue;
+            } else {
+                begin_lock = false;
+            }
+        }
+
+        processed_frames += 1;
+
+        tracing::info!("Frame {processed_frames}");
+        if processed_frames >= ENV.TOTAL_FRAMES {
             return Ok(());
         }
-        let frame_id = frame;
+
+        let frame_id = processed_frames;
+
 
         let point_cloud_lock = point_cloud.clone();
-        let recording_stream = recording_stream.clone();
+        let recording_stream: Arc<RecordingStream> = recording_stream.clone();
 
         tokio::task::spawn_blocking(move || {
             let frame_start = std::time::Instant::now();
-
             // 1. Ожидание лочки и переключение очередей (TripleBuffer swap)
             let swap_start = std::time::Instant::now();
             {
@@ -64,7 +92,12 @@ pub async fn entry(
                 ));
 
                 let number = ProcessingQueue::READ;
-                let timestamp_ns = point_cloud.timestamp[number];
+                let timestamp_ns: i64 = point_cloud.timestamp[number];
+
+                    
+                // rerun log text
+                recording_stream.log("logs/text", &rerun::TextLog::new(format!("{timestamp_ns}"))).app_error().ok();
+
                 let stats = point_cloud.compute_stats(number);
                 let rerun_points: Vec<[f32; 3]> = point_cloud.to_rerun(number).collect();
                 let range_image = shared::range_image::RangeImage::from_pandar128_organized(

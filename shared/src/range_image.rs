@@ -680,6 +680,79 @@ impl RangeImage {
         Ok(())
     }
 
+    /// Загрузка 2D матрицы дальности из стандартного формата NumPy `.npy` (v1.0, float32).
+    pub fn load_npy<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<Self> {
+        let bytes = std::fs::read(path)?;
+        if bytes.len() < 10 || &bytes[..6] != b"\x93NUMPY" {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Invalid NPY magic or file too small",
+            ));
+        }
+
+        let header_len = u16::from_le_bytes([bytes[8], bytes[9]]) as usize;
+        let prefix_len = 10 + header_len;
+        if bytes.len() < prefix_len {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "NPY header truncated",
+            ));
+        }
+
+        let header_str = String::from_utf8_lossy(&bytes[10..prefix_len]);
+        let shape_marker = "'shape':";
+        let shape_pos = header_str
+            .find(shape_marker)
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "No shape in header"))?;
+        let sub = &header_str[shape_pos + shape_marker.len()..];
+        let p_start = sub
+            .find('(')
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "Malformed shape"))?;
+        let p_end = sub
+            .find(')')
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "Malformed shape"))?;
+
+        let shape_parts: Vec<&str> = sub[p_start + 1..p_end]
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        if shape_parts.len() != 2 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Expected 2D shape, got: {:?}", shape_parts),
+            ));
+        }
+
+        let height: usize = shape_parts[0]
+            .parse()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let width: usize = shape_parts[1]
+            .parse()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+        let data_bytes = &bytes[prefix_len..];
+        let total_floats = height * width;
+        if data_bytes.len() < total_floats * 4 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "Not enough data in NPY payload",
+            ));
+        }
+
+        let mut data = Vec::with_capacity(total_floats);
+        for chunk in data_bytes.chunks_exact(4).take(total_floats) {
+            data.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+        }
+
+        Ok(Self {
+            width,
+            height,
+            data,
+        })
+    }
+
     /// Преобразование в Rerun `DepthImage`.
     pub fn to_rerun(&self) -> Result<DepthImage, AppError> {
         let bytes: &[u8] = unsafe {

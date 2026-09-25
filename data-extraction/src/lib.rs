@@ -7,7 +7,7 @@ use shared::error::{AppError, ErrCtx};
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
-use crate::parser::{extract_and_validate_layout, parse_coords};
+use crate::parser::{PointLayout, extract_and_validate_layout, parse_coords};
 mod discovery;
 // pub mod error;
 mod parser;
@@ -20,6 +20,7 @@ pub struct PointCloudStream {
     pub subscription: ros2_client::Subscription<PointCloud2>,
     cached_cloud: Arc<RwLock<AppPointCloud>>,
     frame_num: u64,
+    layout: Option<PointLayout>,
 }
 
 impl PointCloudStream {
@@ -39,15 +40,15 @@ impl PointCloudStream {
 
         let (point_cloud, _msg) = result.app_error()?;
 
-        tracing::info!(
-            width = point_cloud.width,
-            height = point_cloud.height,
-            fields = point_cloud.fields.len(),
-            point_step = point_cloud.point_step,
-            row_step = point_cloud.row_step,
-            data_len = point_cloud.data.len(),
-            "Received PointCloud2"
-        );
+        // tracing::debug!(
+        //     width = point_cloud.width,
+        //     height = point_cloud.height,
+        //     fields = point_cloud.fields.len(),
+        //     point_step = point_cloud.point_step,
+        //     row_step = point_cloud.row_step,
+        //     data_len = point_cloud.data.len(),
+        //     "Received PointCloud2"
+        // );
 
         // for field in &point_cloud.fields {
         //     tracing::info!(
@@ -59,7 +60,17 @@ impl PointCloudStream {
         //     );
         // }
 
-        let layout = extract_and_validate_layout(&point_cloud)?;
+        let layout = 'a: {
+            let Some(l) = self.layout else {
+                let l = extract_and_validate_layout(&point_cloud)?;
+                self.layout = Some(l);
+                break 'a l;
+            };
+            l
+        };
+
+        // let layout = extract_and_validate_layout(&point_cloud)?;
+
         parse_coords(&point_cloud, Arc::clone(&self.cached_cloud), &layout)?;
 
         Ok(Some(self.frame_num))
@@ -123,5 +134,6 @@ pub async fn init_sub(
         subscription,
         cached_cloud: cloud,
         frame_num: 0,
+        layout: None,
     })
 }

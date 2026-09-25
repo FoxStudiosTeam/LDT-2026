@@ -1,30 +1,30 @@
 services:
   # 1. Сервис плеера — остаётся на ROS2
   # 1. Сервис плеера через Docker-том (если нужно проигрывать из bag_data)
-  # ros2_dataset_player:
-  #   build:
-  #     context: .
-  #     dockerfile: ./dataset/Dockerfile
-  #   container_name: ros2_dataset_player
-  #   network_mode: "host"
-  #   ipc: "host"
-  #   shm_size: '2gb'
-  #   ulimits:
-  #     nofile:
-  #       soft: 1024
-  #       hard: 65535
-  #   environment:
-  #     - ROS_DOMAIN_ID=42
-  #     - ROS_LOCALHOST_ONLY=1
-  #   env_file:
-  #     - .env
-  #   volumes:
-  #     - bag_data:/app/dataset:ro
-  #   command: >
-  #     bash -c "
-  #       echo '► [DATASET] Поехали!' &&
-  #       ros2 bag play /app/dataset/doubleT_platform_mcap --loop --read-ahead-queue-size 30
-  #     "
+  ros2_dataset_player:
+    build:
+      context: .
+      dockerfile: ./dataset/Dockerfile
+    container_name: ros2_dataset_player
+    network_mode: "host"
+    ipc: "host"
+    shm_size: '2gb'
+    ulimits:
+      nofile:
+        soft: 1024
+        hard: 65535
+    environment:
+      - ROS_DOMAIN_ID=42
+      - ROS_LOCALHOST_ONLY=1
+    env_file:
+      - .env
+    volumes:
+      - bag_data:/app/dataset:ro
+    command: >
+      bash -c "
+        echo '► [DATASET] Поехали!' &&
+        ros2 bag play /app/dataset/cloud_with_fake_obj --loop --read-ahead-queue-size 30
+      "
 
   # 0. Утилита для быстрой конвертации багов из .db3 (sqlite3) в .mcap
   # Запуск для всех: docker compose run --rm ros2_converter
@@ -54,7 +54,7 @@ services:
     volumes:
       - ./dataset:/app/dataset:ro
       - ./frames:/frames:ro
-    command: ["/app/dataset/roundT_doubleT"]
+    command: ["/app/dataset/roundT_squareT_pressureGate_squareT"]
 
   # 2. Стрим-ресивер из Windows (для огромных датасетов без копирования)
   # Ждёт запуск в PowerShell: python win_streamer.py <путь_к_багу>
@@ -96,8 +96,8 @@ services:
     environment:
       - ROS_DOMAIN_ID=42
       - ROS_LOCALHOST_ONLY=1
-    depends_on:
-      - ros2_fast_player
+    # depends_on:
+    #   - ros2_fast_player
     deploy:
       resources:
         reservations:

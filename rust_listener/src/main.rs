@@ -4,31 +4,16 @@
 //!   source /opt/ros/humble/setup.bash
 //!   cargo run --bin ros2_debug_viewer
 
-mod debug;
-mod engine;
-
 use std::sync::{Arc, RwLock};
 
+use rust_listener::debug::{self, rerun::init_rerun};
+use rust_listener::engine::engine_entry::entry;
+use rust_listener::engine::types::{pin_ptr, pin_u16_ptr};
+use rust_listener::{ENV, Env};
 use shared::error::{AppError, ErrCtx, ErrorType};
-
 use shared::types::{AppPointCloud, SIZE};
 use tracing::*;
 use tracing_subscriber::EnvFilter;
-
-use crate::debug::rerun::init_rerun;
-use crate::engine::engine_entry::entry;
-use crate::engine::types::{pin_ptr, pin_u16_ptr};
-
-kaiv_utils::env_config! {
-    ".env" => pub (crate) ENV = pub (crate) Env {
-        RERUN_URL : String = "rerun+http://host.docker.internal:9876/proxy".to_string(),
-        ROS_DOMAIN_ID : u16 = 42,
-        TOTAL_FRAMES : u64 = u64::MAX,
-        TEST_RERUN : bool = false,
-        PREVIEW_FOV_X_DEG : f32 = 180.0,
-        RENDER_PATH : String = "".to_string()
-    }
-}
 
 // ─── Точка входа ──────────────────────────────────────────────────────────────
 
@@ -38,7 +23,11 @@ async fn main() -> Result<(), AppError> {
     let (non_blocking_writer, _guard) = tracing_appender::non_blocking(std::io::stdout());
     let filter = EnvFilter::try_from_default_env()
         //  формат: package=level "," - разделитель
-        .unwrap_or_else(|_| EnvFilter::new("ros2_data_extraction=info,ros2_debug_viewer=info,shared=info"));
+        .unwrap_or_else(|_| {
+            EnvFilter::new(
+                "info,ros2_data_extraction=info,ros2_debug_viewer=info,shared=info,rustdds=off",
+            )
+        });
 
     tracing_subscriber::fmt()
         .with_writer(non_blocking_writer)
@@ -56,7 +45,7 @@ async fn main() -> Result<(), AppError> {
     let r_ptr = pin_u16_ptr(SIZE);
 
     let cloud = Arc::<RwLock<AppPointCloud>>::new(RwLock::new(AppPointCloud::new(
-        x_ptr, y_ptr, z_ptr, i_ptr, r_ptr
+        x_ptr, y_ptr, z_ptr, i_ptr, r_ptr,
     )));
 
     debug::std::print_banner();
