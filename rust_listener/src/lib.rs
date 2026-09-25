@@ -9,7 +9,7 @@ kaiv_utils::env_config! {
         TOTAL_FRAMES : u64 = u64::MAX,
         TEST_RERUN : bool = false,
         BEGIN_TIMESTAMP : i64 = 0,
-        PREVIEW_FOV_X_DEG : f32 = 180.0,
+        PREVIEW_FOV_X_DEG : f32 = 40.0,
         RENDER_PATH : String = "".to_string()
     }
 }
