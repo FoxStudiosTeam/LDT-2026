@@ -81,21 +81,21 @@ fn create_layout(message: &PointCloud2) -> Result<PointLayout, AppError> {
     let intensity = find_field(message, "intensity")
         .ok_or(ErrorType::NoneError("intensity field not found"))?;
 
-    let ring = find_field(message, "ring")
-        .ok_or(ErrorType::NoneError("ring field not found"))?;
+    //let ring = find_field(message, "ring")
+        //.ok_or(ErrorType::NoneError("ring field not found"))?;
 
     validate_field(x, PointField::FLOAT32)?;
     validate_field(y, PointField::FLOAT32)?;
     validate_field(z, PointField::FLOAT32)?;
     validate_field(intensity, PointField::FLOAT32)?;
-    validate_field(ring, PointField::UINT16)?;
+    //validate_field(ring, PointField::UINT16)?;
 
     Ok(PointLayout {
         x_offset: x.offset as usize,
         y_offset: y.offset as usize,
         z_offset: z.offset as usize,
         intensity_offset: intensity.offset as usize,
-        ring_offset: ring.offset as usize,
+        ring_offset:0, // ring.offset as usize,
         timestamp_offset: None,
     })
 }

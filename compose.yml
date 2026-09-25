@@ -54,23 +54,23 @@ services:
     volumes:
       - ./dataset:/app/dataset:ro
       - ./frames:/frames:ro
-    command: ["/app/dataset/roundT_doubleT"]
+    command: ["/app/dataset/cloud_with_fake_obj"]
 
   # 2. Стрим-ресивер из Windows (для огромных датасетов без копирования)
   # Ждёт запуск в PowerShell: python win_streamer.py <путь_к_багу>
-  ros2_stream_player:
-    build:
-      context: .
-      dockerfile: ./bag_player/Dockerfile
-    container_name: ros2_stream_player
-    network_mode: "host"
-    ipc: "host"
-    environment:
-      - ROS_DOMAIN_ID=42
-      - ROS_LOCALHOST_ONLY=1
-    env_file:
-      - .env
-    command: ["--server"]
+  # ros2_stream_player:
+  #   build:
+  #     context: .
+  #     dockerfile: ./bag_player/Dockerfile
+  #   container_name: ros2_stream_player
+  #   network_mode: "host"
+  #   ipc: "host"
+  #   environment:
+  #     - ROS_DOMAIN_ID=42
+  #     - ROS_LOCALHOST_ONLY=1
+  #   env_file:
+  #     - .env
+  #   command: ["--server"]
     
   # 2. Rust-приложение — без ROS2, чистый ros2-client/rustdds
   rust_viewer:
