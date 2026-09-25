@@ -17,6 +17,7 @@ const PANDAR128_HR_LAST_CHANNEL: usize = 89;
 // Вертикальный FOV.
 const PANDAR128_FOV_UP_DEG: f32 = 15.0;
 const PANDAR128_FOV_DOWN_DEG: f32 = -25.0;
+const VERTICAL_FOV_DEG: f32 = 40.0;
 
 // Горизонтальное разрешение.
 const PANDAR128_HORIZONTAL_RES_HR_DEG: f32 = 0.1;
@@ -43,12 +44,12 @@ pub struct RangeImageConfig {
 impl Default for RangeImageConfig {
     fn default() -> Self {
         Self {
-            width: 1800,
-            height: 128,
+            width: 3600,
+            height: (VERTICAL_FOV_DEG / PANDAR128_VERTICAL_STEP_HIGH_RES_DEG) as usize + 1,
             fov_up_rad: 15.0_f32.to_radians(),
             fov_down_rad: -25.0_f32.to_radians(),
             min_range_m: 0.5,
-            max_range_m: 150.0,
+            max_range_m: 250.0,
         }
     }
 }
@@ -148,6 +149,28 @@ fn horizontal_resolution_deg(channel: usize) -> f32 {
     }
 }
 
+#[inline(always)]
+fn vertical_resolution_deg(channel: usize) -> f32 {
+    match channel {
+        // Ch1 -> Ch2
+        1 => 1.0,
+
+        // Ch2 -> Ch26
+        2..=25 => 0.5,
+
+        // Ch26 -> Ch90
+        26..=89 => 0.125,
+
+        // Ch90 -> Ch127
+        90..=126 => 0.5,
+
+        // Ch127 -> Ch128
+        127 => 1.0,
+
+        _ => unreachable!(),
+    }
+}
+
 /// Быстрое вычисление atan2(y, x) через полиномиальную аппроксимацию.
 /// Максимальная абсолютная погрешность < 0.0008 радиана (~0.04°),
 /// что существенно меньше шага азимута лидара (~0.2°).
@@ -214,10 +237,7 @@ impl RangeImage {
         downsample_x: usize,
     ) -> Self {
         const CHANNELS: usize = 128;
-        const BASE_WIDTH: usize = 3600;
-
-        const VERTICAL_RESOLUTION_DEG: f32 = 0.125;
-        const VERTICAL_FOV_DEG: f32 = 40.0; // +15° ... -25°
+        const BASE_WIDTH: usize = 3600; // +15° ... -25°
 
         let total_pts = cloud.len(queue);
 
@@ -276,84 +296,65 @@ impl RangeImage {
                 continue;
             }
 
-            let idx = row * width + col;
+            let center_row = row as isize;
+            let center_col = col as isize;
 
-            let current = image.data[idx];
+            // Сколько пикселей между соседними каналами по вертикали.
+            let row_radius =
+                (vertical_resolution_deg(ring+1) / PANDAR128_VERTICAL_STEP_HIGH_RES_DEG)
+                    .round() as isize
+                    - 1;
 
-            if current == 0.0 || range < current {
-                image.data[idx] = range;
+            // Сколько пикселей между соседними измерениями по горизонтали.
+            //
+            // При width = 3600:
+            // 360° / 3600 = 0.1° на пиксель.
+            let horizontal_step_deg = 360.0 / width as f32;
+
+            let col_radius =
+                (horizontal_resolution_deg(ring+1) / horizontal_step_deg)
+                    .round() as isize
+                    - 1;
+
+            for dr in -row_radius..=row_radius {
+                for dc in -col_radius..=col_radius {
+                    // Реальный радиус — окружность, а не квадрат.
+                    let distance2 = dr * dr + dc * dc;
+
+                    if distance2 > row_radius * row_radius {
+                        continue;
+                    }
+
+                    let target_row = center_row + dr;
+                    let target_col = center_col + dc;
+
+                    // Проверяем границы.
+                    if target_row < 0
+                        || target_row >= height as isize
+                        || target_col < 0
+                        || target_col >= width as isize
+                    {
+                        continue;
+                    }
+
+                    let target_row = target_row as usize;
+                    let target_col = target_col as usize;
+
+                    let idx = target_row * width + target_col;
+
+                    // Оставляем ближайшую точку.
+                    let current = image.data[idx];
+
+                    if current == 0.0 || range < current {
+                        image.data[idx] = range;
+                    }
+                }
             }
         }
 
         image.fill_single_pixel_holes();
 
-        image.fill_vertical_holes();
-
         image
-    }
-
-    pub fn fill_vertical_holes(&mut self) {
-        let w = self.width;
-        let h = self.height;
-
-        for r in 1..h - 1 {
-            let row_start = r * w;
-            let row_end = row_start + w;
-
-            // Реальная строка канала — ничего не делаем.
-            if self.data[row_start..row_end]
-                .iter()
-                .any(|&v| v > 0.0)
-            {
-                continue;
-            }
-
-            // Ближайшая заполненная строка сверху.
-            let mut top = r;
-            while top > 0 {
-                top -= 1;
-
-                let start = top * w;
-                let end = start + w;
-
-                if self.data[start..end].iter().any(|&v| v > 0.0) {
-                    break;
-                }
-            }
-
-            // Ближайшая заполненная строка снизу.
-            let mut bottom = r;
-            while bottom + 1 < h {
-                bottom += 1;
-
-                let start = bottom * w;
-                let end = start + w;
-
-                if self.data[start..end].iter().any(|&v| v > 0.0) {
-                    break;
-                }
-            }
-
-            if top == r || bottom == r {
-                continue;
-            }
-
-            let gap = (bottom - top) as f32;
-            let t = (r - top) as f32 / gap;
-
-            for c in 0..w {
-                let top_value = self.data[top * w + c];
-                let bottom_value = self.data[bottom * w + c];
-
-                if top_value > 0.0
-                    && bottom_value > 0.0
-                    && (top_value - bottom_value).abs() < 2.0
-                {
-                    self.data[row_start + c] =
-                        top_value * (1.0 - t) + bottom_value * t;
-                }
-            }
-        }
     }
 
     /// Заполнение одиночных 1- и 2-пиксельных пропусков по горизонтали для устранения шума и артефактов
@@ -602,6 +603,79 @@ impl RangeImage {
         };
         file.write_all(raw_bytes)?;
         Ok(())
+    }
+
+    /// Загрузка 2D матрицы дальности из стандартного формата NumPy `.npy` (v1.0, float32).
+    pub fn load_npy<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<Self> {
+        let bytes = std::fs::read(path)?;
+        if bytes.len() < 10 || &bytes[..6] != b"\x93NUMPY" {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Invalid NPY magic or file too small",
+            ));
+        }
+
+        let header_len = u16::from_le_bytes([bytes[8], bytes[9]]) as usize;
+        let prefix_len = 10 + header_len;
+        if bytes.len() < prefix_len {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "NPY header truncated",
+            ));
+        }
+
+        let header_str = String::from_utf8_lossy(&bytes[10..prefix_len]);
+        let shape_marker = "'shape':";
+        let shape_pos = header_str
+            .find(shape_marker)
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "No shape in header"))?;
+        let sub = &header_str[shape_pos + shape_marker.len()..];
+        let p_start = sub
+            .find('(')
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "Malformed shape"))?;
+        let p_end = sub
+            .find(')')
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "Malformed shape"))?;
+
+        let shape_parts: Vec<&str> = sub[p_start + 1..p_end]
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        if shape_parts.len() != 2 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Expected 2D shape, got: {:?}", shape_parts),
+            ));
+        }
+
+        let height: usize = shape_parts[0]
+            .parse()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let width: usize = shape_parts[1]
+            .parse()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+        let data_bytes = &bytes[prefix_len..];
+        let total_floats = height * width;
+        if data_bytes.len() < total_floats * 4 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "Not enough data in NPY payload",
+            ));
+        }
+
+        let mut data = Vec::with_capacity(total_floats);
+        for chunk in data_bytes.chunks_exact(4).take(total_floats) {
+            data.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+        }
+
+        Ok(Self {
+            width,
+            height,
+            data,
+        })
     }
 
     /// Преобразование в Rerun `DepthImage`.

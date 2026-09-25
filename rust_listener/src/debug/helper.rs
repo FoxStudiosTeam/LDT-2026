@@ -124,6 +124,8 @@ impl DebugBox3D {
 pub trait DebugStream {
     fn log_raw_cloud(&self, point_cloud: &AppPointCloud) -> Result<(), AppError>;
     fn log_raw_points(&self, point_cloud: &AppPointCloud) -> Result<(), AppError>;
+    fn log_points_with_colors(&self, points: &[[f32; 3]], colors: &[Color])
+    -> Result<(), AppError>;
     fn log_debug_overlays(
         &self,
         point_cloud: &AppPointCloud,
@@ -151,6 +153,25 @@ pub trait DebugStream {
     ) -> Result<(), AppError>;
     fn log_boxes_3d(&self, entity_path: &str, boxes: &[DebugBox3D]) -> Result<(), AppError>;
     fn log_demo_overlay_on_frame(&self, fov_w: usize, fov_h: usize) -> Result<(), AppError>;
+
+    // ─── Визуализация детектора рельсов в 3D и телеметрии ───
+    fn log_rail_detection(
+        &self,
+        res: Option<&shared::rail_detection::DetectionResult>,
+    ) -> Result<(), AppError>;
+
+    fn log_range_image_3d(
+        &self,
+        frame: &shared::range_image::RangeImage,
+        geo: &shared::rail_detection::LidarGeometry,
+    ) -> Result<(), AppError>;
+
+    fn log_range_image_3d_dist(
+        &self,
+        frame: &shared::range_image::RangeImage,
+        geo: &shared::rail_detection::LidarGeometry,
+        max_dist_m: f32,
+    ) -> Result<(), AppError>;
 }
 
 impl DebugStream for RecordingStream {
@@ -180,7 +201,7 @@ impl DebugStream for RecordingStream {
     /// Логируем готовый срез точек без удержания лочки AppPointCloud
     fn log_raw_points(&self, point_cloud: &AppPointCloud) -> Result<(), AppError> {
         let q = ProcessingQueue::READ;
-        
+
         if point_cloud.is_empty(q) {
             return Ok(());
         }
@@ -191,6 +212,27 @@ impl DebugStream for RecordingStream {
             "lidar/raw",
             &Points3D::new(point_cloud.to_rerun(q))
                 .with_colors(colors)
+                .with_radii([Radius::new_ui_points(1.2)]),
+        )
+        .app_error()?;
+
+        Ok(())
+    }
+
+    /// Логируем срез точек с индивидуальными цветами (например, intensity colormap)
+    fn log_points_with_colors(
+        &self,
+        points: &[[f32; 3]],
+        colors: &[Color],
+    ) -> Result<(), AppError> {
+        if points.is_empty() {
+            return Ok(());
+        }
+
+        self.log(
+            "lidar/raw",
+            &Points3D::new(points)
+                .with_colors(colors.iter().copied())
                 .with_radii([Radius::new_ui_points(1.2)]),
         )
         .app_error()?;
@@ -515,6 +557,181 @@ impl DebugStream for RecordingStream {
             .with_stroke_width(2.0);
 
         self.log_boxes_2d("depth_image/front_preview/clearance_box", &[obstacle_box])?;
+
+        Ok(())
+    }
+
+    fn log_rail_detection(
+        &self,
+        res: Option<&shared::rail_detection::DetectionResult>,
+    ) -> Result<(), AppError> {
+        if let Some(r) = res {
+            // 1. Centerline 3D curve (Bright Green)
+            let center_pts: Vec<[f32; 3]> = (0..r.x_curve.len())
+                .map(|i| [r.x_curve[i], r.y_center[i], r.z_center[i]])
+                .collect();
+            self.log(
+                "tracks/3d/centerline",
+                &LineStrips3D::new([center_pts])
+                    .with_colors([Color::from_rgb(0, 255, 60)])
+                    .with_radii([Radius::new_ui_points(2.5)]),
+            )
+            .app_error()?;
+
+            // 2. Left rail 3D curve (Cyan)
+            let left_pts: Vec<[f32; 3]> = (0..r.x_left.len())
+                .map(|i| [r.x_left[i], r.y_left[i], r.z_center[i]])
+                .collect();
+            self.log(
+                "tracks/3d/left_rail",
+                &LineStrips3D::new([left_pts])
+                    .with_colors([Color::from_rgb(30, 210, 255)])
+                    .with_radii([Radius::new_ui_points(2.5)]),
+            )
+            .app_error()?;
+
+            // 3. Right rail 3D curve (Orange-Red)
+            let right_pts: Vec<[f32; 3]> = (0..r.x_right.len())
+                .map(|i| [r.x_right[i], r.y_right[i], r.z_center[i]])
+                .collect();
+            self.log(
+                "tracks/3d/right_rail",
+                &LineStrips3D::new([right_pts])
+                    .with_colors([Color::from_rgb(255, 90, 30)])
+                    .with_radii([Radius::new_ui_points(2.5)]),
+            )
+            .app_error()?;
+
+            // 4. Sleepers / Ties (Cross ties every 4 points)
+            let mut sleepers: Vec<Vec<[f32; 3]>> = Vec::new();
+            for i in (0..r.x_curve.len()).step_by(4) {
+                sleepers.push(vec![
+                    [r.x_left[i], r.y_left[i], r.z_center[i]],
+                    [r.x_right[i], r.y_right[i], r.z_center[i]],
+                ]);
+            }
+            self.log(
+                "tracks/3d/sleepers",
+                &LineStrips3D::new(sleepers)
+                    .with_colors([Color::from_rgb(180, 220, 180)])
+                    .with_radii([Radius::new_ui_points(1.2)]),
+            )
+            .app_error()?;
+
+            // 5. Detected raw rail points markers
+            let pts_l: Vec<[f32; 3]> = r
+                .points
+                .iter()
+                .map(|p| [p.x_left, p.y_left, p.z_left])
+                .collect();
+            let pts_r: Vec<[f32; 3]> = r
+                .points
+                .iter()
+                .map(|p| [p.x_right, p.y_right, p.z_right])
+                .collect();
+            let pts_c: Vec<[f32; 3]> = r
+                .points
+                .iter()
+                .map(|p| [p.x_center, p.y_center, p.z_center])
+                .collect();
+
+            self.log(
+                "tracks/3d/points_left",
+                &Points3D::new(pts_l)
+                    .with_colors([Color::from_rgb(0, 255, 255)])
+                    .with_radii([Radius::new_ui_points(3.0)]),
+            )
+            .app_error()?;
+
+            self.log(
+                "tracks/3d/points_right",
+                &Points3D::new(pts_r)
+                    .with_colors([Color::from_rgb(255, 120, 0)])
+                    .with_radii([Radius::new_ui_points(3.0)]),
+            )
+            .app_error()?;
+
+            self.log(
+                "tracks/3d/points_center",
+                &Points3D::new(pts_c)
+                    .with_colors([Color::from_rgb(255, 255, 0)])
+                    .with_radii([Radius::new_ui_points(2.0)]),
+            )
+            .app_error()?;
+        } else {
+            // Clear visualization on frames where no track detected
+            let _ = self.log(
+                "tracks/3d/centerline",
+                &LineStrips3D::new([] as [Vec<[f32; 3]>; 0]),
+            );
+            let _ = self.log(
+                "tracks/3d/left_rail",
+                &LineStrips3D::new([] as [Vec<[f32; 3]>; 0]),
+            );
+            let _ = self.log(
+                "tracks/3d/right_rail",
+                &LineStrips3D::new([] as [Vec<[f32; 3]>; 0]),
+            );
+            let _ = self.log(
+                "tracks/3d/sleepers",
+                &LineStrips3D::new([] as [Vec<[f32; 3]>; 0]),
+            );
+            let _ = self.log("tracks/3d/points_left", &Points3D::new([] as [[f32; 3]; 0]));
+            let _ = self.log(
+                "tracks/3d/points_right",
+                &Points3D::new([] as [[f32; 3]; 0]),
+            );
+            let _ = self.log(
+                "tracks/3d/points_center",
+                &Points3D::new([] as [[f32; 3]; 0]),
+            );
+        }
+
+        Ok(())
+    }
+
+    fn log_range_image_3d(
+        &self,
+        frame: &shared::range_image::RangeImage,
+        geo: &shared::rail_detection::LidarGeometry,
+    ) -> Result<(), AppError> {
+        self.log_range_image_3d_dist(frame, geo, 250.0)
+    }
+
+    fn log_range_image_3d_dist(
+        &self,
+        frame: &shared::range_image::RangeImage,
+        geo: &shared::rail_detection::LidarGeometry,
+        max_dist_m: f32,
+    ) -> Result<(), AppError> {
+        let mut pts = Vec::with_capacity(frame.width * frame.height / 2);
+        let mut colors = Vec::with_capacity(frame.width * frame.height / 2);
+
+        for row in 0..frame.height {
+            for col in 0..frame.width {
+                let r = frame.get(row, col);
+                if r > 0.5 && r < max_dist_m {
+                    let (x, y, z) = geo.row_col_range_to_xyz(row, col, r);
+                    pts.push([x, y, z]);
+                    // Плавный цветовой градиент на всю глубину обзора (ближние - сине-зеленые, дальние - теплые)
+                    let norm = (r / (max_dist_m * 0.4).max(40.0)).clamp(0.0, 1.0);
+                    let color = Color::from_rgb(
+                        (norm * 200.0) as u8,
+                        (120.0 + (1.0 - norm) * 135.0) as u8,
+                        ((1.0 - norm) * 255.0) as u8,
+                    );
+                    colors.push(color);
+                }
+            }
+        }
+
+        self.log(
+            "lidar/points",
+            &Points3D::new(pts)
+                .with_colors(colors)
+                .with_radii([Radius::new_ui_points(1.2)]),
+        )
+        .app_error()?;
 
         Ok(())
     }
