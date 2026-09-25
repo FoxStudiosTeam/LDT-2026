@@ -11,11 +11,20 @@ path = "src/main.rs"
 name = "rail_detector"
 path = "src/bin/rail_detector.rs"
 
+[[bin]]
+name = "rail_tuner"
+path = "src/bin/rail_tuner.rs"
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
 anyhow = "1"
 rerun = "0.37.2"
+eframe = "0.36.2"
+egui = "0.36.2"
+rusqlite = { version = "0.32", features = ["bundled"] }
+cdr = "0.2"
+byteorder = "1.5"
 
 cuda-pipeline.workspace = true
 ros2_data_extraction.workspace = true

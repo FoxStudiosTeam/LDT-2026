@@ -21,21 +21,22 @@ pub async fn entry(
 ) -> Result<(), AppError> {
     let recording_stream = Arc::new(recording_stream);
 
+    let rail_estimator = Arc::new(std::sync::Mutex::new(
+        crate::engine::rail_curve::RailCurveEstimator::new(
+            crate::engine::rail_curve::RailCurveConfig::default(),
+        ),
+    ));
+
     let mut processed_frames: u64 = 0;
     let mut begin_lock = ENV.BEGIN_TIMESTAMP > 0;
 
     while let Some(frame) = point_cloud_stream.next().await? {
-        // info!("A");
         if begin_lock {
-            // info!("B");
             let timestamp_ns = {
-                // info!("C");
                 let pc = point_cloud.read().expect("Mutex poisoned");
                 pc.timestamp[ProcessingQueue::NEXT]
             };
-            // info!("D");
             if timestamp_ns != ENV.BEGIN_TIMESTAMP {
-                // info!("E");
                 tracing::info!(
                     "[SKIP] Кадр {frame}: timestamp {timestamp_ns} < BEGIN_TIMESTAMP {} (осталось {} мс)",
                     ENV.BEGIN_TIMESTAMP,
@@ -58,6 +59,7 @@ pub async fn entry(
 
         let point_cloud_lock = point_cloud.clone();
         let recording_stream: Arc<RecordingStream> = recording_stream.clone();
+        let rail_estimator_lock = rail_estimator.clone();
 
         tokio::task::spawn_blocking(move || {
             let frame_start = std::time::Instant::now();
@@ -148,19 +150,36 @@ pub async fn entry(
                 rerun_cloud_start.elapsed()
             );
 
-            // 3.1. Расчет железнодорожной кривой (RANSAC + полиномы + прямизна) и логирование в Rerun
+            // 3.1. Расчет железнодорожной кривой (RANSAC + полиномы + прямизна + сглаживание по N фитам)
             let rail_fit_start = std::time::Instant::now();
-            let rail_config = crate::engine::rail_curve::RailCurveConfig::default();
-            let rail_estimator = crate::engine::rail_curve::RailCurveEstimator::new(rail_config);
-            match rail_estimator.fit(&rerun_points, &rerun_intensities) {
+            let rail_result = {
+                let mut estimator = rail_estimator_lock.lock().unwrap();
+                estimator.fit(&rerun_points, &rerun_intensities)
+            };
+            let rail_calc_dur = rail_fit_start.elapsed();
+
+            info!(
+                "[FRAME {frame_id}] ⏱️ Расчет кривой рельсов занял: {:.2} мс ({:?})",
+                rail_calc_dur.as_secs_f64() * 1000.0,
+                rail_calc_dur
+            );
+
+            match rail_result {
                 Some(rail_result) => {
                     let radius_str = rail_result
                         .curve_radius_m
                         .map(|r| format!("{r:.1}m"))
                         .unwrap_or_else(|| "∞ (прямая)".to_string());
+                    let smooth_str = if rail_result.smoothed_frames_count > 1 {
+                        format!(" (сглажено по {} фитам)", rail_result.smoothed_frames_count)
+                    } else {
+                        String::new()
+                    };
+                    let coasting_str = if rail_result.is_coasting { " [COASTING]" } else { "" };
                     info!(
-                        "[FRAME {frame_id}] Rail curve detected in {:?}: straightness={:.3}, radius={}, inliers_left={}, inliers_right={}",
-                        rail_fit_start.elapsed(),
+                        "[FRAME {frame_id}] Rail curve detected{}{}: straightness={:.3}, radius={}, inliers_left={}, inliers_right={}",
+                        smooth_str,
+                        coasting_str,
                         rail_result.straightness,
                         radius_str,
                         rail_result.inliers_left.len(),
@@ -171,9 +190,8 @@ pub async fn entry(
                     }
                 }
                 None => {
-                    debug!(
-                        "[FRAME {frame_id}] Rail curve not found ({:?})",
-                        rail_fit_start.elapsed()
+                    info!(
+                        "[FRAME {frame_id}] Rail curve not found",
                     );
                 }
             }

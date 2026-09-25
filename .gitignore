@@ -50,3 +50,5 @@ Makefile
 # --- ПИТОНЧИК ---
 venv
 /frames
+/dev_pyrails/output
+__pycache__

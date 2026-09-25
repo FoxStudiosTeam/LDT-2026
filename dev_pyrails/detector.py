@@ -5,6 +5,7 @@ Detects left/right rails, fits 3D trajectory curves (including curves/turns),
 and computes track geometry metrics (turn radius, heading, lateral offset, gauge).
 """
 
+from collections import deque
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Dict, Any
 import numpy as np
@@ -50,6 +51,20 @@ class DetectionResult:
     x_right: np.ndarray
     y_right: np.ndarray
     confidence: float
+    # Extrapolation fields (Magenta Polynomial)
+    extrapolate_m: float = 0.0
+    smooth_n: int = 1
+    x_ext: Optional[np.ndarray] = None
+    y_ext: Optional[np.ndarray] = None
+    z_ext: Optional[np.ndarray] = None
+    x_ext_l: Optional[np.ndarray] = None
+    y_ext_l: Optional[np.ndarray] = None
+    x_ext_r: Optional[np.ndarray] = None
+    y_ext_r: Optional[np.ndarray] = None
+
+    @property
+    def y_ext_poly(self) -> Optional[np.ndarray]:
+        return self.y_ext
 
 
 class RailTrackDetector:
@@ -75,7 +90,9 @@ class RailTrackDetector:
         row_start_pct: float = 0.85,
         row_end_pct: float = 0.5,
         max_lateral_jump: float = 0.3,
-        max_lateral_rail_jump: float = 0.1
+        max_lateral_rail_jump: float = 0.1,
+        extrapolate_m: float = 35.0,
+        smooth_n: int = 5,
     ):
         self.geo = geometry or LidarGeometry()
         self.nominal_gauge = nominal_gauge
@@ -87,7 +104,15 @@ class RailTrackDetector:
         self.row_end_pct = row_end_pct
         self.max_lateral_jump = max_lateral_jump
         self.max_lateral_rail_jump = max_lateral_rail_jump
+        self.extrapolate_m = extrapolate_m
+        self.smooth_n = max(1, int(smooth_n))
+        self.history = deque(maxlen=self.smooth_n)
+        self.last_frame_idx: Optional[int] = None
 
+    def reset(self):
+        """Clears temporal smoothing history to eliminate lag on frame jumps."""
+        self.history.clear()
+        self.last_frame_idx = None
 
     def detect(self, frame: np.ndarray, frame_idx: int = 0) -> Optional[DetectionResult]:
         """
@@ -222,12 +247,37 @@ class RailTrackDetector:
         ym = np.array([pt.y_center for pt in candidates])
         zm = np.array([pt.z_center for pt in candidates])
         gauges = np.array([pt.gauge for pt in candidates])
-        median_gauge = float(np.median(gauges))
+        raw_poly_y = np.polyfit(xm, ym, 2)
+        raw_poly_z = np.polyfit(xm, zm, 1)
+        raw_gauge = float(np.median(gauges))
+        raw_x_det_max = float(xm.max())
 
-        # Fit quadratic curve for centerline: Y(X) = a*X^2 + b*X + c
-        poly_y = np.polyfit(xm, ym, 2)
-        # Fit elevation profile: Z(X) = d*X + e
-        poly_z = np.polyfit(xm, zm, 1)
+        # Reset history on non-consecutive jumps (e.g. interactive timeline scrub)
+        if self.last_frame_idx is not None and abs(frame_idx - self.last_frame_idx) > 2:
+            self.history.clear()
+        self.last_frame_idx = frame_idx
+
+        # Append to sliding history buffer
+        self.history.append({
+            "poly_y": raw_poly_y,
+            "poly_z": raw_poly_z,
+            "gauge": raw_gauge,
+            "x_det_max": raw_x_det_max,
+        })
+
+        # Temporal smoothing over the last N results (weighted moving average)
+        if len(self.history) == 1:
+            poly_y = raw_poly_y
+            poly_z = raw_poly_z
+            median_gauge = raw_gauge
+            smooth_det_max = raw_x_det_max
+        else:
+            w = np.arange(1, len(self.history) + 1, dtype=np.float64)
+            w /= w.sum()
+            poly_y = np.average([h["poly_y"] for h in self.history], axis=0, weights=w)
+            poly_z = np.average([h["poly_z"] for h in self.history], axis=0, weights=w)
+            median_gauge = float(np.average([h["gauge"] for h in self.history], weights=w))
+            smooth_det_max = float(np.average([h["x_det_max"] for h in self.history], weights=w))
 
         a, b, c = poly_y
 
@@ -243,10 +293,9 @@ class RailTrackDetector:
         else:
             turn_direction = "CURVE RIGHT"
 
-        # Resample fine curve points in 3D
+        # Resample fine curve points in 3D for detected segment (smoothed)
         x_min = max(3.5, float(xm.min()))
-        x_max = max(float(xm.max()), 18.0)
-        x_curve = np.linspace(x_min, x_max, 120)
+        x_curve = np.linspace(x_min, smooth_det_max, 100)
         y_center = np.polyval(poly_y, x_curve)
         z_center = np.polyval(poly_z, x_curve)
 
@@ -260,6 +309,26 @@ class RailTrackDetector:
 
         x_right = x_curve - half_w * np.sin(theta)
         y_right = y_center + half_w * np.cos(theta)
+
+        # Extrapolation curves (Purple/Magenta Polynomial, smoothed over last N frames)
+        x_ext = None
+        y_ext = None
+        z_ext = None
+        x_ext_l = None
+        y_ext_l = None
+        x_ext_r = None
+        y_ext_r = None
+
+        if self.extrapolate_m > 0.0:
+            x_ext = np.linspace(smooth_det_max, smooth_det_max + self.extrapolate_m, 60)
+            z_ext = np.polyval(poly_z, x_ext)
+            y_ext = np.polyval(poly_y, x_ext)
+
+            theta_poly = np.arctan(2 * a * x_ext + b)
+            x_ext_l = x_ext + half_w * np.sin(theta_poly)
+            y_ext_l = y_ext - half_w * np.cos(theta_poly)
+            x_ext_r = x_ext - half_w * np.sin(theta_poly)
+            y_ext_r = y_ext + half_w * np.cos(theta_poly)
 
         total_checked_rows = abs(row_start - row_end) + 1
         confidence = min(1.0, len(candidates) / float(total_checked_rows))
@@ -284,4 +353,13 @@ class RailTrackDetector:
             x_right=x_right,
             y_right=y_right,
             confidence=confidence,
+            extrapolate_m=self.extrapolate_m,
+            smooth_n=len(self.history),
+            x_ext=x_ext,
+            y_ext=y_ext,
+            z_ext=z_ext,
+            x_ext_l=x_ext_l,
+            y_ext_l=y_ext_l,
+            x_ext_r=x_ext_r,
+            y_ext_r=y_ext_r,
         )

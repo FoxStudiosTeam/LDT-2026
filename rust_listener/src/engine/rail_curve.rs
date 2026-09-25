@@ -2,20 +2,23 @@
 //!
 //! Features:
 //! 1. Specular reflection anchor seeds (`intensity == 0` for Y in near zone [-10.0, -1.8]m).
-//! 2. Rigid dual-rail pairing (gauge constraint 1.50..1.65m, equal height).
-//! 3. Curvature-aware 3D RANSAC + cubic polynomial / clothoid refinement.
+//! 2. Rigid dual-rail pre-pairing (gauge constraint 1.50..1.65m, equal height).
+//! 3. Curvature-aware 3D RANSAC with zero inner-loop allocations and squared distances.
 //! 4. Straightness metric (`straightness` in [0.0, 1.0]) that dampens curvature
 //!    during extrapolation on straight tracks, preventing unnatural bending.
 //! 5. Analytical C2-smooth extrapolation "по накатанной".
-//! 6. Native Rerun 3D visualization: rails, centerline, sleepers, inliers, and telemetry.
+//! 6. Temporal smoothing: rolling window of last N fits with exponential decay weighting
+//!    for butter-smooth track transitions across frames.
+//! 7. Native Rerun 3D visualization: rails, centerline, sleepers, inliers, and telemetry.
 
 use rerun::{Color, LineStrips3D, Points3D, Radius, RecordingStream};
 use shared::error::{AppError, ErrCtx};
+use std::collections::VecDeque;
 
 /// Параметры конфигурации детектора кривых пути
 #[derive(Clone, Debug)]
 pub struct RailCurveConfig {
-    /// Число итераций RANSAC (по умолчанию: 400)
+    /// Число итераций RANSAC (по умолчанию: 250)
     pub n_iters: usize,
     /// Порог расстояния до рельса для инлаеров в метрах (по умолчанию: 0.085)
     pub inlier_thresh: f32,
@@ -35,12 +38,18 @@ pub struct RailCurveConfig {
     pub straightness_deflection_threshold_m: f32,
     /// Шаг между шпалами в метрах (по умолчанию: 0.6)
     pub sleeper_spacing_m: f32,
+    /// Число последних кадров/фитов для сглаживания (по умолчанию: 5, 1 = без сглаживания)
+    pub history_size: usize,
+    /// Фактор экспоненциального затухания для истории (по умолчанию: 0.70, 1.0 = равные веса)
+    pub smoothing_decay: f32,
+    /// Максимальное число кадров удержания кривой (coasting) при кратковременной потере детекции (по умолчанию: 2)
+    pub max_coasting_frames: usize,
 }
 
 impl Default for RailCurveConfig {
     fn default() -> Self {
         Self {
-            n_iters: 400,
+            n_iters: 250,
             inlier_thresh: 0.085,
             gauge_nominal: 1.575,
             gauge_tol: 0.075,
@@ -50,6 +59,9 @@ impl Default for RailCurveConfig {
             max_y: -45.0,
             straightness_deflection_threshold_m: 0.35,
             sleeper_spacing_m: 0.6,
+            history_size: 1,
+            smoothing_decay: 0.70,
+            max_coasting_frames: 2,
         }
     }
 }
@@ -74,6 +86,10 @@ pub struct RailCurveResult {
     pub y_range: (f32, f32),
     /// Примененная дистанция экстраполяции в метрах
     pub extrapolate_m: f32,
+    /// Сколько последних фитов было смешано для сглаживания
+    pub smoothed_frames_count: usize,
+    /// Флаг удержания траектории при кратковременной потере (coasting)
+    pub is_coasting: bool,
 
     // ── Геометрия подтвержденного участка ──
     pub pts_left: Vec<[f32; 3]>,
@@ -203,14 +219,17 @@ impl RailCurveResult {
             Some(r) => format!("{:.0}m", r),
             None => "Inf (straight)".to_string(),
         };
+        let coasting_str = if self.is_coasting { " [COASTING]" } else { "" };
         let det_len = -self.y_range.0 - (-self.y_range.1);
         let info_text = format!(
-            "Gauge: {:.3}m | Straightness: {:.1}% | Radius: {} | Deflection: {:.3}m\n\
+            "Gauge: {:.3}m | Straightness: {:.1}% | Radius: {} | Smooth: {} frames{} | Deflection: {:.3}m\n\
              Detected range: {:.1}m..{:.1}m (len: {:.1}m) | Extrapolated: +{:.1}m (Total: {:.1}m)\n\
              Inliers: Left={}, Right={}",
             self.gauge,
             self.straightness * 100.0,
             radius_str,
+            self.smoothed_frames_count,
+            coasting_str,
             self.lateral_deflection_m,
             -self.y_range.1,
             -self.y_range.0,
@@ -227,19 +246,206 @@ impl RailCurveResult {
     }
 }
 
-/// Вычислитель кривых железнодорожных путей
+/// Элемент истории для временного сглаживания
+#[derive(Clone, Debug)]
+struct RailFitHistoryItem {
+    poly_x_deg3: [f32; 4],
+    poly_z: [f32; 2],
+    gauge: f32,
+    straightness: f32,
+    max_deflection: f32,
+    y_min: f32,
+    y_max: f32,
+}
+
+/// Сырой результат фита текущего кадра
+struct RawFit {
+    poly_x_deg3: [f32; 4],
+    poly_z: [f32; 2],
+    gauge: f32,
+    straightness: f32,
+    max_deflection: f32,
+    y_min: f32,
+    y_max: f32,
+    inliers_left: Vec<[f32; 3]>,
+    inliers_right: Vec<[f32; 3]>,
+    seeds_near: Vec<[f32; 3]>,
+}
+
+/// Вычислитель кривых железнодорожных путей с поддержкой сглаживания по N кадрам
 #[derive(Clone, Debug)]
 pub struct RailCurveEstimator {
     pub config: RailCurveConfig,
+    history: VecDeque<RailFitHistoryItem>,
+    lost_frames: usize,
+    last_inliers_l: Vec<[f32; 3]>,
+    last_inliers_r: Vec<[f32; 3]>,
+    last_seeds: Vec<[f32; 3]>,
+}
+
+#[derive(Clone, Copy)]
+struct SeedPair {
+    c: [f32; 3],
+    gauge: f32,
+    y: f32,
 }
 
 impl RailCurveEstimator {
     pub fn new(config: RailCurveConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            history: VecDeque::new(),
+            lost_frames: 0,
+            last_inliers_l: Vec::new(),
+            last_inliers_r: Vec::new(),
+            last_seeds: Vec::new(),
+        }
+    }
+
+    /// Сброс истории сглаживания (например, при смене сцены или длинном пропуске)
+    pub fn reset(&mut self) {
+        self.history.clear();
+        self.lost_frames = 0;
+        self.last_inliers_l.clear();
+        self.last_inliers_r.clear();
+        self.last_seeds.clear();
     }
 
     /// Рассчитывает 3D модель кривой пути по облаку точек и интенсивности
-    pub fn fit(&self, points: &[[f32; 3]], intensities: &[f32]) -> Option<RailCurveResult> {
+    /// со сглаживанием по последним N кадрам.
+    pub fn fit(&mut self, points: &[[f32; 3]], intensities: &[f32]) -> Option<RailCurveResult> {
+        let raw_opt = self.fit_raw(points, intensities);
+
+        match raw_opt {
+            Some(raw) => {
+                self.lost_frames = 0;
+                self.last_inliers_l = raw.inliers_left.clone();
+                self.last_inliers_r = raw.inliers_right.clone();
+                self.last_seeds = raw.seeds_near.clone();
+
+                self.history.push_back(RailFitHistoryItem {
+                    poly_x_deg3: raw.poly_x_deg3,
+                    poly_z: raw.poly_z,
+                    gauge: raw.gauge,
+                    straightness: raw.straightness,
+                    max_deflection: raw.max_deflection,
+                    y_min: raw.y_min,
+                    y_max: raw.y_max,
+                });
+
+                let max_h = self.config.history_size.max(1);
+                while self.history.len() > max_h {
+                    self.history.pop_front();
+                }
+
+                self.build_smoothed_result(
+                    false,
+                    raw.inliers_left,
+                    raw.inliers_right,
+                    raw.seeds_near,
+                )
+            }
+            None => {
+                self.lost_frames += 1;
+                if self.lost_frames <= self.config.max_coasting_frames && !self.history.is_empty() {
+                    // Coasting: используем последнее сглаженное состояние
+                    self.build_smoothed_result(
+                        true,
+                        self.last_inliers_l.clone(),
+                        self.last_inliers_r.clone(),
+                        self.last_seeds.clone(),
+                    )
+                } else {
+                    if self.lost_frames > self.config.max_coasting_frames {
+                        self.history.clear();
+                    }
+                    None
+                }
+            }
+        }
+    }
+
+    /// Смешивает историю последних N фитов и генерирует итоговую 3D геометрию
+    fn build_smoothed_result(
+        &self,
+        is_coasting: bool,
+        inliers_left: Vec<[f32; 3]>,
+        inliers_right: Vec<[f32; 3]>,
+        seeds_near: Vec<[f32; 3]>,
+    ) -> Option<RailCurveResult> {
+        let k = self.history.len();
+        if k == 0 {
+            return None;
+        }
+
+        let decay = self.config.smoothing_decay.clamp(0.05, 1.0);
+        let mut total_w = 0.0f32;
+        let mut weights = Vec::with_capacity(k);
+        for i in 0..k {
+            // i = k - 1 (текущий кадр): exponent = 0 -> weight = 1.0
+            // i = 0 (самый старый): exponent = k - 1 -> weight = decay^(k-1)
+            let w = decay.powi((k - 1 - i) as i32);
+            weights.push(w);
+            total_w += w;
+        }
+
+        let mut poly_x_deg3 = [0.0f32; 4];
+        let mut poly_z = [0.0f32; 2];
+        let mut gauge = 0.0f32;
+        let mut straightness = 0.0f32;
+        let mut y_min = 0.0f32;
+        let mut y_max = 0.0f32;
+        let mut max_deflection = 0.0f32;
+
+        for (i, item) in self.history.iter().enumerate() {
+            let nw = weights[i] / total_w;
+            for c in 0..4 {
+                poly_x_deg3[c] += item.poly_x_deg3[c] * nw;
+            }
+            for h in 0..2 {
+                poly_z[h] += item.poly_z[h] * nw;
+            }
+            gauge += item.gauge * nw;
+            straightness += item.straightness * nw;
+            y_min += item.y_min * nw;
+            y_max += item.y_max * nw;
+            max_deflection += item.max_deflection * nw;
+        }
+
+        let poly_x = if poly_x_deg3[0].abs() < 1e-7 {
+            vec![poly_x_deg3[1], poly_x_deg3[2], poly_x_deg3[3]]
+        } else {
+            vec![
+                poly_x_deg3[0],
+                poly_x_deg3[1],
+                poly_x_deg3[2],
+                poly_x_deg3[3],
+            ]
+        };
+
+        Some(build_geometry_result(
+            &self.config,
+            poly_x,
+            poly_z,
+            gauge,
+            straightness,
+            max_deflection,
+            y_min,
+            y_max,
+            k,
+            is_coasting,
+            inliers_left,
+            inliers_right,
+            seeds_near,
+        ))
+    }
+
+    /// Быстрый RANSAC-расчет одного сырого кадра:
+    /// - Zero allocations во внутреннем цикле скоринга
+    /// - Предварительное спаривание сидов
+    /// - Ранний отсев по Z и сравнение по квадрату расстояния (без sqrt)
+    /// - Прореживание пула кандидатов до <= 2000 точек
+    fn fit_raw(&self, points: &[[f32; 3]], intensities: &[f32]) -> Option<RawFit> {
         let n = points.len();
         if n < 50 || n != intensities.len() {
             return None;
@@ -247,7 +453,7 @@ impl RailCurveEstimator {
 
         let cfg = &self.config;
 
-        // 1. Выделяем якоря в ближней зоне (intensity == 0 из-за зеркального отражения головки рельса)
+        // 1. Выделяем якоря в ближней зоне (intensity <= 0.5)
         let mut left_seeds = Vec::new();
         let mut right_seeds = Vec::new();
         let mut seeds_all = Vec::new();
@@ -272,15 +478,42 @@ impl RailCurveEstimator {
             }
         }
 
-        if left_seeds.len() < 10 || right_seeds.len() < 10 {
+        if left_seeds.len() < 5 || right_seeds.len() < 5 {
             return None;
         }
 
-        // 2. Пул кандидатов для скоринга (коридор пути до max_y)
-        let mut pool_indices = Vec::new();
+        // 2. Предварительное спаривание сидов левого и правого рельса (O(N_L * N_R) < 2500)
+        let mut seed_pairs = Vec::new();
+        for pl in &left_seeds {
+            for pr in &right_seeds {
+                if (pr[1] - pl[1]).abs() < 0.8 {
+                    let g = pr[0] - pl[0];
+                    if (g - cfg.gauge_nominal).abs() <= cfg.gauge_tol
+                        && (pr[2] - pl[2]).abs() <= 0.08
+                    {
+                        seed_pairs.push(SeedPair {
+                            c: [
+                                0.5 * (pl[0] + pr[0]),
+                                0.5 * (pl[1] + pr[1]),
+                                0.5 * (pl[2] + pr[2]),
+                            ],
+                            gauge: g,
+                            y: 0.5 * (pl[1] + pr[1]),
+                        });
+                    }
+                }
+            }
+        }
+
+        if seed_pairs.len() < 2 {
+            return None;
+        }
+
+        // 3. Пул кандидатов для коридора пути
+        let mut pool_indices = Vec::with_capacity(n / 4);
         for i in 0..n {
             let p = points[i];
-            if p[0].abs() < 4.0
+            if p[0].abs() < 3.5
                 && p[1] < cfg.near_y_max
                 && p[1] > cfg.max_y
                 && p[2] > -1.7
@@ -301,16 +534,23 @@ impl RailCurveEstimator {
             let p = points[idx];
             let intensity = intensities[idx];
             if p[1] < -12.0 && p[1] > -35.0 && intensity <= 0.5 {
-                if p[0] < 0.0 {
+                if p[0] < 0.0 && p[0] > -3.0 {
                     dist_left.push(p);
-                } else {
+                } else if p[0] > 0.0 && p[0] < 3.0 {
                     dist_right.push(p);
                 }
             }
         }
 
-        // 3. RANSAC сэмплирование криволинейных гипотез
-        // Простой псевдо-ГСЧ (Xorshift32) для воспроизводимости и скорости без внешних зависимостей
+        // Прореживание пула для быстрого RANSAC-скоринга (макс 2000 точек)
+        let step = if pool_indices.len() > 2000 {
+            pool_indices.len() / 2000
+        } else {
+            1
+        };
+        let scoring_indices: Vec<usize> = pool_indices.iter().step_by(step).copied().collect();
+
+        // 4. Оптимизированный RANSAC без аллокаций
         let mut rng_state: u32 = 42;
         let mut next_rand = || -> u32 {
             rng_state ^= rng_state << 13;
@@ -320,85 +560,50 @@ impl RailCurveEstimator {
         };
 
         let mut best_score = -1.0f32;
-        let mut best_inl_l = Vec::new();
-        let mut best_inl_r = Vec::new();
+        let mut best_poly_c = [0.0f32; 3];
+        let mut best_kz = 0.0f32;
+        let mut best_bz = 0.0f32;
         let mut best_gauge = cfg.gauge_nominal;
 
+        let inlier_thresh2 = cfg.inlier_thresh * cfg.inlier_thresh;
+
         for _ in 0..cfg.n_iters {
-            // Выбираем ближнюю пару рельс
-            let p_l1 = left_seeds[next_rand() as usize % left_seeds.len()];
-            let cands_r1: Vec<[f32; 3]> = right_seeds
-                .iter()
-                .copied()
-                .filter(|pr| (pr[1] - p_l1[1]).abs() < 0.8)
-                .collect();
-            if cands_r1.is_empty() {
-                continue;
-            }
-            let p_r1 = cands_r1[next_rand() as usize % cands_r1.len()];
-            let g1 = p_r1[0] - p_l1[0];
-            if (g1 - cfg.gauge_nominal).abs() > cfg.gauge_tol || (p_r1[2] - p_l1[2]).abs() > 0.08 {
-                continue;
-            }
+            let pair1 = seed_pairs[next_rand() as usize % seed_pairs.len()];
 
-            // Выбираем вторую пару рельс на расстоянии не менее 1.5м
-            let far_left_cands: Vec<[f32; 3]> = left_seeds
-                .iter()
-                .copied()
-                .filter(|pl| (pl[1] - p_l1[1]).abs() > 1.5)
-                .collect();
-            if far_left_cands.is_empty() {
-                continue;
+            // Выбираем вторую пару на расстоянии >= 1.2м
+            let mut pair2_opt = None;
+            for _ in 0..8 {
+                let cand = seed_pairs[next_rand() as usize % seed_pairs.len()];
+                if (cand.y - pair1.y).abs() > 1.2 {
+                    pair2_opt = Some(cand);
+                    break;
+                }
             }
-            let p_l2 = far_left_cands[next_rand() as usize % far_left_cands.len()];
-            let cands_r2: Vec<[f32; 3]> = right_seeds
-                .iter()
-                .copied()
-                .filter(|pr| (pr[1] - p_l2[1]).abs() < 0.8)
-                .collect();
-            if cands_r2.is_empty() {
-                continue;
-            }
-            let p_r2 = cands_r2[next_rand() as usize % cands_r2.len()];
-            let g2 = p_r2[0] - p_l2[0];
-            if (g2 - cfg.gauge_nominal).abs() > cfg.gauge_tol || (p_r2[2] - p_l2[2]).abs() > 0.08 {
-                continue;
-            }
+            let pair2 = match pair2_opt {
+                Some(p) => p,
+                None => continue,
+            };
 
-            let c1 = [
-                0.5 * (p_l1[0] + p_r1[0]),
-                0.5 * (p_l1[1] + p_r1[1]),
-                0.5 * (p_l1[2] + p_r1[2]),
-            ];
-            let c2 = [
-                0.5 * (p_l2[0] + p_r2[0]),
-                0.5 * (p_l2[1] + p_r2[1]),
-                0.5 * (p_l2[2] + p_r2[2]),
-            ];
-            let gauge = 0.5 * (g1 + g2);
+            let c1 = pair1.c;
+            let c2 = pair2.c;
+            let gauge = 0.5 * (pair1.gauge + pair2.gauge);
+            let half_w = gauge * 0.5;
 
-            // Гипотеза кривизны: 3 точки (c1, c2, c3) или сэмплирование кривизны
-            let mut poly_c: Option<[f32; 3]> = None; // [c2, c1, c0]
-
-            if !dist_left.is_empty() && !dist_right.is_empty() && (next_rand() % 100 < 75) {
-                let p_l3 = dist_left[next_rand() as usize % dist_left.len()];
-                let cands_r3: Vec<[f32; 3]> = dist_right
-                    .iter()
-                    .copied()
-                    .filter(|pr| (pr[1] - p_l3[1]).abs() < 1.0)
-                    .collect();
-                if !cands_r3.is_empty() {
-                    let p_r3 = cands_r3[next_rand() as usize % cands_r3.len()];
-                    let g3 = p_r3[0] - p_l3[0];
-                    if (g3 - cfg.gauge_nominal).abs() < (cfg.gauge_tol + 0.05) {
-                        let c3 = [
-                            0.5 * (p_l3[0] + p_r3[0]),
-                            0.5 * (p_l3[1] + p_r3[1]),
-                            0.5 * (p_l3[2] + p_r3[2]),
-                        ];
-                        // Парабола через 3 точки: c1, c2, c3
-                        poly_c = fit_parabola_3pts(c1[1], c1[0], c2[1], c2[0], c3[1], c3[0]);
-                    }
+            // Гипотеза параболы
+            let mut poly_c: Option<[f32; 3]> = None;
+            if !dist_left.is_empty() && !dist_right.is_empty() && (next_rand() % 100 < 70) {
+                let pl3 = dist_left[next_rand() as usize % dist_left.len()];
+                let pr3_opt = dist_right.iter().find(|pr| {
+                    (pr[1] - pl3[1]).abs() < 0.8
+                        && ((pr[0] - pl3[0]) - cfg.gauge_nominal).abs() < (cfg.gauge_tol + 0.06)
+                });
+                if let Some(pr3) = pr3_opt {
+                    let c3 = [
+                        0.5 * (pl3[0] + pr3[0]),
+                        0.5 * (pl3[1] + pr3[1]),
+                        0.5 * (pl3[2] + pr3[2]),
+                    ];
+                    poly_c = fit_parabola_3pts(c1[1], c1[0], c2[1], c2[0], c3[1], c3[0]);
                 }
             }
 
@@ -408,7 +613,6 @@ impl RailCurveEstimator {
                     continue;
                 }
                 let k0 = (c2[0] - c1[0]) / dy;
-                // Сэмплируем допустимую железнодорожную кривизну (|a| <= 0.003)
                 let rand_f = (next_rand() % 10000) as f32 / 10000.0;
                 let a = (rand_f * 2.0 - 1.0) * 0.0030;
                 let c2_coeff = a;
@@ -418,67 +622,99 @@ impl RailCurveEstimator {
             }
 
             let poly_c = poly_c.unwrap();
-            // Ограничение физической кривизны ж/д пути (R >= 120м -> |c2| <= 0.0042)
             if poly_c[0].abs() > 0.0042 {
                 continue;
             }
 
-            let kz = (c2[2] - c1[2]) / (c2[1] - c1[1]);
+            let dy_z = c2[1] - c1[1];
+            if dy_z.abs() < 0.1 {
+                continue;
+            }
+            let kz = (c2[2] - c1[2]) / dy_z;
             let bz = c1[2] - kz * c1[1];
-            let half_w = gauge / 2.0;
 
-            let mut inl_l = Vec::new();
-            let mut inl_r = Vec::new();
             let mut score = 0.0f32;
-            let mut near_count_l = 0;
-            let mut near_count_r = 0;
+            let mut near_count_l = 0usize;
+            let mut near_count_r = 0usize;
 
-            for &idx in &pool_indices {
+            // Внутренний цикл: нулевые аллокации, ранний отсев по Z и сравнение без корней
+            for &idx in &scoring_indices {
                 let p = points[idx];
-                let intensity = intensities[idx];
-
-                let xc = poly_c[0] * p[1] * p[1] + poly_c[1] * p[1] + poly_c[2];
                 let zc = kz * p[1] + bz;
+                let dz = p[2] - zc;
+                if dz.abs() >= cfg.inlier_thresh {
+                    continue;
+                }
+                let dz2 = dz * dz;
+                let xc = poly_c[0] * p[1] * p[1] + poly_c[1] * p[1] + poly_c[2];
 
-                let dl = ((p[0] - (xc - half_w)).powi(2) + (p[2] - zc).powi(2)).sqrt();
-                let dr = ((p[0] - (xc + half_w)).powi(2) + (p[2] - zc).powi(2)).sqrt();
-
-                let weight = if intensity <= 0.5 { 3.0 } else { 1.0 };
-
-                if dl < cfg.inlier_thresh {
-                    inl_l.push(p);
+                let dxl = p[0] - (xc - half_w);
+                if dxl.abs() < cfg.inlier_thresh && (dxl * dxl + dz2) < inlier_thresh2 {
+                    let weight = if intensities[idx] <= 0.5 { 3.0 } else { 1.0 };
                     score += weight;
                     if p[1] > -10.0 {
                         near_count_l += 1;
                     }
-                } else if dr < cfg.inlier_thresh {
-                    inl_r.push(p);
-                    score += weight;
-                    if p[1] > -10.0 {
-                        near_count_r += 1;
+                } else {
+                    let dxr = p[0] - (xc + half_w);
+                    if dxr.abs() < cfg.inlier_thresh && (dxr * dxr + dz2) < inlier_thresh2 {
+                        let weight = if intensities[idx] <= 0.5 { 3.0 } else { 1.0 };
+                        score += weight;
+                        if p[1] > -10.0 {
+                            near_count_r += 1;
+                        }
                     }
                 }
             }
 
-            if near_count_l < 25 || near_count_r < 25 {
+            if near_count_l < 15 || near_count_r < 15 {
                 continue;
             }
 
             if score > best_score {
                 best_score = score;
-                best_inl_l = inl_l;
-                best_inl_r = inl_r;
+                best_poly_c = poly_c;
+                best_kz = kz;
+                best_bz = bz;
                 best_gauge = gauge;
             }
         }
 
-        if best_score < 0.0 || best_inl_l.is_empty() || best_inl_r.is_empty() {
+        if best_score < 0.0 {
             return None;
         }
 
-        let half_w = best_gauge / 2.0;
+        // 5. Единоразовый сбор всех инлаеров для победившей гипотезы
+        let half_w = best_gauge * 0.5;
+        let mut best_inl_l = Vec::with_capacity(pool_indices.len() / 6);
+        let mut best_inl_r = Vec::with_capacity(pool_indices.len() / 6);
 
-        // 4. Аналитическое МНК-уточнение полинома по инлаерам
+        for &idx in &pool_indices {
+            let p = points[idx];
+            let zc = best_kz * p[1] + best_bz;
+            let dz = p[2] - zc;
+            if dz.abs() >= cfg.inlier_thresh {
+                continue;
+            }
+            let dz2 = dz * dz;
+            let xc = best_poly_c[0] * p[1] * p[1] + best_poly_c[1] * p[1] + best_poly_c[2];
+
+            let dxl = p[0] - (xc - half_w);
+            if dxl.abs() < cfg.inlier_thresh && (dxl * dxl + dz2) < inlier_thresh2 {
+                best_inl_l.push(p);
+            } else {
+                let dxr = p[0] - (xc + half_w);
+                if dxr.abs() < cfg.inlier_thresh && (dxr * dxr + dz2) < inlier_thresh2 {
+                    best_inl_r.push(p);
+                }
+            }
+        }
+
+        if best_inl_l.len() < 20 || best_inl_r.len() < 20 {
+            return None;
+        }
+
+        // 6. Аналитическое МНК-уточнение полинома
         let mut sample_y = Vec::with_capacity(best_inl_l.len() + best_inl_r.len());
         let mut sample_x = Vec::with_capacity(best_inl_l.len() + best_inl_r.len());
         let mut sample_z = Vec::with_capacity(best_inl_l.len() + best_inl_r.len());
@@ -504,25 +740,33 @@ impl RailCurveEstimator {
 
         y_min = y_min.max(cfg.max_y);
         let actual_gauge = (sum_xr / best_inl_r.len() as f32) - (sum_xl / best_inl_l.len() as f32);
-        let refined_half_w = actual_gauge / 2.0;
 
-        let deg = if sample_y.len() > 200 && y_min < -18.0 { 3 } else { 2 };
+        let deg = if sample_y.len() > 200 && y_min < -18.0 {
+            3
+        } else {
+            2
+        };
         let poly_x = polyfit(&sample_y, &sample_x, deg)?;
         let poly_z_vec = polyfit(&sample_y, &sample_z, 1)?;
         let poly_z = [poly_z_vec[0], poly_z_vec[1]];
 
-        // 5. Расчет метрики "прямизны" (Straightness)
-        // Сравниваем кривую пути X_c(y) с прямой хордой между началом и концом детектированного участка
+        let poly_x_deg3 = match poly_x.len() {
+            4 => [poly_x[0], poly_x[1], poly_x[2], poly_x[3]],
+            3 => [0.0, poly_x[0], poly_x[1], poly_x[2]],
+            2 => [0.0, 0.0, poly_x[0], poly_x[1]],
+            _ => [0.0, 0.0, 0.0, poly_x[0]],
+        };
+
+        // 7. Расчет прямизны и максимального отклонения от хорды
         let y_max = -2.0f32;
         let x_start = polyval(&poly_x, y_max);
         let x_end = polyval(&poly_x, y_min);
 
         let mut max_deflection = 0.0f32;
-        let test_steps = 50;
+        let test_steps = 40;
         for i in 0..=test_steps {
             let y_t = y_max + (y_min - y_max) * (i as f32 / test_steps as f32);
             let x_curve = polyval(&poly_x, y_t);
-            // Прямая хорда между началом и концом
             let chord_t = (y_t - y_max) / (y_min - y_max);
             let x_chord = x_start + (x_end - x_start) * chord_t;
             let defl = (x_curve - x_chord).abs();
@@ -531,125 +775,148 @@ impl RailCurveEstimator {
             }
         }
 
-        // Прямизна в диапазоне [0.0, 1.0]:
-        // если прогиб <= 3см — прямизна ~90..100%
-        // если прогиб >= threshold (35см) — прямизна 0% (выраженная кривая)
-        let straightness = (1.0 - (max_deflection / cfg.straightness_deflection_threshold_m))
-            .clamp(0.0, 1.0);
+        let straightness =
+            (1.0 - (max_deflection / cfg.straightness_deflection_threshold_m)).clamp(0.0, 1.0);
 
-        // Оценка радиуса кривизны (по формуле хорды и стрелы прогиба: R ≈ L^2 / (8 * f))
-        let arc_len = (y_max - y_min).abs();
-        let curve_radius_m = if max_deflection > 0.025 {
-            Some((arc_len * arc_len) / (8.0 * max_deflection))
-        } else {
-            None
-        };
-
-        // 6. Формирование 3D точек подтвержденного участка
-        let n_steps = ((y_max - y_min).abs() / 0.25).ceil() as usize;
-        let mut pts_left = Vec::with_capacity(n_steps + 1);
-        let mut pts_right = Vec::with_capacity(n_steps + 1);
-        let mut pts_center = Vec::with_capacity(n_steps + 1);
-
-        for i in 0..=n_steps {
-            let y_t = y_max - (i as f32 * 0.25).min((y_max - y_min).abs());
-            let xc = polyval(&poly_x, y_t);
-            let zc = poly_z[0] * y_t + poly_z[1];
-            pts_left.push([xc - refined_half_w, y_t, zc]);
-            pts_right.push([xc + refined_half_w, y_t, zc]);
-            pts_center.push([xc, y_t, zc]);
-        }
-
-        // Шпалы на подтвержденном участке
-        let mut sleepers = Vec::new();
-        let mut sy = y_max;
-        while sy >= y_min {
-            let s_xc = polyval(&poly_x, sy);
-            let s_zc = poly_z[0] * sy + poly_z[1];
-            sleepers.push([
-                [s_xc - refined_half_w - 0.2, sy, s_zc],
-                [s_xc + refined_half_w + 0.2, sy, s_zc],
-            ]);
-            sy -= cfg.sleeper_spacing_m;
-        }
-
-        // 7. Экстраполяция "по накатанной" с демпфированием кривизны по прямизне
-        let mut ext_pts_left = None;
-        let mut ext_pts_right = None;
-        let mut ext_pts_center = None;
-        let mut ext_sleepers = Vec::new();
-
-        if cfg.max_extrapolate_m > 0.0 {
-            let y0 = y_min;
-            let x0 = polyval(&poly_x, y0);
-            let z0 = poly_z[0] * y0 + poly_z[1];
-
-            // Первая производная (тангенс курса) и вторая производная (кривизна)
-            let k0 = poly_derivative1(&poly_x, y0);
-            let raw_curv0 = poly_derivative2(&poly_x, y0).clamp(-0.0035, 0.0035);
-
-            // КЛЮЧЕВОЕ: на прямых участках (straightness -> 1.0) зануляем кривизну экстраполяции,
-            // чтобы кривая не уходила вбок на прямых, а шла строго по курсу!
-            let effective_curv = (1.0 - straightness) * raw_curv0;
-
-            let ext_steps = (cfg.max_extrapolate_m / 0.25).ceil() as usize;
-            let mut ext_l = Vec::with_capacity(ext_steps);
-            let mut ext_r = Vec::with_capacity(ext_steps);
-            let mut ext_c = Vec::with_capacity(ext_steps);
-
-            for i in 1..=ext_steps {
-                let s = i as f32 * 0.25;
-                if s > cfg.max_extrapolate_m {
-                    break;
-                }
-                let y_ext = y0 - s;
-                let x_ext = x0 - k0 * s + 0.5 * effective_curv * s * s;
-                let z_ext = z0 - poly_z[0] * s;
-
-                ext_l.push([x_ext - refined_half_w, y_ext, z_ext]);
-                ext_r.push([x_ext + refined_half_w, y_ext, z_ext]);
-                ext_c.push([x_ext, y_ext, z_ext]);
-            }
-
-            // Шпалы на экстраполированном участке
-            let mut es = cfg.sleeper_spacing_m;
-            while es <= cfg.max_extrapolate_m {
-                let ey = y0 - es;
-                let ex = x0 - k0 * es + 0.5 * effective_curv * es * es;
-                let ez = z0 - poly_z[0] * es;
-                ext_sleepers.push([
-                    [ex - refined_half_w - 0.2, ey, ez],
-                    [ex + refined_half_w + 0.2, ey, ez],
-                ]);
-                es += cfg.sleeper_spacing_m;
-            }
-
-            ext_pts_left = Some(ext_l);
-            ext_pts_right = Some(ext_r);
-            ext_pts_center = Some(ext_c);
-        }
-
-        Some(RailCurveResult {
-            poly_x,
+        Some(RawFit {
+            poly_x_deg3,
             poly_z,
             gauge: actual_gauge,
             straightness,
-            curve_radius_m,
-            lateral_deflection_m: max_deflection,
-            y_range: (y_min, y_max),
-            extrapolate_m: cfg.max_extrapolate_m,
-            pts_left,
-            pts_right,
-            pts_center,
-            sleepers,
-            ext_pts_left,
-            ext_pts_right,
-            ext_pts_center,
-            ext_sleepers,
+            max_deflection,
+            y_min,
+            y_max,
             inliers_left: best_inl_l,
             inliers_right: best_inl_r,
             seeds_near: seeds_all,
         })
+    }
+}
+
+/// Собирает полную 3D геометрию (рельсы, шпалы, экстраполяция) по заданным параметрам пути
+fn build_geometry_result(
+    cfg: &RailCurveConfig,
+    poly_x: Vec<f32>,
+    poly_z: [f32; 2],
+    gauge: f32,
+    straightness: f32,
+    max_deflection: f32,
+    y_min: f32,
+    y_max: f32,
+    smoothed_frames_count: usize,
+    is_coasting: bool,
+    inliers_left: Vec<[f32; 3]>,
+    inliers_right: Vec<[f32; 3]>,
+    seeds_near: Vec<[f32; 3]>,
+) -> RailCurveResult {
+    let half_w = gauge * 0.5;
+
+    // Радиус кривизны
+    let arc_len = (y_max - y_min).abs();
+    let curve_radius_m = if max_deflection > 0.025 {
+        Some((arc_len * arc_len) / (8.0 * max_deflection))
+    } else {
+        None
+    };
+
+    // Точки подтвержденного участка с шагом 0.25м
+    let n_steps = ((y_max - y_min).abs() / 0.25).ceil() as usize;
+    let mut pts_left = Vec::with_capacity(n_steps + 1);
+    let mut pts_right = Vec::with_capacity(n_steps + 1);
+    let mut pts_center = Vec::with_capacity(n_steps + 1);
+
+    for i in 0..=n_steps {
+        let y_t = y_max - (i as f32 * 0.25).min((y_max - y_min).abs());
+        let xc = polyval(&poly_x, y_t);
+        let zc = poly_z[0] * y_t + poly_z[1];
+        pts_left.push([xc - half_w, y_t, zc]);
+        pts_right.push([xc + half_w, y_t, zc]);
+        pts_center.push([xc, y_t, zc]);
+    }
+
+    // Шпалы
+    let mut sleepers = Vec::new();
+    let mut sy = y_max;
+    while sy >= y_min {
+        let s_xc = polyval(&poly_x, sy);
+        let s_zc = poly_z[0] * sy + poly_z[1];
+        sleepers.push([
+            [s_xc - half_w - 0.2, sy, s_zc],
+            [s_xc + half_w + 0.2, sy, s_zc],
+        ]);
+        sy -= cfg.sleeper_spacing_m;
+    }
+
+    // Экстраполяция "по накатанной" с демпфированием кривизны по прямизне
+    let mut ext_pts_left = None;
+    let mut ext_pts_right = None;
+    let mut ext_pts_center = None;
+    let mut ext_sleepers = Vec::new();
+
+    if cfg.max_extrapolate_m > 0.0 {
+        let y0 = y_min;
+        let x0 = polyval(&poly_x, y0);
+        let z0 = poly_z[0] * y0 + poly_z[1];
+
+        let k0 = poly_derivative1(&poly_x, y0);
+        let raw_curv0 = poly_derivative2(&poly_x, y0).clamp(-0.0035, 0.0035);
+        let effective_curv = (1.0 - straightness) * raw_curv0;
+
+        let ext_steps = (cfg.max_extrapolate_m / 0.25).ceil() as usize;
+        let mut ext_l = Vec::with_capacity(ext_steps);
+        let mut ext_r = Vec::with_capacity(ext_steps);
+        let mut ext_c = Vec::with_capacity(ext_steps);
+
+        for i in 1..=ext_steps {
+            let s = i as f32 * 0.25;
+            if s > cfg.max_extrapolate_m {
+                break;
+            }
+            let y_ext = y0 - s;
+            let x_ext = x0 - k0 * s + 0.5 * effective_curv * s * s;
+            let z_ext = z0 - poly_z[0] * s;
+
+            ext_l.push([x_ext - half_w, y_ext, z_ext]);
+            ext_r.push([x_ext + half_w, y_ext, z_ext]);
+            ext_c.push([x_ext, y_ext, z_ext]);
+        }
+
+        let mut es = cfg.sleeper_spacing_m;
+        while es <= cfg.max_extrapolate_m {
+            let ey = y0 - es;
+            let ex = x0 - k0 * es + 0.5 * effective_curv * es * es;
+            let ez = z0 - poly_z[0] * es;
+            ext_sleepers.push([[ex - half_w - 0.2, ey, ez], [ex + half_w + 0.2, ey, ez]]);
+            es += cfg.sleeper_spacing_m;
+        }
+
+        ext_pts_left = Some(ext_l);
+        ext_pts_right = Some(ext_r);
+        ext_pts_center = Some(ext_c);
+    }
+
+    RailCurveResult {
+        poly_x,
+        poly_z,
+        gauge,
+        straightness,
+        curve_radius_m,
+        lateral_deflection_m: max_deflection,
+        y_range: (y_min, y_max),
+        extrapolate_m: cfg.max_extrapolate_m,
+        smoothed_frames_count,
+        is_coasting,
+        pts_left,
+        pts_right,
+        pts_center,
+        sleepers,
+        ext_pts_left,
+        ext_pts_right,
+        ext_pts_center,
+        ext_sleepers,
+        inliers_left,
+        inliers_right,
+        seeds_near,
     }
 }
 
@@ -663,7 +930,8 @@ fn fit_parabola_3pts(y1: f32, x1: f32, y2: f32, x2: f32, y3: f32, x3: f32) -> Op
     }
     let c2 = (y3 * (x2 - x1) + y2 * (x1 - x3) + y1 * (x3 - x2)) / denom;
     let c1 = (y3 * y3 * (x1 - x2) + y2 * y2 * (x3 - x1) + y1 * y1 * (x2 - x3)) / denom;
-    let c0 = (y2 * y3 * (y2 - y3) * x1 + y3 * y1 * (y3 - y1) * x2 + y1 * y2 * (y1 - y2) * x3) / denom;
+    let c0 =
+        (y2 * y3 * (y2 - y3) * x1 + y3 * y1 * (y3 - y1) * x2 + y1 * y2 * (y1 - y2) * x3) / denom;
     Some([c2, c1, c0])
 }
 
@@ -714,7 +982,6 @@ fn polyfit(y: &[f32], x: &[f32], deg: usize) -> Option<Vec<f32>> {
         return None;
     }
 
-    // Построение нормальной матрицы А^T * A и вектора A^T * X
     let mut a_mat = vec![vec![0.0f64; m]; m];
     let mut b_vec = vec![0.0f64; m];
 
@@ -728,8 +995,7 @@ fn polyfit(y: &[f32], x: &[f32], deg: usize) -> Option<Vec<f32>> {
         }
     }
 
-    for (k, (&yi, &xi)) in y.iter().zip(x.iter()).enumerate() {
-        let _ = k;
+    for (&yi, &xi) in y.iter().zip(x.iter()) {
         let mut p = 1.0f64;
         let y_d = yi as f64;
         let x_d = xi as f64;
@@ -763,6 +1029,9 @@ fn polyfit(y: &[f32], x: &[f32], deg: usize) -> Option<Vec<f32>> {
 
         let pivot = a_mat[i][i];
         for j in i..m {
+            a_mat[j][j] = a_mat[j][j]; // dummy to keep structure readable
+        }
+        for j in i..m {
             a_mat[i][j] /= pivot;
         }
         b_vec[i] /= pivot;
@@ -778,7 +1047,6 @@ fn polyfit(y: &[f32], x: &[f32], deg: usize) -> Option<Vec<f32>> {
         }
     }
 
-    // Переворачиваем порядок коэффициентов к стандартному: [c_deg, ..., c_0]
     let mut coeffs: Vec<f32> = b_vec.into_iter().map(|v| v as f32).collect();
     coeffs.reverse();
     Some(coeffs)
@@ -791,9 +1059,5 @@ pub fn intensity_to_turbo_color(intensity: f32) -> Color {
     let r = (1.5 - (norm * 4.0 - 3.0).abs()).clamp(0.0, 1.0);
     let g = (1.5 - (norm * 4.0 - 2.0).abs()).clamp(0.0, 1.0);
     let b = (1.5 - (norm * 4.0 - 1.0).abs()).clamp(0.0, 1.0);
-    Color::from_rgb(
-        (r * 255.0) as u8,
-        (g * 255.0) as u8,
-        (b * 255.0) as u8,
-    )
+    Color::from_rgb((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
 }

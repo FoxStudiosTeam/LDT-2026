@@ -54,7 +54,7 @@ services:
     volumes:
       - ./dataset:/app/dataset:ro
       - ./frames:/frames:ro
-    command: ["/app/dataset/roundT_squareT_pressureGate_squareT"]
+    command: ["/app/dataset/squareT_platform_squareT_switch"]
 
   # 2. Стрим-ресивер из Windows (для огромных датасетов без копирования)
   # Ждёт запуск в PowerShell: python win_streamer.py <путь_к_багу>
