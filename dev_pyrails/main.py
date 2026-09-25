@@ -207,7 +207,7 @@ def main():
         width=width,
     )
     detector = RailTrackDetector(geometry=geo)
-    visualizer = RailVisualizer(geometry=geo)
+    visualizer = RailVisualizer(geometry=geo, max_dist_m=200.0)
 
     if args.interactive:
         run_interactive(args.frames_dir, detector, visualizer)

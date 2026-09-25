@@ -1,10 +1,15 @@
 use std::sync::{Arc, RwLock};
 
 use rerun::Color;
+<<<<<<< HEAD
 use shared::{
     error::AppError,
     types::{AppPointCloud, CudaArray, SIZE},
 };
+=======
+use tracing::info;
+use shared::{error::AppError, types::{AppPointCloud, CudaArray, SIZE}};
+>>>>>>> c6b1007537a06ae0674b046bbf98dec400e707f3
 
 use crate::engine::types::Engine;
 
