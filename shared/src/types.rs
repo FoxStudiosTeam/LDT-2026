@@ -1,6 +1,8 @@
 use std::fmt;
 use std::ops::{Deref, DerefMut, Index, IndexMut};
 
+use rerun::Color;
+
 /// Статистика по облаку точек
 pub struct CloudStats {
     pub n_points: usize,
@@ -145,6 +147,7 @@ pub struct PointCloud<const SIZE: usize> {
     pub z: TripleBuffer<CudaArray<SIZE, f32>>,
     pub intensity: TripleBuffer<CudaArray<SIZE, f32>>,
 
+    pub colors: TripleBuffer<CudaArray<SIZE, Color>>,
     pub can_write: bool,
 
     pub ring: TripleBuffer<CudaArray<SIZE, u16>>,
@@ -172,6 +175,7 @@ impl<const SIZE: usize> PointCloud<SIZE> {
         z_ptrs: [*mut f32; 3],
         i_ptrs: [*mut f32; 3],
         r_ptrs: [*mut u16; 3],
+        colors_ptrs: [*mut Color; 3],
     ) -> Self {
         let make_fields = |ptrs: [*mut f32; 3]| {
             [
@@ -208,6 +212,22 @@ impl<const SIZE: usize> PointCloud<SIZE> {
         };
 
         Self {
+            colors: TripleBuffer(
+                [
+                    CudaArray{
+                        ptr: colors_ptrs[0],
+                        length: 0,
+                    },
+                    CudaArray{
+                        ptr: colors_ptrs[1],
+                        length: 0,
+                    },
+                    CudaArray{
+                        ptr: colors_ptrs[2],
+                        length: 0,
+                    },
+                ]
+            ),
             x: TripleBuffer(make_fields(x_ptrs)),
             y: TripleBuffer(make_fields(y_ptrs)),
             z: TripleBuffer(make_fields(z_ptrs)),
@@ -345,6 +365,13 @@ impl<const SIZE: usize> PointCloud<SIZE> {
         self.timestamp.0.swap(idx_old, idx_new);
         self.ring.0.swap(idx_old, idx_new);
         self.is_dense.0.swap(idx_old, idx_new);
+        self.colors.0.swap(idx_old, idx_new);
+
+        tracing::info!(
+            "swapping {} -> {}",
+            queue_old,
+            queue_new
+        );
     }
 
     pub fn to_rerun(&self, queue: ProcessingQueue) -> impl Iterator<Item = [f32; 3]> + '_ {
@@ -357,5 +384,21 @@ impl<const SIZE: usize> PointCloud<SIZE> {
             .zip(zs)
             .filter(|((x, y), z)| !is_zero_point(**x, **y, **z))
             .map(|((&x, &y), &z)| [x, y, z])
+    }
+
+    pub fn to_rerun_colors(&self, queue: ProcessingQueue) -> impl Iterator<Item = Color> + '_ {
+        let len = self.len(queue);
+        
+        let xs = self.x[queue][..len].iter();
+        let ys = self.y[queue][..len].iter();
+        let zs = self.z[queue][..len].iter();
+        let colors = self.colors[queue][..len].iter();
+
+        xs.zip(ys)
+            .zip(zs)
+            .zip(colors)
+            // Распаковываем кортеж: (((x, y), z), color)
+            .filter(|&(((x, y), z), _color)| !is_zero_point(*x, *y, *z))
+            .map(|(_, &color)| color)
     }
 }

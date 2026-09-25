@@ -9934,6 +9934,7 @@ name = "ros2_data_extraction"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "rerun",
  "ros2-client",
  "rustdds",
  "shared",

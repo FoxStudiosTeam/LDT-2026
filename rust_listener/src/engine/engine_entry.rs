@@ -9,6 +9,7 @@ use shared::{
 };
 use tracing::*;
 
+use crate::engine::types::{AppEngine, Engine};
 use crate::{
     ENV,
     debug::{self, helper::DebugStream},
@@ -18,6 +19,7 @@ pub async fn entry(
     mut point_cloud_stream: PointCloudStream,
     recording_stream: RecordingStream,
     point_cloud: Arc<RwLock<AppPointCloud>>,
+    engine: Arc<AppEngine>,
 ) -> Result<(), AppError> {
     let recording_stream = Arc::new(recording_stream);
 
@@ -30,28 +32,11 @@ pub async fn entry(
 
         let point_cloud_lock = point_cloud.clone();
         let recording_stream = recording_stream.clone();
+        let engine = engine.clone();
 
         tokio::task::spawn_blocking(move || {
             let frame_start = std::time::Instant::now();
-
-            // 1. Ожидание лочки и переключение очередей (TripleBuffer swap)
-            let swap_start = std::time::Instant::now();
-            {
-                let mut point_cloud_write = point_cloud_lock.write().expect(&format!(
-                    "⚠️ Мутекс отравился ☠️ {} {}",
-                    file!(),
-                    line!()
-                ));
-                let next_pts = point_cloud_write.len(ProcessingQueue::NEXT);
-                let read_pts_old = point_cloud_write.len(ProcessingQueue::READ);
-                point_cloud_write.change_state(ProcessingQueue::NEXT, ProcessingQueue::READ);
-                let read_pts_new = point_cloud_write.len(ProcessingQueue::READ);
-
-                debug!(
-                    "[FRAME {frame_id}] Swapped queues in {:?}: NEXT had {next_pts} pts -> READ now has {read_pts_new} pts (was {read_pts_old})",
-                    swap_start.elapsed()
-                );
-            }
+            engine.check_tunnel().unwrap();
 
             // 2. Вычисляем статистику, строим RangeImage и извлекаем точки ПОД READ-ЛОКОМ,
             //    после чего НЕМЕДЛЕННО освобождаем лок, чтобы не задерживать ROS2 парсер.
@@ -91,9 +76,14 @@ pub async fn entry(
             );
             recording_stream.set_time_sequence("frame", frame_id as i64);
 
-            // 3. Отправка 3D облака и оверлеев в Rerun (БЕЗ удержания лока point_cloud!)
+            // 3. Отправка 3D облака и оверлеев в Rerun
             let rerun_cloud_start = std::time::Instant::now();
-            if let Err(e) = recording_stream.log_raw_points(&rerun_points) {
+            let point_cloud = point_cloud_lock.read().expect(&format!(
+                    "⚠️ Мутекс отравился ☠️ {} {}",
+                    file!(),
+                    line!()
+                ));
+            if let Err(e) = recording_stream.log_raw_points(&point_cloud) {
                 error!("Ошибка логирования облака точек в rerun: {e:?}");
             }
             if let Err(e) = recording_stream.log_debug_centroid(&stats) {
