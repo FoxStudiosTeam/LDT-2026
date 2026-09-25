@@ -17,20 +17,20 @@ except ImportError:
     HAVE_MPL = False
 
 
-def intensity_to_rgb(intensity: np.ndarray, colormap) -> np.ndarray:
-    threshold: float = 0.1
-    n_points = len(intensity)
-    # Создаем массив цветов по умолчанию (синий: R=0, G=0, B=255)
-    colors = np.zeros((n_points, 3), dtype=np.uint8)
-    colors[:, 2] = 255  # Blue
-
-    # Булева маска для точек выше порога
-    mask = intensity > threshold
-
-    # Задаем зеленый цвет для точек по маске (R=0, G=255, B=0)
-    colors[mask] = [0, 255, 0]
-
-    return colors
+def intensity_to_rgb(intensity: np.ndarray, colormap: str = "turbo") -> np.ndarray:
+    """
+    Преобразует массив интенсивностей [0.0, 1.0] в массив RGB-цветов (uint8)
+    с использованием непрерывной градиентной палитры Turbo.
+    """
+    intensity_clamped = np.clip(intensity / 255, 0.0, 1.0)
+    
+    cmap = plt.get_cmap('turbo')
+    
+    rgba_colors = cmap(intensity_clamped)
+    
+    rgb_colors = (rgba_colors[:, :3] * 255).astype(np.uint8)
+    
+    return rgb_colors
 
 
 def compute_range_and_intensity_maps(
@@ -149,6 +149,7 @@ def ransac_3d_rails(
     inlier_thresh: float = 0.085,
     gauge_nominal: float = 1.575,
     gauge_tol: float = 0.075,
+    extrapolate_m: float = 25.0,
 ) -> dict | None:
     """
     3D RANSAC for dual-rail track trajectory detection:
@@ -158,8 +159,9 @@ def ransac_3d_rails(
         with constant physical gauge (1.52..1.62m).
       - Scores inliers along the full corridor up to 45m ahead, giving higher weight
         to zero-intensity returns.
-      - Refines 3D polynomial trajectory (curvature in X, elevation in Z) and
-        generates 3D rails and cross-sleepers (шпалы).
+      - Refines 3D polynomial trajectory (cubic clothoid curve in X, elevation in Z).
+      - Extrapolates curve forward 'по накатанной' (constant-curvature C2 continuation)
+        by extrapolate_m meters beyond the last detected point.
     """
     # 1. Выделяем надежные якоря в ближней зоне (Y > -10м) с intensity == 0
     near_mask = (
@@ -341,6 +343,52 @@ def ransac_3d_rails(
             ], dtype=np.float32)
         )
 
+    # 4. Аналитическое продление "по накатанной" (C2-гладкое продолжение с установившейся кривизной)
+    ext_pts_left = None
+    ext_pts_right = None
+    ext_pts_center = None
+    ext_sleepers = []
+
+    if extrapolate_m > 0.0:
+        y0 = y_min
+        x0 = float(np.polyval(poly_x, y0))
+        z0 = float(np.polyval(poly_z, y0))
+
+        # Первая производная (тангенс курса) и вторая производная (кривизна) в конечной точке детекции
+        der1 = np.polyder(poly_x, 1)
+        der2 = np.polyder(poly_x, 2)
+        k0 = float(np.polyval(der1, y0))
+        curv0 = float(np.polyval(der2, y0))
+        # Ограничение физической кривизны ж/д пути (минимальный радиус круговой кривой R >= 140м)
+        curv0 = float(np.clip(curv0, -0.0035, 0.0035))
+        hz = float(poly_z[0]) if len(poly_z) > 1 else 0.0
+
+        s_steps = int(np.ceil(extrapolate_m / 0.25))
+        s_eval = np.linspace(0.25, extrapolate_m, s_steps)
+
+        # Движение вперед по расстоянию s: y(s) = y0 - s
+        # Поперечное смещение "по накатанной": x(s) = x0 - k0 * s + 0.5 * curv0 * s^2
+        y_ext = y0 - s_eval
+        x_ext = x0 - k0 * s_eval + 0.5 * curv0 * (s_eval ** 2)
+        z_ext = z0 - hz * s_eval
+
+        ext_pts_left = np.column_stack([x_ext - refined_half_w, y_ext, z_ext])
+        ext_pts_right = np.column_stack([x_ext + refined_half_w, y_ext, z_ext])
+        ext_pts_center = np.column_stack([x_ext, y_ext, z_ext])
+
+        # Шпалы на продленном участке
+        ext_sleeper_s = np.arange(0.6, extrapolate_m, 0.6)
+        for es in ext_sleeper_s:
+            e_y = y0 - es
+            e_x = x0 - k0 * es + 0.5 * curv0 * (es ** 2)
+            e_z = z0 - hz * es
+            ext_sleepers.append(
+                np.array([
+                    [e_x - refined_half_w - 0.2, e_y, e_z],
+                    [e_x + refined_half_w + 0.2, e_y, e_z],
+                ], dtype=np.float32)
+            )
+
     return {
         "poly_x": poly_x,
         "poly_z": poly_z,
@@ -352,6 +400,11 @@ def ransac_3d_rails(
         "pts_right": pts_right,
         "pts_center": pts_center,
         "sleepers": sleepers,
+        "ext_pts_left": ext_pts_left,
+        "ext_pts_right": ext_pts_right,
+        "ext_pts_center": ext_pts_center,
+        "ext_sleepers": ext_sleepers,
+        "extrapolate_m": extrapolate_m,
         "y_range": (y_min, y_max),
     }
 
@@ -373,12 +426,14 @@ def load_snapshot(file_path: str):
     return xyz, intensity, ts, meta
 
 
-def log_frame(xyz: np.ndarray, intensity: np.ndarray, ts: int, meta: dict, frame_idx: int):
-
-    mask = xyz[:, 2] >= -2.0 # УБИРАЕМ ШУМ
-    xyz = xyz[mask]
-    intensity = intensity[mask]
-
+def log_frame(
+    xyz: np.ndarray,
+    intensity: np.ndarray,
+    ts: int,
+    meta: dict,
+    frame_idx: int,
+    extrapolate_m: float = 25.0,
+):
     # 1. Timeline indexing
     if ts > 0:
         rr.set_time("ros_time", timestamp=np.datetime64(ts, "ns"))
@@ -419,26 +474,37 @@ def log_frame(xyz: np.ndarray, intensity: np.ndarray, ts: int, meta: dict, frame
     # rr.log("lidar/depth_intensity_composite", rr.Image(composite_img))
 
     # 5. 3D RANSAC определение пути железнодорожных путей
-    rail_res = ransac_3d_rails(xyz, intensity)
+    rail_res = ransac_3d_rails(xyz, intensity, extrapolate_m=extrapolate_m)
     rail_telemetry = "Rails: Not detected"
     if rail_res is not None:
-        # Непрерывные 3D линии рельсов и оси пути
+        # Непрерывные 3D линии рельсов и оси пути (подтвержденный точками участок)
         rr.log("rails/left_track", rr.LineStrips3D([rail_res["pts_left"]], colors=[0, 255, 100], radii=0.035))
         rr.log("rails/right_track", rr.LineStrips3D([rail_res["pts_right"]], colors=[0, 210, 255], radii=0.035))
         rr.log("rails/centerline", rr.LineStrips3D([rail_res["pts_center"]], colors=[255, 255, 255], radii=0.015))
 
-        # Шпалы (поперечные связи между рельсами)
+        # Шпалы на подтвержденном участке
         if rail_res["sleepers"]:
             rr.log("rails/sleepers", rr.LineStrips3D(rail_res["sleepers"], colors=[190, 160, 110], radii=0.018))
+
+        # Аналитически продленный участок "по накатанной"
+        if rail_res["ext_pts_left"] is not None:
+            rr.log("rails/extrapolated/left_track", rr.LineStrips3D([rail_res["ext_pts_left"]], colors=[255, 190, 40], radii=0.028))
+            rr.log("rails/extrapolated/right_track", rr.LineStrips3D([rail_res["ext_pts_right"]], colors=[255, 190, 40], radii=0.028))
+            rr.log("rails/extrapolated/centerline", rr.LineStrips3D([rail_res["ext_pts_center"]], colors=[255, 220, 120], radii=0.012))
+            if rail_res["ext_sleepers"]:
+                rr.log("rails/extrapolated/sleepers", rr.LineStrips3D(rail_res["ext_sleepers"], colors=[170, 140, 80], radii=0.015))
 
         # Найденные инлаеры рельсов и зерновые точки
         rr.log("rails/inliers_left", rr.Points3D(rail_res["inliers_left"], colors=[0, 255, 100], radii=0.03))
         rr.log("rails/inliers_right", rr.Points3D(rail_res["inliers_right"], colors=[0, 210, 255], radii=0.03))
         rr.log("rails/seeds_near_zero_intensity", rr.Points3D(rail_res["seeds_near"], colors=[255, 230, 0], radii=0.04))
 
+        det_range = -rail_res["y_range"][0] - (-rail_res["y_range"][1])
+        total_range = -rail_res["y_range"][0] + rail_res["extrapolate_m"]
         rail_telemetry = (
             f"Rails: Gauge={rail_res['gauge']:.3f}m | "
-            f"Range={-rail_res['y_range'][1]:.1f}m..{-rail_res['y_range'][0]:.1f}m | "
+            f"Detected={-rail_res['y_range'][1]:.1f}m..{-rail_res['y_range'][0]:.1f}m ({det_range:.1f}m) | "
+            f"Extrapolated=+{rail_res['extrapolate_m']:.1f}m (Total: {total_range:.1f}m) | "
             f"Inliers: L={len(rail_res['inliers_left'])}, R={len(rail_res['inliers_right'])}"
         )
 
@@ -469,6 +535,12 @@ def main():
     parser.add_argument("--spawn", action="store_true", help="Spawn local Rerun viewer window")
     parser.add_argument("--fps", type=float, default=2.0, help="Playback FPS (default: 2.0)")
     parser.add_argument("--loop", action="store_true", help="Loop playback continuously")
+    parser.add_argument(
+        "--extrapolate",
+        type=float,
+        default=25.0,
+        help="Analytical track extrapolation distance in meters 'по накатанной' (default: 25.0m, 0 to disable)",
+    )
     args = parser.parse_args()
 
     # Determine files to visualize
@@ -510,7 +582,7 @@ def main():
         while True:
             for idx, fpath in enumerate(files):
                 xyz, intensity, ts, meta = load_snapshot(fpath)
-                log_frame(xyz, intensity, ts, meta, idx)
+                log_frame(xyz, intensity, ts, meta, idx, extrapolate_m=args.extrapolate)
                 print(f"[{idx+1}/{len(files)}] Logged {meta['file']} ({len(xyz):,} pts, ts: {ts})")
                 if len(files) > 1 and delay > 0:
                     time.sleep(delay)

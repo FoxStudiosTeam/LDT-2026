@@ -124,6 +124,8 @@ impl DebugBox3D {
 pub trait DebugStream {
     fn log_raw_cloud(&self, point_cloud: &AppPointCloud) -> Result<(), AppError>;
     fn log_raw_points(&self, points: &[[f32; 3]]) -> Result<(), AppError>;
+    fn log_points_with_colors(&self, points: &[[f32; 3]], colors: &[Color])
+    -> Result<(), AppError>;
     fn log_debug_overlays(
         &self,
         point_cloud: &AppPointCloud,
@@ -202,6 +204,27 @@ impl DebugStream for RecordingStream {
             "lidar/raw",
             &Points3D::new(points)
                 .with_colors([Color::from_rgb(160, 185, 220)])
+                .with_radii([Radius::new_ui_points(1.2)]),
+        )
+        .app_error()?;
+
+        Ok(())
+    }
+
+    /// Логируем срез точек с индивидуальными цветами (например, intensity colormap)
+    fn log_points_with_colors(
+        &self,
+        points: &[[f32; 3]],
+        colors: &[Color],
+    ) -> Result<(), AppError> {
+        if points.is_empty() {
+            return Ok(());
+        }
+
+        self.log(
+            "lidar/raw",
+            &Points3D::new(points)
+                .with_colors(colors.iter().copied())
                 .with_radii([Radius::new_ui_points(1.2)]),
         )
         .app_error()?;

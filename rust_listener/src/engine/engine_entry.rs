@@ -20,7 +20,7 @@ pub async fn entry(
     point_cloud: Arc<RwLock<AppPointCloud>>,
 ) -> Result<(), AppError> {
     let recording_stream = Arc::new(recording_stream);
-    
+
     let mut processed_frames: u64 = 0;
     let mut begin_lock = ENV.BEGIN_TIMESTAMP > 0;
 
@@ -56,7 +56,6 @@ pub async fn entry(
 
         let frame_id = processed_frames;
 
-
         let point_cloud_lock = point_cloud.clone();
         let recording_stream: Arc<RecordingStream> = recording_stream.clone();
 
@@ -84,7 +83,7 @@ pub async fn entry(
             // 2. Вычисляем статистику, строим RangeImage и извлекаем точки ПОД READ-ЛОКОМ,
             //    после чего НЕМЕДЛЕННО освобождаем лок, чтобы не задерживать ROS2 парсер.
             let compute_start = std::time::Instant::now();
-            let (timestamp_ns, stats, rerun_points, range_image) = {
+            let (timestamp_ns, stats, rerun_points, rerun_intensities, rerun_colors, range_image) = {
                 let point_cloud = point_cloud_lock.read().expect(&format!(
                     "⚠️ Мутекс отравился ☠️ {} {}",
                     file!(),
@@ -94,19 +93,31 @@ pub async fn entry(
                 let number = ProcessingQueue::READ;
                 let timestamp_ns: i64 = point_cloud.timestamp[number];
 
-                    
                 // rerun log text
                 recording_stream.log("logs/text", &rerun::TextLog::new(format!("{timestamp_ns}"))).app_error().ok();
 
                 let stats = point_cloud.compute_stats(number);
-                let rerun_points: Vec<[f32; 3]> = point_cloud.to_rerun(number).collect();
+                let cap = point_cloud.len(number);
+                let mut rerun_points: Vec<[f32; 3]> = Vec::with_capacity(cap);
+                let mut rerun_intensities: Vec<f32> = Vec::with_capacity(cap);
+                let mut rerun_colors: Vec<rerun::Color> = Vec::with_capacity(cap);
+
+                for (&x, &y, &z, &intensity, _) in point_cloud.iter(number) {
+                    if shared::types::is_zero_point(x, y, z) {
+                        continue;
+                    }
+                    rerun_points.push([x, y, z]);
+                    rerun_intensities.push(intensity);
+                    rerun_colors.push(crate::engine::rail_curve::intensity_to_turbo_color(intensity));
+                }
+
                 let range_image = shared::range_image::RangeImage::from_pandar128_organized(
                     &point_cloud,
                     number,
                     1,
                 );
 
-                (timestamp_ns, stats, rerun_points, range_image)
+                (timestamp_ns, stats, rerun_points, rerun_intensities, rerun_colors, range_image)
             }; // <--- read-lock освобожден!
             let compute_dur = compute_start.elapsed();
 
@@ -124,9 +135,9 @@ pub async fn entry(
             );
             recording_stream.set_time_sequence("frame", frame_id as i64);
 
-            // 3. Отправка 3D облака и оверлеев в Rerun (БЕЗ удержания лока point_cloud!)
+            // 3. Отправка 3D облака (раскрашенного по intensity) и оверлеев в Rerun (БЕЗ удержания лока point_cloud!)
             let rerun_cloud_start = std::time::Instant::now();
-            if let Err(e) = recording_stream.log_raw_points(&rerun_points) {
+            if let Err(e) = recording_stream.log_points_with_colors(&rerun_points, &rerun_colors) {
                 error!("Ошибка логирования облака точек в rerun: {e:?}");
             }
             if let Err(e) = recording_stream.log_debug_centroid(&stats) {
@@ -136,6 +147,36 @@ pub async fn entry(
                 "[FRAME {frame_id}] Rerun 3D points & overlays send duration: {:?}",
                 rerun_cloud_start.elapsed()
             );
+
+            // 3.1. Расчет железнодорожной кривой (RANSAC + полиномы + прямизна) и логирование в Rerun
+            let rail_fit_start = std::time::Instant::now();
+            let rail_config = crate::engine::rail_curve::RailCurveConfig::default();
+            let rail_estimator = crate::engine::rail_curve::RailCurveEstimator::new(rail_config);
+            match rail_estimator.fit(&rerun_points, &rerun_intensities) {
+                Some(rail_result) => {
+                    let radius_str = rail_result
+                        .curve_radius_m
+                        .map(|r| format!("{r:.1}m"))
+                        .unwrap_or_else(|| "∞ (прямая)".to_string());
+                    info!(
+                        "[FRAME {frame_id}] Rail curve detected in {:?}: straightness={:.3}, radius={}, inliers_left={}, inliers_right={}",
+                        rail_fit_start.elapsed(),
+                        rail_result.straightness,
+                        radius_str,
+                        rail_result.inliers_left.len(),
+                        rail_result.inliers_right.len()
+                    );
+                    if let Err(e) = rail_result.log_to_rerun(&recording_stream) {
+                        error!("Ошибка логирования кривой рельсов в rerun: {e:?}");
+                    }
+                }
+                None => {
+                    debug!(
+                        "[FRAME {frame_id}] Rail curve not found ({:?})",
+                        rail_fit_start.elapsed()
+                    );
+                }
+            }
 
             // 4. Отправка 2D карты глубины и 4:3 превью в Rerun (БЕЗ удержания лока point_cloud!)
             let rerun_depth_start = std::time::Instant::now();
