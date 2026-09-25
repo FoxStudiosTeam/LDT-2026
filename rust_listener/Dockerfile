@@ -37,6 +37,8 @@ RUN mkdir -p \
         rust_listener/src/bin \
     && echo "fn main() {}" > rust_listener/src/main.rs \
     && echo "fn main() {}" > rust_listener/src/bin/rail_detector.rs \
+    && echo "fn main() {}" > rust_listener/src/bin/rail_tuner.rs \
+    && echo "fn main() {}" > rust_listener/src/bin/rail_tuner_2d.rs \
     && touch \
         cuda-pipeline/src/lib.rs \
         shared/src/lib.rs \

@@ -56,24 +56,32 @@ def find_default_frame(specified_path: str = None) -> str:
 
 def print_frame_statistics(frame: np.ndarray, file_path: str):
     """Computes and prints detailed value ranges and statistics."""
-    total_elements = frame.size
-    zero_count = np.count_nonzero(frame == 0.0)
+    if frame.ndim == 3:
+        range_data = frame[:, :, 0]
+        intensity_data = frame[:, :, 1]
+    else:
+        range_data = frame
+        intensity_data = None
+
+    total_elements = range_data.size
+    zero_count = np.count_nonzero(range_data == 0.0)
     zero_pct = (zero_count / total_elements) * 100.0
 
-    nan_count = int(np.isnan(frame).sum())
-    inf_count = int(np.isinf(frame).sum())
+    nan_count = int(np.isnan(range_data).sum())
+    inf_count = int(np.isinf(range_data).sum())
 
-    valid_mask = (frame > 0.0) & ~np.isnan(frame) & ~np.isinf(frame)
-    valid_values = frame[valid_mask]
+    valid_mask = (range_data > 0.0) & ~np.isnan(range_data) & ~np.isinf(range_data)
+    valid_values = range_data[valid_mask]
 
     print("=" * 65)
     print(" " * 18 + "FRAME RANGE & METRICS")
     print("=" * 65)
     print(f"File:            {os.path.abspath(file_path)}")
-    print(f"Dimensions:      {frame.shape[0]} rows x {frame.shape[1]} cols ({total_elements:,} points)")
+    channels_info = f", {frame.shape[2]} channels (Range + Intensity)" if frame.ndim == 3 else ""
+    print(f"Dimensions:      {range_data.shape[0]} rows x {range_data.shape[1]} cols ({total_elements:,} points){channels_info}")
     print(f"Data type:       {frame.dtype}")
     print("-" * 65)
-    print(f"Absolute range:  [{np.min(frame):.4f}, {np.max(frame):.4f}] m")
+    print(f"Absolute range:  [{np.min(range_data):.4f}, {np.max(range_data):.4f}] m")
     print(f"Zero values (0): {zero_count:,} ({zero_pct:.2f}%)")
     print(f"NaN / Inf:       NaN={nan_count}, Inf={inf_count}")
     print("-" * 65)
@@ -103,6 +111,15 @@ def print_frame_statistics(frame: np.ndarray, file_path: str):
         print(f"                         |   99%:          {p99:6.2f} m")
     else:
         print("Warning: No valid non-zero values found in frame!")
+
+    if intensity_data is not None:
+        valid_i = intensity_data[valid_mask]
+        print("-" * 65)
+        print("Intensity Channel (Reflectance):")
+        print(f"  Absolute range: [{np.min(intensity_data):.2f}, {np.max(intensity_data):.2f}]")
+        if len(valid_i) > 0:
+            print(f"  Mean (valid):   {np.mean(valid_i):.2f} (+/- {np.std(valid_i):.2f})")
+            print(f"  Median:         {np.median(valid_i):.2f}")
     print("=" * 65 + "\n")
 
 
@@ -110,6 +127,13 @@ def visualize_frame(
     frame: np.ndarray, file_path: str, save_path: str = None, no_show: bool = False
 ):
     """Renders multi-view matplotlib figure for the range image."""
+    if frame.ndim == 3:
+        range_frame = frame[:, :, 0]
+        intensity_frame = frame[:, :, 1]
+    else:
+        range_frame = frame
+        intensity_frame = None
+
     fig = plt.figure(figsize=(14, 9))
     try:
         fig.canvas.manager.set_window_title(f"LiDAR Frame Viewer - {os.path.basename(file_path)}")
@@ -120,7 +144,7 @@ def visualize_frame(
     cmap_full = plt.cm.turbo.copy()
     cmap_full.set_bad(color="#1a1a1a")
 
-    masked_full = np.ma.masked_equal(frame, 0.0)
+    masked_full = np.ma.masked_equal(range_frame, 0.0)
 
     # 1. Full Dynamic Range View
     ax1 = plt.subplot(2, 2, 1)
@@ -129,40 +153,58 @@ def visualize_frame(
     cbar1.set_label("Дистанция (м)", fontsize=10)
     ax1.set_title(
         f"1. Полный диапазон дальностей (Full Range)\n"
-        f"[{np.min(frame):.2f} .. {np.max(frame):.2f} м] | 0.0 = Нет отражения (черный)",
+        f"[{np.min(range_frame):.2f} .. {np.max(range_frame):.2f} м] | 0.0 = Нет отражения (черный)",
         fontsize=10,
     )
     ax1.set_xlabel("Столбец (Col / Азимут)")
     ax1.set_ylabel("Строка (Row / Угол места)")
 
-    # 2. Near-Range Detail (Operational Track Zone: 0..30m)
+    # 2. Intensity Map or Near-Range Detail
     ax2 = plt.subplot(2, 2, 2)
-    cmap_near = plt.cm.turbo.copy()
-    cmap_near.set_bad(color="#1a1a1a")
-    clipped_near = np.ma.masked_equal(np.clip(frame, 0.0, 30.0), 0.0)
-    im2 = ax2.imshow(
-        clipped_near,
-        cmap=cmap_near,
-        aspect="auto",
-        vmin=0.0,
-        vmax=30.0,
-        interpolation="nearest",
-    )
-    cbar2 = plt.colorbar(im2, ax=ax2, orientation="vertical", pad=0.02)
-    cbar2.set_label("Дистанция до 30м", fontsize=10)
-    ax2.set_title(
-        "2. Ближняя зона рельсового полотна (0 .. 30 м)\n"
-        "Контрастно выделяет профиль рельсов, шпал и балласта",
-        fontsize=10,
-    )
+    if intensity_frame is not None:
+        cmap_int = plt.cm.viridis.copy()
+        cmap_int.set_bad(color="#1a1a1a")
+        masked_int = np.ma.masked_equal(intensity_frame, 0.0)
+        im2 = ax2.imshow(
+            masked_int,
+            cmap=cmap_int,
+            aspect="auto",
+            interpolation="nearest",
+        )
+        cbar2 = plt.colorbar(im2, ax=ax2, orientation="vertical", pad=0.02)
+        cbar2.set_label("Интенсивность", fontsize=10)
+        ax2.set_title(
+            f"2. Карта интенсивности отражения (Intensity)\n"
+            f"[{np.min(intensity_frame):.1f} .. {np.max(intensity_frame):.1f}] | Отражательная способность",
+            fontsize=10,
+        )
+    else:
+        cmap_near = plt.cm.turbo.copy()
+        cmap_near.set_bad(color="#1a1a1a")
+        clipped_near = np.ma.masked_equal(np.clip(range_frame, 0.0, 30.0), 0.0)
+        im2 = ax2.imshow(
+            clipped_near,
+            cmap=cmap_near,
+            aspect="auto",
+            vmin=0.0,
+            vmax=30.0,
+            interpolation="nearest",
+        )
+        cbar2 = plt.colorbar(im2, ax=ax2, orientation="vertical", pad=0.02)
+        cbar2.set_label("Дистанция до 30м", fontsize=10)
+        ax2.set_title(
+            "2. Ближняя зона рельсового полотна (0 .. 30 м)\n"
+            "Контрастно выделяет профиль рельсов, шпал и балласта",
+            fontsize=10,
+        )
     ax2.set_xlabel("Столбец (Col / Азимут)")
     ax2.set_ylabel("Строка (Row / Угол места)")
 
     # 3. Horizontal Profile at center row (Ray slice)
     ax3 = plt.subplot(2, 2, 3)
-    valid_points = frame[frame > 0.0]
-    mid_row = frame.shape[0] // 2
-    row_slice = frame[mid_row, :]
+    valid_points = range_frame[range_frame > 0.0]
+    mid_row = range_frame.shape[0] // 2
+    row_slice = range_frame[mid_row, :]
     ax3.plot(row_slice, color="#007acc", lw=1.5, label=f"Строка {mid_row} (горизонт)")
     ax3.set_title(f"3. Горизонтальный срез дальности (Строка {mid_row})", fontsize=10)
     ax3.set_xlabel("Столбец (Col)")
@@ -188,9 +230,14 @@ def visualize_frame(
     ax4.set_ylabel("Количество точек")
     ax4.grid(True, linestyle="--", alpha=0.5)
 
+    title_chan = f" [{range_frame.shape[0]}x{range_frame.shape[1]}"
+    if intensity_frame is not None:
+        title_chan += " x 2 (Range+Intensity)]"
+    else:
+        title_chan += "]"
+
     plt.suptitle(
-        f"LDT-2026: Анализ Range Image — {os.path.basename(file_path)} "
-        f"[{frame.shape[0]}x{frame.shape[1]}]",
+        f"LDT-2026: Анализ Range Image — {os.path.basename(file_path)}{title_chan}",
         fontsize=13,
         fontweight="bold",
     )

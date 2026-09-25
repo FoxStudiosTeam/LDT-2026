@@ -1,0 +1,13 @@
+[package]
+name = "dev_pyrails_rust"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+shared = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+rerun = "0.37.2"
+eframe = "0.36.2"
+egui = "0.36.2"
+tokio = { version = "1", features = ["full"] }

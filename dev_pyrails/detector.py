@@ -27,6 +27,8 @@ class RailPoint:
     y_center: float
     z_center: float
     gauge: float
+    intensity_left: float = 0.0
+    intensity_right: float = 0.0
 
 
 @dataclass
@@ -61,6 +63,9 @@ class DetectionResult:
     y_ext_l: Optional[np.ndarray] = None
     x_ext_r: Optional[np.ndarray] = None
     y_ext_r: Optional[np.ndarray] = None
+    has_intensity: bool = False
+    avg_intensity_left: float = 0.0
+    avg_intensity_right: float = 0.0
 
     @property
     def y_ext_poly(self) -> Optional[np.ndarray]:
@@ -88,7 +93,7 @@ class RailTrackDetector:
         depth_step_thresh: float = 0.10,
         max_depth_step_thresh: float = 0.9,
         row_start_pct: float = 0.85,
-        row_end_pct: float = 0.5,
+        row_end_pct: float = 0.4,
         max_lateral_jump: float = 0.3,
         max_lateral_rail_jump: float = 0.1,
         extrapolate_m: float = 35.0,
@@ -116,10 +121,18 @@ class RailTrackDetector:
 
     def detect(self, frame: np.ndarray, frame_idx: int = 0) -> Optional[DetectionResult]:
         """
-        Analyzes a single range frame and returns DetectionResult or None if no track is found.
+        Analyzes a single range frame (2D or 3D multi-channel [H, W, 2])
+        and returns DetectionResult or None if no track is found.
         """
-        h, w = frame.shape
-        X, Y, Z = self.geo.range_image_to_xyz(frame)
+        if frame.ndim == 3:
+            range_frame = frame[:, :, 0]
+            intensity_frame = frame[:, :, 1]
+        else:
+            range_frame = frame
+            intensity_frame = None
+
+        h, w = range_frame.shape
+        X, Y, Z = self.geo.range_image_to_xyz(range_frame)
 
         candidates: List[RailPoint] = []
         prev_y_center: Optional[float] = None
@@ -132,7 +145,8 @@ class RailTrackDetector:
 
         # Scan rows from near (row_start) to far (row_end)
         for row in range(row_start, row_end, -2):
-            r_row = frame[row, :]
+            r_row = range_frame[row, :]
+            i_row = intensity_frame[row, :] if intensity_frame is not None else None
             diff_r = np.diff(r_row)
 
             pos_steps = np.where(
@@ -168,6 +182,9 @@ class RailTrackDetector:
                             elif xm < prev_x_center:
                                 continue
 
+                            il = float(i_row[col_l]) if i_row is not None else 0.0
+                            ir = float(i_row[col_r]) if i_row is not None else 0.0
+
                             pairs.append(
                                 RailPoint(
                                     row=row,
@@ -183,6 +200,8 @@ class RailTrackDetector:
                                     y_center=ym,
                                     z_center=zm,
                                     gauge=gauge,
+                                    intensity_left=il,
+                                    intensity_right=ir,
                                 )
                             )
 
@@ -333,6 +352,10 @@ class RailTrackDetector:
         total_checked_rows = abs(row_start - row_end) + 1
         confidence = min(1.0, len(candidates) / float(total_checked_rows))
 
+        has_intensity = intensity_frame is not None
+        avg_i_l = float(np.mean([pt.intensity_left for pt in candidates])) if has_intensity and candidates else 0.0
+        avg_i_r = float(np.mean([pt.intensity_right for pt in candidates])) if has_intensity and candidates else 0.0
+
         return DetectionResult(
             frame_idx=frame_idx,
             points=candidates,
@@ -362,4 +385,7 @@ class RailTrackDetector:
             y_ext_l=y_ext_l,
             x_ext_r=x_ext_r,
             y_ext_r=y_ext_r,
+            has_intensity=has_intensity,
+            avg_intensity_left=avg_i_l,
+            avg_intensity_right=avg_i_r,
         )

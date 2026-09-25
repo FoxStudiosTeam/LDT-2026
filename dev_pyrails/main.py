@@ -213,9 +213,10 @@ def main():
         return
 
     sample_frame = np.load(paths[0])
-    height, width = sample_frame.shape
-
-    print(f"Loaded range image geometry: {height}x{width}")
+    height, width = sample_frame.shape[:2]
+    has_intensity = sample_frame.ndim == 3 and sample_frame.shape[2] >= 2
+    channels_str = f", channels={sample_frame.shape[2]} (range + intensity)" if has_intensity else " (range only)"
+    print(f"Loaded range image geometry: {height}x{width}{channels_str}")
 
     geo = LidarGeometry(
         height=height,

@@ -3,7 +3,7 @@ members = [
     "cuda-pipeline",
     "rust_listener",
     "data-extraction",
-    "shared",
+    "shared", "dev_pyrails/dev_pyrails_rust",
 ]
 resolver = "2"
 

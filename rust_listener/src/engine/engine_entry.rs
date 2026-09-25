@@ -21,10 +21,14 @@ pub async fn entry(
 ) -> Result<(), AppError> {
     let recording_stream = Arc::new(recording_stream);
 
-    let rail_estimator = Arc::new(std::sync::Mutex::new(
-        crate::engine::rail_curve::RailCurveEstimator::new(
-            crate::engine::rail_curve::RailCurveConfig::default(),
-        ),
+    let rail_detector = Arc::new(std::sync::Mutex::new(
+        shared::rail_detection::RailTrackDetector::new(shared::rail_detection::LidarGeometry::new(
+            128,
+            140,
+            15.0,
+            -25.0,
+            ENV.PREVIEW_FOV_X_DEG,
+        )),
     ));
 
     let mut processed_frames: u64 = 0;
@@ -59,7 +63,7 @@ pub async fn entry(
 
         let point_cloud_lock = point_cloud.clone();
         let recording_stream: Arc<RecordingStream> = recording_stream.clone();
-        let rail_estimator_lock = rail_estimator.clone();
+        let rail_detector_lock = rail_detector.clone();
 
         tokio::task::spawn_blocking(move || {
             let frame_start = std::time::Instant::now();
@@ -85,7 +89,7 @@ pub async fn entry(
             // 2. Вычисляем статистику, строим RangeImage и извлекаем точки ПОД READ-ЛОКОМ,
             //    после чего НЕМЕДЛЕННО освобождаем лок, чтобы не задерживать ROS2 парсер.
             let compute_start = std::time::Instant::now();
-            let (timestamp_ns, stats, rerun_points, rerun_intensities, rerun_colors, range_image) = {
+            let (timestamp_ns, stats, rerun_points, _rerun_intensities, rerun_colors, range_image) = {
                 let point_cloud = point_cloud_lock.read().expect(&format!(
                     "⚠️ Мутекс отравился ☠️ {} {}",
                     file!(),
@@ -150,65 +154,80 @@ pub async fn entry(
                 rerun_cloud_start.elapsed()
             );
 
-            // 3.1. Расчет железнодорожной кривой (RANSAC + полиномы + прямизна + сглаживание по N фитам)
+            // 3.1. Подготовка 2D карты глубины (Range Image) и геометрии лидара
+            let crop_raw = range_image.crop_fov(ENV.PREVIEW_FOV_X_DEG);
+            let geo = shared::rail_detection::LidarGeometry::new(
+                crop_raw.height,
+                crop_raw.width,
+                15.0,
+                -25.0,
+                ENV.PREVIEW_FOV_X_DEG,
+            );
+
+            // 3.2. Поиск рельсов по перепадам дальности, валидация колеи и полиномиальная экстраполяция (dev_pyrails_rust)
             let rail_fit_start = std::time::Instant::now();
             let rail_result = {
-                let mut estimator = rail_estimator_lock.lock().unwrap();
-                estimator.fit(&rerun_points, &rerun_intensities)
+                let mut detector = rail_detector_lock.lock().unwrap();
+                if detector.geometry.height != crop_raw.height || detector.geometry.width != crop_raw.width {
+                    detector.geometry = geo.clone();
+                }
+                detector.detect(&crop_raw, frame_id as usize)
             };
             let rail_calc_dur = rail_fit_start.elapsed();
 
             info!(
-                "[FRAME {frame_id}] ⏱️ Расчет кривой рельсов занял: {:.2} мс ({:?})",
+                "[FRAME {frame_id}] ⏱️ Расчет кривой рельсов (2D Range Image) занял: {:.2} мс ({:?})",
                 rail_calc_dur.as_secs_f64() * 1000.0,
                 rail_calc_dur
             );
 
-            match rail_result {
-                Some(rail_result) => {
-                    let radius_str = rail_result
-                        .curve_radius_m
-                        .map(|r| format!("{r:.1}m"))
-                        .unwrap_or_else(|| "∞ (прямая)".to_string());
-                    let smooth_str = if rail_result.smoothed_frames_count > 1 {
-                        format!(" (сглажено по {} фитам)", rail_result.smoothed_frames_count)
+            match &rail_result {
+                Some(r) => {
+                    let radius_str = if r.turn_radius.is_infinite() || r.turn_radius > 9999.0 {
+                        "∞ (прямая)".to_string()
+                    } else {
+                        format!("{:.1}m ({})", r.turn_radius, r.turn_direction)
+                    };
+                    let intensity_str = if r.has_intensity {
+                        format!(
+                            ", intensity_L={:.1}, intensity_R={:.1}",
+                            r.avg_intensity_left, r.avg_intensity_right
+                        )
                     } else {
                         String::new()
                     };
-                    let coasting_str = if rail_result.is_coasting { " [COASTING]" } else { "" };
                     info!(
-                        "[FRAME {frame_id}] Rail curve detected{}{}: straightness={:.3}, radius={}, inliers_left={}, inliers_right={}",
-                        smooth_str,
-                        coasting_str,
-                        rail_result.straightness,
+                        "[FRAME {frame_id}] 🛤️ Rail track detected: gauge={:.3}m, radius={}, conf={:.1}%, points={}{}",
+                        r.gauge,
                         radius_str,
-                        rail_result.inliers_left.len(),
-                        rail_result.inliers_right.len()
+                        r.confidence * 100.0,
+                        r.points.len(),
+                        intensity_str
                     );
-                    if let Err(e) = rail_result.log_to_rerun(&recording_stream) {
-                        error!("Ошибка логирования кривой рельсов в rerun: {e:?}");
-                    }
                 }
                 None => {
-                    info!(
-                        "[FRAME {frame_id}] Rail curve not found",
-                    );
+                    info!("[FRAME {frame_id}] Rail track not found");
                 }
             }
 
-            // 4. Отправка 2D карты глубины и 4:3 превью в Rerun (БЕЗ удержания лока point_cloud!)
+            // 4. Отправка результатов детекции в Rerun:
+            //    Окно 1: 3D сцена с облаком точек, 3D кривыми путей и 3D экстраполяцией
+            if let Err(e) = recording_stream.log_rail_detection(rail_result.as_ref()) {
+                error!("Ошибка логирования 3D кривой рельсов в rerun: {e:?}");
+            }
+
+            //    Окно 2: 2D карта глубины с наложенными 2D путями и экстраполяцией (как в dev_pyrails_rust)
             let rerun_depth_start = std::time::Instant::now();
-            if let Err(e) = recording_stream.log_depth_image(&range_image, ENV.PREVIEW_FOV_X_DEG) {
-                error!("Ошибка логирования карты глубины в rerun: {e:?}");
+            if let Err(e) = recording_stream.log_rail_detection_2d(&crop_raw, &geo, rail_result.as_ref()) {
+                error!("Ошибка логирования 2D карты глубины в rerun: {e:?}");
             }
             debug!(
-                "[FRAME {frame_id}] Rerun depth image send duration: {:?}",
+                "[FRAME {frame_id}] Rerun 2D depth map send duration: {:?}",
                 rerun_depth_start.elapsed()
             );
 
             // 5. Сохранение сырых кадров без интерполяции для прототипирования на Python
             if !ENV.RENDER_PATH.is_empty() {
-                let crop_raw = range_image.crop_fov(ENV.PREVIEW_FOV_X_DEG);
                 let _ = std::fs::create_dir_all(&ENV.RENDER_PATH);
                 let file_path = format!("{}/frame_{frame_id:06}.npy", ENV.RENDER_PATH);
                 if let Err(e) = crop_raw.save_npy(&file_path) {

@@ -15,6 +15,10 @@ path = "src/bin/rail_detector.rs"
 name = "rail_tuner"
 path = "src/bin/rail_tuner.rs"
 
+[[bin]]
+name = "rail_tuner_2d"
+path = "src/bin/rail_tuner_2d.rs"
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
@@ -22,6 +26,7 @@ anyhow = "1"
 rerun = "0.37.2"
 eframe = "0.36.2"
 egui = "0.36.2"
+image = { version = "0.25", default-features = false, features = ["png"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 cdr = "0.2"
 byteorder = "1.5"

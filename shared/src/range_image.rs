@@ -1,7 +1,6 @@
 use crate::error::AppError;
 use crate::types::{AppPointCloud, ProcessingQueue};
 use rerun::DepthImage;
-use tracing::info;
 
 const PANDAR128_CHANNELS: usize = 128;
 
@@ -63,6 +62,8 @@ pub struct RangeImage {
     /// Прямой буфер глубин в метрах. Размер `width * height`.
     /// Непоражённые лучи / пропуски хранятся как `0.0`.
     pub data: Vec<f32>,
+    /// Прямой буфер интенсивности отражения. Размер `width * height`.
+    pub intensity: Vec<f32>,
 }
 
 /// Расчётная вертикальная геометрия Pandar128E3X.
@@ -97,17 +98,13 @@ impl Pandar128VerticalGeometry {
                 // Ch26 -> Ch90
                 26..=89 => 0.125,
 
-                // Ch90 -> Ch127
-                90..=126 => 0.5,
-
-                // Ch127 -> Ch128
-                127 => 1.0,
+                // Ch90 -> Ch128 (38 channels at 0.5 deg = 19.0 deg)
+                90..=127 => 0.5,
 
                 _ => unreachable!(),
             };
 
-            pitch_rad[channel] =
-                pitch_rad[channel - 1] - step_deg.to_radians();
+            pitch_rad[channel] = pitch_rad[channel - 1] - step_deg.to_radians();
         }
 
         Self { pitch_rad }
@@ -210,6 +207,7 @@ impl RangeImage {
             width,
             height,
             data: vec![0.0; width * height],
+            intensity: vec![0.0; width * height],
         }
     }
 
@@ -221,6 +219,23 @@ impl RangeImage {
     #[inline(always)]
     pub fn set(&mut self, row: usize, col: usize, val: f32) {
         self.data[row * self.width + col] = val;
+    }
+
+    #[inline(always)]
+    pub fn get_intensity(&self, row: usize, col: usize) -> f32 {
+        if self.intensity.is_empty() {
+            0.0
+        } else {
+            self.intensity[row * self.width + col]
+        }
+    }
+
+    #[inline(always)]
+    pub fn set_intensity(&mut self, row: usize, col: usize, val: f32) {
+        if self.intensity.is_empty() {
+            self.intensity = vec![0.0; self.width * self.height];
+        }
+        self.intensity[row * self.width + col] = val;
     }
 
     /// Быстрое формирование Range Image из организованного облака Hesai Pandar128E3X.
@@ -253,14 +268,12 @@ impl RangeImage {
         let inv_two_pi = 0.5 * std::f32::consts::FRAC_1_PI;
         let width_f = width as f32;
 
-        for (i, (&x, &y, &z, _, &r)) in cloud.iter(queue).enumerate() {
+        for (i, (&x, &y, &z, &intensity, &r)) in cloud.iter(queue).enumerate() {
             if i >= total_pts {
                 break;
             }
 
-            if (y.abs() < 1e-4 && z.abs() < 1e-4)
-                || (x == 0.0 && y == 0.0 && z == 0.0)
-            {
+            if (y.abs() < 1e-4 && z.abs() < 1e-4) || (x == 0.0 && y == 0.0 && z == 0.0) {
                 continue;
             }
 
@@ -275,8 +288,7 @@ impl RangeImage {
             let yaw = fast_atan2(-x, -y);
             let norm = (-yaw + pi) * inv_two_pi;
 
-            let col = ((norm * width_f) as usize)
-                .min(width - 1);
+            let col = ((norm * width_f) as usize).min(width - 1);
 
             let ring = r as usize;
 
@@ -286,11 +298,9 @@ impl RangeImage {
 
             let pitch_rad = geometry.pitch(ring);
 
-            let row = (
-                (PANDAR128_FOV_UP_DEG.to_radians() - pitch_rad)
-                    / PANDAR128_VERTICAL_STEP_HIGH_RES_DEG.to_radians()
-            )
-                .round() as usize;
+            let row = ((PANDAR128_FOV_UP_DEG.to_radians() - pitch_rad)
+                / PANDAR128_VERTICAL_STEP_HIGH_RES_DEG.to_radians())
+            .round() as usize;
 
             if row >= height {
                 continue;
@@ -300,10 +310,10 @@ impl RangeImage {
             let center_col = col as isize;
 
             // Сколько пикселей между соседними каналами по вертикали.
-            let row_radius =
-                (vertical_resolution_deg(ring+1) / PANDAR128_VERTICAL_STEP_HIGH_RES_DEG)
-                    .round() as isize
-                    - 1;
+            let row_radius = (vertical_resolution_deg(ring + 1)
+                / PANDAR128_VERTICAL_STEP_HIGH_RES_DEG)
+                .round() as isize
+                - 1;
 
             // Сколько пикселей между соседними измерениями по горизонтали.
             //
@@ -312,9 +322,7 @@ impl RangeImage {
             let horizontal_step_deg = 360.0 / width as f32;
 
             let col_radius =
-                (horizontal_resolution_deg(ring+1) / horizontal_step_deg)
-                    .round() as isize
-                    - 1;
+                (horizontal_resolution_deg(ring + 1) / horizontal_step_deg).round() as isize - 1;
 
             for dr in -row_radius..=row_radius {
                 for dc in -col_radius..=col_radius {
@@ -347,6 +355,7 @@ impl RangeImage {
 
                     if current == 0.0 || range < current {
                         image.data[idx] = range;
+                        image.intensity[idx] = intensity;
                     }
                 }
             }
@@ -361,6 +370,7 @@ impl RangeImage {
     pub fn fill_single_pixel_holes(&mut self) {
         let w = self.width;
         let h = self.height;
+        let has_intensity = !self.intensity.is_empty();
         for r in 0..h {
             let row_offset = r * w;
             for c in 1..w - 1 {
@@ -370,6 +380,10 @@ impl RangeImage {
                     let right = self.data[idx + 1];
                     if left > 0.0 && right > 0.0 && (left - right).abs() < 2.0 {
                         self.data[idx] = (left + right) * 0.5;
+                        if has_intensity {
+                            self.intensity[idx] =
+                                (self.intensity[idx - 1] + self.intensity[idx + 1]) * 0.5;
+                        }
                     } else if c + 2 < w
                         && left > 0.0
                         && self.data[idx + 2] > 0.0
@@ -378,6 +392,12 @@ impl RangeImage {
                         let r2 = self.data[idx + 2];
                         self.data[idx] = left * 0.67 + r2 * 0.33;
                         self.data[idx + 1] = left * 0.33 + r2 * 0.67;
+                        if has_intensity {
+                            let i_left = self.intensity[idx - 1];
+                            let i_r2 = self.intensity[idx + 2];
+                            self.intensity[idx] = i_left * 0.67 + i_r2 * 0.33;
+                            self.intensity[idx + 1] = i_left * 0.33 + i_r2 * 0.67;
+                        }
                     }
                 }
             }
@@ -401,10 +421,10 @@ impl RangeImage {
             return image;
         }
 
-        let fov_v_inv = 1.0 / total_fov_v;
+        let _fov_v_inv = 1.0 / total_fov_v;
         let two_pi = 2.0 * std::f32::consts::PI;
 
-        for (&x, &y, &z, _, &r) in cloud.iter(queue) {
+        for (&x, &y, &z, &intensity, &r) in cloud.iter(queue) {
             let r2 = x * x + y * y + z * z;
             if r2 < config.min_range_m * config.min_range_m
                 || r2 > config.max_range_m * config.max_range_m
@@ -413,12 +433,12 @@ impl RangeImage {
             }
 
             let range = r2.sqrt();
-            let pitch = (z / range).clamp(-1.0, 1.0).asin();
+            let _pitch = (z / range).clamp(-1.0, 1.0).asin();
             let yaw = fast_atan2(y, x); // [-PI, PI], 0 = вперед по оси X
 
             // Проекция по вертикали: pitch -> [0..height-1]
             // pitch = fov_up -> row 0 (верх), pitch = fov_down -> row height-1 (низ)
-            let vertical_geometry = Pandar128VerticalGeometry::new();
+            let _vertical_geometry = Pandar128VerticalGeometry::new();
 
             let row = r as usize;
 
@@ -435,6 +455,7 @@ impl RangeImage {
             let current = image.data[idx];
             if current == 0.0 || range < current {
                 image.data[idx] = range;
+                image.intensity[idx] = intensity;
             }
         }
 
@@ -452,11 +473,20 @@ impl RangeImage {
         let factor = factor.max(1);
         let new_height = self.height * factor;
         let mut new_data = Vec::with_capacity(new_height * self.width);
+        let mut new_intensity = Vec::with_capacity(new_height * self.width);
 
         for row in 0..self.height {
             let row_slice = &self.data[row * self.width..(row + 1) * self.width];
+            let int_slice = if !self.intensity.is_empty() {
+                &self.intensity[row * self.width..(row + 1) * self.width]
+            } else {
+                &[]
+            };
             for _ in 0..factor {
                 new_data.extend_from_slice(row_slice);
+                if !int_slice.is_empty() {
+                    new_intensity.extend_from_slice(int_slice);
+                }
             }
         }
 
@@ -464,6 +494,7 @@ impl RangeImage {
             width: self.width,
             height: new_height,
             data: new_data,
+            intensity: new_intensity,
         }
     }
 
@@ -530,6 +561,7 @@ impl RangeImage {
             width: target_w,
             height: target_h,
             data: out,
+            intensity: Vec::new(),
         }
     }
 
@@ -556,36 +588,97 @@ impl RangeImage {
         let actual_w = end_col - start_col;
 
         let mut out = vec![0.0_f32; self.height * actual_w];
+        let mut out_intensity = vec![0.0_f32; self.height * actual_w];
         for r in 0..self.height {
             let src_off = r * self.width + start_col;
             let dst_off = r * actual_w;
             out[dst_off..dst_off + actual_w]
                 .copy_from_slice(&self.data[src_off..src_off + actual_w]);
+            if !self.intensity.is_empty() {
+                out_intensity[dst_off..dst_off + actual_w]
+                    .copy_from_slice(&self.intensity[src_off..src_off + actual_w]);
+            }
         }
 
         Self {
             width: actual_w,
             height: self.height,
             data: out,
+            intensity: out_intensity,
         }
     }
 
-    /// Сохранение 2D матрицы дальности в стандартном формате NumPy `.npy` (v1.0, float32, C-order).
-    /// В Python читается мгновенно:
-    /// ```python
-    /// import numpy as np
-    /// depth = np.load("frame_000000.npy") # shape: (height, width), float32
-    /// ```
+    /// Сохранение матрицы дальности (и интенсивности, если доступна) в стандартном формате NumPy `.npy` (v1.0, float32, C-order).
+    /// Если доступна интенсивность, сохраняется 3D тензор формы (height, width, 2),
+    /// где [:, :, 0] — range (дальность в метрах), а [:, :, 1] — intensity (интенсивность).
+    /// Если интенсивности нет — стандартная 2D матрица формы (height, width).
     pub fn save_npy<P: AsRef<std::path::Path>>(&self, path: P) -> std::io::Result<()> {
         use std::io::Write;
         let mut file = std::fs::File::create(path)?;
         // Magic NPY v1.0
         file.write_all(b"\x93NUMPY\x01\x00")?;
+
+        let has_intensity = !self.intensity.is_empty() && self.intensity.len() == self.data.len();
+        let dict = if has_intensity {
+            format!(
+                "{{'descr': '<f4', 'fortran_order': False, 'shape': ({}, {}, 2)}}",
+                self.height, self.width
+            )
+        } else {
+            format!(
+                "{{'descr': '<f4', 'fortran_order': False, 'shape': ({}, {})}}",
+                self.height, self.width
+            )
+        };
+        let prefix_len = 10 + dict.len() + 1; // 10 bytes prefix + dict + '\n'
+        let pad_len = ((prefix_len + 63) / 64) * 64 - prefix_len;
+        let mut header = dict;
+        for _ in 0..pad_len {
+            header.push(' ');
+        }
+        header.push('\n');
+        let total_header_len = header.len() as u16;
+        file.write_all(&total_header_len.to_le_bytes())?;
+        file.write_all(header.as_bytes())?;
+
+        if has_intensity {
+            let mut interleaved = Vec::with_capacity(self.data.len() * 2);
+            for i in 0..self.data.len() {
+                interleaved.push(self.data[i]);
+                interleaved.push(self.intensity[i]);
+            }
+            let raw_bytes: &[u8] = unsafe {
+                std::slice::from_raw_parts(
+                    interleaved.as_ptr() as *const u8,
+                    interleaved.len() * std::mem::size_of::<f32>(),
+                )
+            };
+            file.write_all(raw_bytes)?;
+        } else {
+            let raw_bytes: &[u8] = unsafe {
+                std::slice::from_raw_parts(
+                    self.data.as_ptr() as *const u8,
+                    self.data.len() * std::mem::size_of::<f32>(),
+                )
+            };
+            file.write_all(raw_bytes)?;
+        }
+        Ok(())
+    }
+
+    /// Сохранение отдельной 2D матрицы интенсивности в `.npy` (v1.0, float32).
+    pub fn save_intensity_npy<P: AsRef<std::path::Path>>(&self, path: P) -> std::io::Result<()> {
+        use std::io::Write;
+        if self.intensity.is_empty() {
+            return Ok(());
+        }
+        let mut file = std::fs::File::create(path)?;
+        file.write_all(b"\x93NUMPY\x01\x00")?;
         let dict = format!(
             "{{'descr': '<f4', 'fortran_order': False, 'shape': ({}, {})}}",
             self.height, self.width
         );
-        let prefix_len = 10 + dict.len() + 1; // 10 bytes prefix + dict + '\n'
+        let prefix_len = 10 + dict.len() + 1;
         let pad_len = ((prefix_len + 63) / 64) * 64 - prefix_len;
         let mut header = dict;
         for _ in 0..pad_len {
@@ -597,15 +690,15 @@ impl RangeImage {
         file.write_all(header.as_bytes())?;
         let raw_bytes: &[u8] = unsafe {
             std::slice::from_raw_parts(
-                self.data.as_ptr() as *const u8,
-                self.data.len() * std::mem::size_of::<f32>(),
+                self.intensity.as_ptr() as *const u8,
+                self.intensity.len() * std::mem::size_of::<f32>(),
             )
         };
         file.write_all(raw_bytes)?;
         Ok(())
     }
 
-    /// Загрузка 2D матрицы дальности из стандартного формата NumPy `.npy` (v1.0, float32).
+    /// Загрузка 2D или 3D (2-канальной) матрицы из стандартного формата NumPy `.npy` (v1.0, float32).
     pub fn load_npy<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<Self> {
         let bytes = std::fs::read(path)?;
         if bytes.len() < 10 || &bytes[..6] != b"\x93NUMPY" {
@@ -626,16 +719,16 @@ impl RangeImage {
 
         let header_str = String::from_utf8_lossy(&bytes[10..prefix_len]);
         let shape_marker = "'shape':";
-        let shape_pos = header_str
-            .find(shape_marker)
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "No shape in header"))?;
+        let shape_pos = header_str.find(shape_marker).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "No shape in header")
+        })?;
         let sub = &header_str[shape_pos + shape_marker.len()..];
-        let p_start = sub
-            .find('(')
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "Malformed shape"))?;
-        let p_end = sub
-            .find(')')
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "Malformed shape"))?;
+        let p_start = sub.find('(').ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "Malformed shape")
+        })?;
+        let p_end = sub.find(')').ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "Malformed shape")
+        })?;
 
         let shape_parts: Vec<&str> = sub[p_start + 1..p_end]
             .split(',')
@@ -643,22 +736,38 @@ impl RangeImage {
             .filter(|s| !s.is_empty())
             .collect();
 
-        if shape_parts.len() != 2 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Expected 2D shape, got: {:?}", shape_parts),
-            ));
-        }
-
-        let height: usize = shape_parts[0]
-            .parse()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        let width: usize = shape_parts[1]
-            .parse()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let (height, width, channels) = match shape_parts.len() {
+            2 => {
+                let h: usize = shape_parts[0]
+                    .parse()
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+                let w: usize = shape_parts[1]
+                    .parse()
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+                (h, w, 1)
+            }
+            3 => {
+                let h: usize = shape_parts[0]
+                    .parse()
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+                let w: usize = shape_parts[1]
+                    .parse()
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+                let c: usize = shape_parts[2]
+                    .parse()
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+                (h, w, c)
+            }
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Expected 2D or 3D shape, got: {:?}", shape_parts),
+                ));
+            }
+        };
 
         let data_bytes = &bytes[prefix_len..];
-        let total_floats = height * width;
+        let total_floats = height * width * channels;
         if data_bytes.len() < total_floats * 4 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
@@ -666,15 +775,27 @@ impl RangeImage {
             ));
         }
 
-        let mut data = Vec::with_capacity(total_floats);
-        for chunk in data_bytes.chunks_exact(4).take(total_floats) {
-            data.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+        let mut data = Vec::with_capacity(height * width);
+        let mut intensity = Vec::with_capacity(height * width);
+
+        if channels == 2 {
+            for chunk in data_bytes.chunks_exact(8).take(height * width) {
+                let r = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                let i = f32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
+                data.push(r);
+                intensity.push(i);
+            }
+        } else {
+            for chunk in data_bytes.chunks_exact(4).take(height * width) {
+                data.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+            }
         }
 
         Ok(Self {
             width,
             height,
             data,
+            intensity,
         })
     }
 

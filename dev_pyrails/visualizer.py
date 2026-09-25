@@ -52,14 +52,19 @@ class RailVisualizer:
     def render_range_view(
         self, frame: np.ndarray, res: Optional[DetectionResult]
     ) -> np.ndarray:
-        h, w = frame.shape
+        if frame.ndim == 3:
+            range_frame = frame[:, :, 0]
+        else:
+            range_frame = frame
+
+        h, w = range_frame.shape
 
         # float32 distance -> [0, 1]
         normalized = np.clip(
-            frame / self.max_dist_m,
+            range_frame / self.max_dist_m,
             0.0,
             1.0,
-            )
+        )
 
         # Позиция внутри 256-цветной Turbo LUT
         pos = normalized * 255.0
@@ -81,7 +86,7 @@ class RailVisualizer:
         ).astype(np.uint8)
 
         # 0 = нет измерения
-        color_img[frame <= 0.0] = 0
+        color_img[range_frame <= 0.0] = 0
 
         # Увеличение
         vis = cv2.resize(
@@ -400,6 +405,8 @@ class RailVisualizer:
             ("Scanlines Found", f"{len(res.points)} / 48"),
             ("Confidence", f"{res.confidence * 100:.0f} %"),
         ]
+        if res.has_intensity:
+            metrics.append(("Intensity L/R", f"{res.avg_intensity_left:.0f} / {res.avg_intensity_right:.0f}"))
 
         y_offset = 135
         for label, val in metrics:

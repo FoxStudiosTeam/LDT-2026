@@ -2688,6 +2688,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "dev_pyrails_rust"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "eframe",
+ "egui",
+ "image",
+ "rerun",
+ "shared",
+ "tokio",
+]
+
+[[package]]
 name = "dify"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10042,6 +10055,7 @@ dependencies = [
  "eframe",
  "egui",
  "futures",
+ "image",
  "kaiv_utils",
  "rayon",
  "rerun",
