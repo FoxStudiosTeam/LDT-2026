@@ -412,6 +412,44 @@ impl Default for ObstacleConfig {
     }
 }
 
+/// Проецирует точку (x, y) ортогонально на кривую пути Y(X) = a*X^2 + b*X + c.
+/// Возвращает станцию пути xc вдоль оси X, где нормаль к кривой проходит через (x, y),
+/// угол касательной theta, знаковое латеральное смещение d_lat и высоту профиля z_surf_real.
+#[inline(always)]
+pub fn project_point_to_track(
+    x: f32,
+    y: f32,
+    poly_y: &[f32; 3],
+    poly_z: &[f32; 2],
+) -> (f32, f32, f32, f32) {
+    let poly_a = poly_y[0];
+    let poly_b = poly_y[1];
+    let poly_c = poly_y[2];
+
+    // Ищем xc: g(xc) = (x - xc) + (y - Y_c(xc)) * Y'_c(xc) = 0
+    let mut xc = x;
+    for _ in 0..2 {
+        let yc = poly_a * xc * xc + poly_b * xc + poly_c;
+        let k = 2.0 * poly_a * xc + poly_b;
+        let g = (x - xc) + (y - yc) * k;
+        let g_prime = -1.0 + (y - yc) * (2.0 * poly_a) - k * k;
+        xc -= g / g_prime;
+    }
+
+    let yc = poly_a * xc * xc + poly_b * xc + poly_c;
+    let k = 2.0 * poly_a * xc + poly_b;
+    let theta = k.atan();
+    let sin_t = theta.sin();
+    let cos_t = theta.cos();
+
+    // Знаковое расстояние от осевой линии вдоль нормали к кривой:
+    // Положительное — вправо (y > yc при theta=0), отрицательное — влево.
+    let d_lat = (y - yc) * cos_t - (x - xc) * sin_t;
+    let z_surf_real = poly_z[0] * xc + poly_z[1];
+
+    (xc, theta, d_lat, z_surf_real)
+}
+
 /// Обнаруженное препятствие на пути или в габарите приближения
 #[derive(Clone, Debug)]
 pub struct TrackObstacle {
@@ -491,6 +529,18 @@ impl RailTrackDetector {
 
     /// Analyzes a single range frame and returns DetectionResult or None if no track is found.
     pub fn detect(&mut self, frame: &RangeImage, frame_idx: usize) -> Option<DetectionResult> {
+        self.detect_with_raw(frame, None, frame_idx)
+    }
+
+    /// Analyzes range image for track detection (using active_frame, which may be curvature-warped)
+    /// and performs obstacle detection (preferring raw_frame with true physical coordinates if provided).
+    pub fn detect_with_raw(
+        &mut self,
+        active_frame: &RangeImage,
+        raw_frame: Option<&RangeImage>,
+        frame_idx: usize,
+    ) -> Option<DetectionResult> {
+        let frame = active_frame;
         let h = frame.height;
         let w = frame.width;
         let (x_arr, y_arr, z_arr) = self.geometry.range_image_to_xyz(frame);
@@ -992,7 +1042,19 @@ impl RailTrackDetector {
         };
 
         let obstacles = if self.obstacle_config.enabled {
-            self.detect_obstacles(frame, &poly_y, &poly_z, median_gauge, &self.obstacle_config)
+            let (obs_frame, is_warped) = if let Some(raw) = raw_frame {
+                (raw, false)
+            } else {
+                (frame, self.obstacle_config.upward_curvature.abs() > 1e-7)
+            };
+            self.detect_obstacles(
+                obs_frame,
+                &poly_y,
+                &poly_z,
+                median_gauge,
+                &self.obstacle_config,
+                is_warped,
+            )
         } else {
             Vec::new()
         };
@@ -1048,6 +1110,7 @@ impl RailTrackDetector {
         poly_z: &[f32; 2],
         gauge: f32,
         config: &ObstacleConfig,
+        is_warped: bool,
     ) -> Vec<TrackObstacle> {
         if !config.enabled {
             return Vec::new();
@@ -1059,9 +1122,6 @@ impl RailTrackDetector {
         if total == 0 {
             return Vec::new();
         }
-
-        let (poly_a, poly_b, poly_c) = (poly_y[0], poly_y[1], poly_y[2]);
-        let (poly_d, poly_e) = (poly_z[0], poly_z[1]);
 
         let half_w = config.clearance_width * 0.5;
         let half_g = gauge * 0.5;
@@ -1080,17 +1140,19 @@ impl RailTrackDetector {
                         if r < 0.5 || r > x_max * 1.5 {
                             continue;
                         }
-                        let (x, y, z_bent) = self.geometry.row_col_range_to_xyz(row, col, r);
-                        if x < x_min || x > x_max {
+                        let (x, y, z_frame) = self.geometry.row_col_range_to_xyz(row, col, r);
+                        let z_real = if is_warped {
+                            z_frame - config.upward_curvature * x * x
+                        } else {
+                            z_frame
+                        };
+
+                        let (xc, _theta, d_lat, z_surf_real) =
+                            project_point_to_track(x, y, poly_y, poly_z);
+                        if xc < x_min || xc > x_max {
                             continue;
                         }
-                        let y_c = poly_a * x * x + poly_b * x + poly_c;
-                        let k = 2.0 * poly_a * x + poly_b;
-                        let cos_th = 1.0 / (1.0 + k * k).sqrt();
-                        let d_lat = (y - y_c) * cos_th;
 
-                        let z_real = z_bent - config.upward_curvature * x * x;
-                        let z_surf_real = poly_d * x + poly_e;
                         let dz = z_real - z_surf_real;
 
                         if d_lat.abs() <= half_w
@@ -1111,27 +1173,32 @@ impl RailTrackDetector {
                         if r < 0.5 || r > x_max * 1.5 {
                             continue;
                         }
-                        let (x, y, z_bent) = self.geometry.row_col_range_to_xyz(row, col, r);
-                        if x < x_min || x > x_max {
-                            continue;
-                        }
-                        let y_c = poly_a * x * x + poly_b * x + poly_c;
-                        let d_lat = (y - y_c).abs();
-                        if d_lat > half_w {
+                        let (x, y, z_frame) = self.geometry.row_col_range_to_xyz(row, col, r);
+                        let z_real = if is_warped {
+                            z_frame - config.upward_curvature * x * x
+                        } else {
+                            z_frame
+                        };
+
+                        let (xc, _theta, d_lat, z_surf_real) =
+                            project_point_to_track(x, y, poly_y, poly_z);
+                        if xc < x_min || xc > x_max || d_lat.abs() > half_w {
                             continue;
                         }
 
-                        let z_real = z_bent - config.upward_curvature * x * x;
-                        let z_surf_real = poly_d * x + poly_e;
                         let dz = z_real - z_surf_real;
 
                         let idx = r_off + col;
                         let dir_z = self.geometry.dir_z[idx];
-                        let z_surf_bent = z_surf_real + config.upward_curvature * x * x;
-                        let r_ground = if dir_z < -0.01 {
-                            z_surf_bent / dir_z
+                        let z_surf_ref = if is_warped {
+                            z_surf_real + config.upward_curvature * xc * xc
                         } else {
-                            (x * x + y * y + z_surf_bent * z_surf_bent).sqrt()
+                            z_surf_real
+                        };
+                        let r_ground = if dir_z < -0.01 {
+                            z_surf_ref / dir_z
+                        } else {
+                            (x * x + y * y + z_surf_ref * z_surf_ref).sqrt()
                         };
                         let depth_diff = r_ground - r;
 
@@ -1154,17 +1221,19 @@ impl RailTrackDetector {
                         if r < 0.5 || r > x_max * 1.5 {
                             continue;
                         }
-                        let (x, y, z_bent) = self.geometry.row_col_range_to_xyz(row, col, r);
-                        if x < x_min || x > x_max {
+                        let (x, y, z_frame) = self.geometry.row_col_range_to_xyz(row, col, r);
+                        let z_real = if is_warped {
+                            z_frame - config.upward_curvature * x * x
+                        } else {
+                            z_frame
+                        };
+
+                        let (xc, _theta, d_lat, z_surf_real) =
+                            project_point_to_track(x, y, poly_y, poly_z);
+                        if xc < x_min || xc > x_max {
                             continue;
                         }
-                        let y_c = poly_a * x * x + poly_b * x + poly_c;
-                        let k = 2.0 * poly_a * x + poly_b;
-                        let cos_th = 1.0 / (1.0 + k * k).sqrt();
-                        let d_lat = (y - y_c) * cos_th;
 
-                        let z_real = z_bent - config.upward_curvature * x * x;
-                        let z_surf_real = poly_d * x + poly_e;
                         let dz = z_real - z_surf_real;
 
                         if d_lat.abs() <= half_w
@@ -1233,8 +1302,8 @@ impl RailTrackDetector {
                 let mut min_z = f32::MAX;
                 let mut max_z = f32::MIN;
 
-                let mut sum_x = 0.0;
-                let mut sum_y_off = 0.0;
+                let mut min_track_dist = f32::MAX;
+                let mut sum_lat_off = 0.0f32;
                 let mut max_dz = 0.0f32;
 
                 for &(r, c) in &cluster_cells {
@@ -1244,8 +1313,12 @@ impl RailTrackDetector {
                     row_max = row_max.max(r);
 
                     let rng = frame.data[r * w + c];
-                    let (x, y, z_bent) = self.geometry.row_col_range_to_xyz(r, c, rng);
-                    let z_real = z_bent - config.upward_curvature * x * x;
+                    let (x, y, z_frame) = self.geometry.row_col_range_to_xyz(r, c, rng);
+                    let z_real = if is_warped {
+                        z_frame - config.upward_curvature * x * x
+                    } else {
+                        z_frame
+                    };
 
                     min_x = min_x.min(x);
                     max_x = max_x.max(x);
@@ -1254,21 +1327,19 @@ impl RailTrackDetector {
                     min_z = min_z.min(z_real);
                     max_z = max_z.max(z_real);
 
-                    sum_x += x;
+                    let (xc, _theta, d_lat, z_surf_real) =
+                        project_point_to_track(x, y, poly_y, poly_z);
 
-                    let y_c = poly_a * x * x + poly_b * x + poly_c;
-                    sum_y_off += y - y_c;
-
-                    let z_surf_real = poly_d * x + poly_e;
+                    min_track_dist = min_track_dist.min(xc);
+                    sum_lat_off += d_lat;
                     max_dz = max_dz.max(z_real - z_surf_real);
                 }
 
                 let n_pts = cluster_cells.len() as f32;
-                let _mean_x = sum_x / n_pts;
-                let mean_y_off = sum_y_off / n_pts;
+                let mean_lat_off = sum_lat_off / n_pts;
 
-                // Препятствие критично, если проекция внутри колеи (половина колеи + 0.15м буфер)
-                let is_critical = mean_y_off.abs() <= (half_g + 0.15);
+                // Препятствие критично, если проекция внутри колеи (половина колеи + 0.10м буфер)
+                let is_critical = mean_lat_off.abs() <= (half_g + 0.10);
 
                 let size_m = [
                     (max_x - min_x).max(0.1),
@@ -1276,14 +1347,48 @@ impl RailTrackDetector {
                     (max_z - min_z).max(0.1),
                 ];
 
+                let bbox_2d = if !is_warped && config.upward_curvature.abs() > 1e-7 {
+                    // Проецируем 3D габарит кластера в искривленную систему координат для отображения в warped RangeImage
+                    let mut c_min = isize::MAX;
+                    let mut c_max = isize::MIN;
+                    let mut r_min = isize::MAX;
+                    let mut r_max = isize::MIN;
+                    for &px in &[min_x, max_x] {
+                        for &py in &[min_y, max_y] {
+                            for &pz in &[min_z, max_z] {
+                                let pz_bent = pz + config.upward_curvature * px * px;
+                                let (pr, pc) = self.geometry.xyz_to_row_col(px, py, pz_bent);
+                                if pr >= 0 && pc >= 0 {
+                                    r_min = r_min.min(pr);
+                                    r_max = r_max.max(pr);
+                                    c_min = c_min.min(pc);
+                                    c_max = c_max.max(pc);
+                                }
+                            }
+                        }
+                    }
+                    if c_min <= c_max && r_min <= r_max {
+                        [
+                            (c_min as usize).min(w - 1),
+                            (r_min as usize).min(h - 1),
+                            (c_max as usize).min(w - 1),
+                            (r_max as usize).min(h - 1),
+                        ]
+                    } else {
+                        [col_min, row_min, col_max, row_max]
+                    }
+                } else {
+                    [col_min, row_min, col_max, row_max]
+                };
+
                 obstacles.push(TrackObstacle {
                     id: obstacle_id,
-                    distance_along_track: min_x,
-                    lateral_offset: mean_y_off,
+                    distance_along_track: min_track_dist,
+                    lateral_offset: mean_lat_off,
                     height_above_rail: max_dz,
                     bbox_3d_min: [min_x, min_y, min_z],
                     bbox_3d_max: [max_x, max_y, max_z],
-                    bbox_2d: [col_min, row_min, col_max, row_max],
+                    bbox_2d,
                     points_count: cluster_cells.len(),
                     is_critical,
                     size_m,
@@ -1509,18 +1614,122 @@ mod tests {
 
         // Test HybridGrid
         cfg.mode = ObstacleDetectionMode::HybridGrid;
-        let obs = detector.detect_obstacles(&frame, &poly_y, &poly_z, 1.52, &cfg);
+        let obs = detector.detect_obstacles(&frame, &poly_y, &poly_z, 1.52, &cfg, false);
         assert!(!obs.is_empty(), "HybridGrid should detect obstacle");
         assert!(obs[0].is_critical, "Obstacle is right on track centerline");
 
         // Test Boxcast3D
         cfg.mode = ObstacleDetectionMode::Boxcast3D;
-        let obs_box = detector.detect_obstacles(&frame, &poly_y, &poly_z, 1.52, &cfg);
+        let obs_box = detector.detect_obstacles(&frame, &poly_y, &poly_z, 1.52, &cfg, false);
         assert!(!obs_box.is_empty(), "Boxcast3D should detect obstacle");
 
         // Test DepthMatrix2D
         cfg.mode = ObstacleDetectionMode::DepthMatrix2D;
-        let obs_mat = detector.detect_obstacles(&frame, &poly_y, &poly_z, 1.52, &cfg);
+        let obs_mat = detector.detect_obstacles(&frame, &poly_y, &poly_z, 1.52, &cfg, false);
         assert!(!obs_mat.is_empty(), "DepthMatrix2D should detect obstacle");
+    }
+
+    #[test]
+    fn test_project_point_to_track_and_shapecast_alignment() {
+        let poly_y = [0.001_f32, 0.05_f32, 0.0_f32];
+        let poly_z = [-0.01_f32, -1.2_f32];
+
+        let res = DetectionResult {
+            frame_idx: 0,
+            points: Vec::new(),
+            gauge: 1.52,
+            curvature_a: poly_y[0],
+            heading_b: poly_y[1],
+            offset_c: poly_y[2],
+            turn_radius: 500.0,
+            turn_direction: "CURVE RIGHT".to_string(),
+            lateral_shift_15m: 0.975,
+            poly_y,
+            poly_z,
+            x_curve: Vec::new(),
+            y_center: Vec::new(),
+            z_center: Vec::new(),
+            x_left: Vec::new(),
+            y_left: Vec::new(),
+            x_right: Vec::new(),
+            y_right: Vec::new(),
+            confidence: 1.0,
+            extrapolate_m: 0.0,
+            smooth_n: 1,
+            x_ext: Vec::new(),
+            y_ext: Vec::new(),
+            z_ext: Vec::new(),
+            x_ext_l: Vec::new(),
+            y_ext_l: Vec::new(),
+            x_ext_r: Vec::new(),
+            y_ext_r: Vec::new(),
+            has_intensity: false,
+            avg_intensity_left: 0.0,
+            avg_intensity_right: 0.0,
+            obstacles: Vec::new(),
+            clearance_width: 2.40,
+            min_height_above_rail: 0.15,
+            max_height_above_rail: 3.20,
+            max_distance_m: 60.0,
+            upward_curvature: 0.0,
+            obstacle_enabled: true,
+            is_real_coordinates: true,
+        };
+
+        let strips = res.shapecast_wireframe_3d();
+        assert!(
+            !strips.is_empty(),
+            "Shapecast wireframe should be generated"
+        );
+
+        let half_w = res.clearance_width * 0.5;
+
+        let line_bl = &strips[0]; // bottom-left line
+        let line_br = &strips[1]; // bottom-right line
+        let line_tl = &strips[2]; // top-left line
+        let line_tr = &strips[3]; // top-right line
+
+        for pt in line_bl {
+            let (xc, _theta, d_lat, z_surf) =
+                project_point_to_track(pt[0], pt[1], &poly_y, &poly_z);
+            assert!(xc >= 1.99 && xc <= 60.01, "xc station within bounds");
+            assert!(
+                (d_lat.abs() - half_w).abs() < 1e-3,
+                "d_lat should equal -half_w ({}), got {}",
+                -half_w,
+                d_lat
+            );
+            assert!(
+                (pt[2] - z_surf - res.min_height_above_rail).abs() < 1e-3,
+                "Height should match min_height_above_rail"
+            );
+        }
+
+        for pt in line_br {
+            let (xc, _theta, d_lat, z_surf) =
+                project_point_to_track(pt[0], pt[1], &poly_y, &poly_z);
+            assert!(xc >= 1.99 && xc <= 60.01);
+            assert!(
+                (d_lat.abs() - half_w).abs() < 1e-3,
+                "d_lat should equal +half_w ({}), got {}",
+                half_w,
+                d_lat
+            );
+            assert!((pt[2] - z_surf - res.min_height_above_rail).abs() < 1e-3);
+        }
+
+        for pt in line_tr {
+            let (_xc, _theta, d_lat, z_surf) =
+                project_point_to_track(pt[0], pt[1], &poly_y, &poly_z);
+            assert!((d_lat.abs() - half_w).abs() < 1e-3);
+            assert!((pt[2] - z_surf - res.max_height_above_rail).abs() < 1e-3);
+        }
+
+        for pt in line_tl {
+            let (_xc, _theta, d_lat, z_surf) =
+                project_point_to_track(pt[0], pt[1], &poly_y, &poly_z);
+            assert!((d_lat.abs() - half_w).abs() < 1e-3);
+            assert!((pt[2] - z_surf - res.max_height_above_rail).abs() < 1e-3);
+        }
     }
 }

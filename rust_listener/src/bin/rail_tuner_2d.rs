@@ -788,9 +788,11 @@ impl RailTuner2DApp {
 
         self.sync_detector_params();
 
-        // 2. Детекция путей на искривленном (выпрямленном) представлении
+        // 2. Детекция путей на искривленном (выпрямленном) представлении и габарита на истинных координатах
         let t0 = Instant::now();
-        let bent_res = self.detector.detect(&active_ri, frame.idx);
+        let bent_res = self
+            .detector
+            .detect_with_raw(&active_ri, Some(raw_ri), frame.idx);
         self.last_calc_dur = t0.elapsed();
 
         // 3. Восстановление истинных координат для Rerun и 3D мира:
@@ -883,12 +885,10 @@ impl eframe::App for RailTuner2DApp {
         if input.1 && self.current_frame_idx > 0 {
             self.current_frame_idx -= 1;
             self.detector.reset();
-            self.process_current_frame();
         }
         let total_loaded = self.dataset.loaded_count.load(Ordering::Relaxed);
         if input.2 && self.current_frame_idx + 1 < total_loaded {
             self.current_frame_idx += 1;
-            self.process_current_frame();
         }
 
         // Playback ticker
@@ -902,12 +902,11 @@ impl eframe::App for RailTuner2DApp {
                     self.current_frame_idx = 0;
                     self.detector.reset();
                 }
-                self.process_current_frame();
             }
             ui.ctx().request_repaint();
         }
 
-        // Initial process
+        // Process frame if frame changed or not painted yet
         if self.last_painted_frame != Some(self.current_frame_idx) && total_loaded > 0 {
             self.process_current_frame();
             self.last_painted_frame = Some(self.current_frame_idx);
@@ -1035,13 +1034,11 @@ impl eframe::App for RailTuner2DApp {
                         if ui.button("⏮ Prev").clicked() && self.current_frame_idx > 0 {
                             self.current_frame_idx -= 1;
                             self.detector.reset();
-                            self.process_current_frame();
                         }
                         if ui.button("⏭ Next").clicked()
                             && self.current_frame_idx + 1 < total_loaded
                         {
                             self.current_frame_idx += 1;
-                            self.process_current_frame();
                         }
                         ui.label(format!(
                             "Frame {} / {}",
@@ -1066,7 +1063,6 @@ impl eframe::App for RailTuner2DApp {
                         {
                             self.current_frame_idx = slider_idx;
                             self.detector.reset();
-                            self.process_current_frame();
                         }
                     }
                 });
@@ -1495,13 +1491,13 @@ impl eframe::App for RailTuner2DApp {
                     });
 
                     if layer_changed {
-                        self.process_current_frame();
                         let lock = self.dataset.frames.read().unwrap();
                         if self.current_frame_idx < lock.len() {
                             let f = &lock[self.current_frame_idx];
+                            let active_ri = self.active_range_image.as_ref().unwrap_or(&f.range_image);
                             let color_img = self.painter.paint(
-                                &f.range_image,
-                                self.last_res.as_ref(),
+                                active_ri,
+                                self.last_bent_res.as_ref(),
                                 &self.detector.geometry,
                                 self.clearance_width,
                                 &self.layer_cfg,
@@ -1534,7 +1530,7 @@ impl eframe::App for RailTuner2DApp {
                                 ui.colored_label(Color32::from_rgb(0, 255, 60), "■ Centerline");
                                 ui.colored_label(Color32::from_rgb(255, 0, 255), "■ Extrapolation");
                                 ui.colored_label(Color32::from_rgb(180, 220, 180), "■ Sleepers");
-                                ui.colored_label(Color32::from_rgb(240, 200, 50), "--- Clearance");
+                                ui.colored_label(Color32::from_rgb(0, 220, 220), "⬚ Shapecast");
                                 ui.colored_label(Color32::RED, "■ Critical Obstacle");
                                 ui.colored_label(Color32::from_rgb(255, 170, 0), "■ Clearance Intrusion");
                             });

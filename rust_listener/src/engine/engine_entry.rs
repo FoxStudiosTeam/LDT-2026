@@ -207,7 +207,7 @@ pub async fn entry(
                 if detector.geometry.height != crop_active.height || detector.geometry.width != crop_active.width {
                     detector.geometry = geo.clone();
                 }
-                detector.detect(&crop_active, frame_id as usize)
+                detector.detect_with_raw(&crop_active, Some(&crop_raw), frame_id as usize)
             };
             let rail_calc_dur = rail_fit_start.elapsed();
 
