@@ -231,12 +231,6 @@ impl DetectionResult {
             p.z_right -= cz * p.x_right * p.x_right;
             p.z_center -= cz * p.x_center * p.x_center;
         }
-        for o in &mut self.obstacles {
-            let x = 0.5 * (o.bbox_3d_min[0] + o.bbox_3d_max[0]);
-            let dz = cz * x * x;
-            o.bbox_3d_min[2] -= dz;
-            o.bbox_3d_max[2] -= dz;
-        }
         self.is_real_coordinates = true;
     }
 
@@ -256,7 +250,9 @@ impl DetectionResult {
 
     /// Генерирует 3D полилинии (wireframe strips) для визуализации шейпкаста габарита приближения:
     /// Коридор шейпкаста строится непосредственно вдоль аналитической кривой пути
-    /// от x_min (2.0 м перед лидаром) до x_max = max_distance_m с квадратичным подъемом вверх по глубине:
+    /// от x_min (2.0 м перед лидаром) до x_max = max_distance_m:
+    /// - В реальных координатах (is_real_coordinates = true) строго следует профилю полотна poly_z[0]*X + poly_z[1]
+    /// - В искривленных координатах (is_real_coordinates = false) добавляет upward_curvature * X^2 для точной проекции в warped RangeImage
     /// - 4 продольные грани туннеля (нижняя левая/правая, верхняя левая/правая)
     /// - Поперечные прямоугольные рамки (шпангоуты) с шагом ~4 м вдоль кривой
     /// - Торцевые диагональные крестовины (порталы входа и выхода)
@@ -1084,7 +1080,7 @@ impl RailTrackDetector {
                         if r < 0.5 || r > x_max * 1.5 {
                             continue;
                         }
-                        let (x, y, z) = self.geometry.row_col_range_to_xyz(row, col, r);
+                        let (x, y, z_bent) = self.geometry.row_col_range_to_xyz(row, col, r);
                         if x < x_min || x > x_max {
                             continue;
                         }
@@ -1093,8 +1089,9 @@ impl RailTrackDetector {
                         let cos_th = 1.0 / (1.0 + k * k).sqrt();
                         let d_lat = (y - y_c) * cos_th;
 
-                        let z_surf = poly_d * x + poly_e + config.upward_curvature * x * x;
-                        let dz = z - z_surf;
+                        let z_real = z_bent - config.upward_curvature * x * x;
+                        let z_surf_real = poly_d * x + poly_e;
+                        let dz = z_real - z_surf_real;
 
                         if d_lat.abs() <= half_w
                             && dz >= config.min_height_above_rail
@@ -1114,7 +1111,7 @@ impl RailTrackDetector {
                         if r < 0.5 || r > x_max * 1.5 {
                             continue;
                         }
-                        let (x, y, z) = self.geometry.row_col_range_to_xyz(row, col, r);
+                        let (x, y, z_bent) = self.geometry.row_col_range_to_xyz(row, col, r);
                         if x < x_min || x > x_max {
                             continue;
                         }
@@ -1124,15 +1121,17 @@ impl RailTrackDetector {
                             continue;
                         }
 
-                        let z_surf = poly_d * x + poly_e + config.upward_curvature * x * x;
-                        let dz = z - z_surf;
+                        let z_real = z_bent - config.upward_curvature * x * x;
+                        let z_surf_real = poly_d * x + poly_e;
+                        let dz = z_real - z_surf_real;
 
                         let idx = r_off + col;
                         let dir_z = self.geometry.dir_z[idx];
+                        let z_surf_bent = z_surf_real + config.upward_curvature * x * x;
                         let r_ground = if dir_z < -0.01 {
-                            z_surf / dir_z
+                            z_surf_bent / dir_z
                         } else {
-                            (x * x + y * y + z_surf * z_surf).sqrt()
+                            (x * x + y * y + z_surf_bent * z_surf_bent).sqrt()
                         };
                         let depth_diff = r_ground - r;
 
@@ -1155,7 +1154,7 @@ impl RailTrackDetector {
                         if r < 0.5 || r > x_max * 1.5 {
                             continue;
                         }
-                        let (x, y, z) = self.geometry.row_col_range_to_xyz(row, col, r);
+                        let (x, y, z_bent) = self.geometry.row_col_range_to_xyz(row, col, r);
                         if x < x_min || x > x_max {
                             continue;
                         }
@@ -1164,8 +1163,9 @@ impl RailTrackDetector {
                         let cos_th = 1.0 / (1.0 + k * k).sqrt();
                         let d_lat = (y - y_c) * cos_th;
 
-                        let z_surf = poly_d * x + poly_e + config.upward_curvature * x * x;
-                        let dz = z - z_surf;
+                        let z_real = z_bent - config.upward_curvature * x * x;
+                        let z_surf_real = poly_d * x + poly_e;
+                        let dz = z_real - z_surf_real;
 
                         if d_lat.abs() <= half_w
                             && dz >= config.min_height_above_rail
@@ -1244,22 +1244,23 @@ impl RailTrackDetector {
                     row_max = row_max.max(r);
 
                     let rng = frame.data[r * w + c];
-                    let (x, y, z) = self.geometry.row_col_range_to_xyz(r, c, rng);
+                    let (x, y, z_bent) = self.geometry.row_col_range_to_xyz(r, c, rng);
+                    let z_real = z_bent - config.upward_curvature * x * x;
 
                     min_x = min_x.min(x);
                     max_x = max_x.max(x);
                     min_y = min_y.min(y);
                     max_y = max_y.max(y);
-                    min_z = min_z.min(z);
-                    max_z = max_z.max(z);
+                    min_z = min_z.min(z_real);
+                    max_z = max_z.max(z_real);
 
                     sum_x += x;
 
                     let y_c = poly_a * x * x + poly_b * x + poly_c;
                     sum_y_off += y - y_c;
 
-                    let z_surf = poly_d * x + poly_e + config.upward_curvature * x * x;
-                    max_dz = max_dz.max(z - z_surf);
+                    let z_surf_real = poly_d * x + poly_e;
+                    max_dz = max_dz.max(z_real - z_surf_real);
                 }
 
                 let n_pts = cluster_cells.len() as f32;
@@ -1431,11 +1432,12 @@ mod tests {
             );
             assert_eq!(res.turn_direction, "CURVE LEFT");
             println!(
-                "Rust Detector: Gauge={:.4}, Radius={:.1}, Points={}, Dir={}",
+                "Rust Detector: Gauge={:.4}, Radius={:.1}, Points={}, Dir={}, poly_z={:?}",
                 res.gauge,
                 res.turn_radius,
                 res.points.len(),
-                res.turn_direction
+                res.turn_direction,
+                res.poly_z
             );
         }
     }
