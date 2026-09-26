@@ -745,8 +745,30 @@ impl DebugStream for RecordingStream {
                     &Boxes3D::from_centers_and_sizes([] as [[f32; 3]; 0], [] as [[f32; 3]; 0]),
                 );
             }
+
+            // 8. Clearance corridor shapecast / boxcast 3D wireframe
+            let shapecast_3d = r.shapecast_wireframe_3d();
+            if !shapecast_3d.is_empty() {
+                let col = r.shapecast_color();
+                self.log(
+                    "tracks/3d/shapecast",
+                    &LineStrips3D::new(shapecast_3d)
+                        .with_colors([Color::from_rgb(col[0], col[1], col[2])])
+                        .with_radii([Radius::new_ui_points(1.2)]),
+                )
+                .app_error()?;
+            } else {
+                let _ = self.log(
+                    "tracks/3d/shapecast",
+                    &LineStrips3D::new([] as [Vec<[f32; 3]>; 0]),
+                );
+            }
         } else {
             // Clear visualization on frames where no track detected
+            let _ = self.log(
+                "tracks/3d/shapecast",
+                &LineStrips3D::new([] as [Vec<[f32; 3]>; 0]),
+            );
             let _ = self.log(
                 "tracks/3d/centerline",
                 &LineStrips3D::new([] as [Vec<[f32; 3]>; 0]),
@@ -806,7 +828,8 @@ impl DebugStream for RecordingStream {
         // 1.1. Логируем 2D слой интенсивности (Image) в entity "depth_map/intensity"
         if !crop_frame.intensity.is_empty() {
             if let Ok(intensity_img) = crop_frame.to_rerun_intensity() {
-                self.log("depth_map/intensity", &intensity_img).app_error()?;
+                self.log("depth_map/intensity", &intensity_img)
+                    .app_error()?;
             }
         }
 
@@ -1028,8 +1051,30 @@ impl DebugStream for RecordingStream {
                     &Boxes2D::from_mins_and_sizes([] as [[f32; 2]; 0], [] as [[f32; 2]; 0]),
                 );
             }
+
+            // 8. Clearance corridor shapecast 2D wireframe
+            let shapecast_2d = r.shapecast_wireframe_2d(geo);
+            if !shapecast_2d.is_empty() {
+                let col = r.shapecast_color();
+                self.log(
+                    "depth_map/tracks/shapecast",
+                    &LineStrips2D::new(shapecast_2d)
+                        .with_colors([Color::from_rgb(col[0], col[1], col[2])])
+                        .with_radii([Radius::new_ui_points(1.2)]),
+                )
+                .app_error()?;
+            } else {
+                let _ = self.log(
+                    "depth_map/tracks/shapecast",
+                    &LineStrips2D::new([] as [Vec<[f32; 2]>; 0]),
+                );
+            }
         } else {
             // Clear 2D track overlays
+            let _ = self.log(
+                "depth_map/tracks/shapecast",
+                &LineStrips2D::new([] as [Vec<[f32; 2]>; 0]),
+            );
             let _ = self.log(
                 "depth_map/tracks/obstacles",
                 &Boxes2D::from_mins_and_sizes([] as [[f32; 2]; 0], [] as [[f32; 2]; 0]),

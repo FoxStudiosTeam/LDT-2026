@@ -196,6 +196,136 @@ pub struct DetectionResult {
     pub avg_intensity_right: f32,
     // Препятствия на пути и в габарите
     pub obstacles: Vec<TrackObstacle>,
+    // Параметры габарита приближения (шейпкаст / бокскаст)
+    pub clearance_width: f32,
+    pub min_height_above_rail: f32,
+    pub max_height_above_rail: f32,
+    pub max_distance_m: f32,
+    pub obstacle_enabled: bool,
+}
+
+impl DetectionResult {
+    /// Возвращает цвет RGB для шейпкаста: Красный при критическом препятствии на колее,
+    /// Янтарный при препятствии в габарите, Бирюзовый/Циан при свободном пути.
+    pub fn shapecast_color(&self) -> [u8; 3] {
+        let num_crit = self.obstacles.iter().filter(|o| o.is_critical).count();
+        let num_warn = self.obstacles.len() - num_crit;
+        if num_crit > 0 {
+            [255, 30, 30] // Alert Red
+        } else if num_warn > 0 {
+            [255, 170, 0] // Warning Amber
+        } else {
+            [0, 220, 220] // Calm Cyan / Clear
+        }
+    }
+
+    /// Генерирует 3D полилинии (wireframe strips) для визуализации шейпкаста габарита приближения:
+    /// Коридор шейпкаста строится непосредственно вдоль аналитической кривой пути
+    /// от x_min (2.0 м перед лидаром) до x_max = max_distance_m:
+    /// - 4 продольные грани туннеля (нижняя левая/правая, верхняя левая/правая)
+    /// - Поперечные прямоугольные рамки (шпангоуты) с шагом ~4 м вдоль кривой
+    /// - Торцевые диагональные крестовины (порталы входа и выхода)
+    pub fn shapecast_wireframe_3d(&self) -> Vec<Vec<[f32; 3]>> {
+        if !self.obstacle_enabled || self.max_distance_m <= 2.0 || self.clearance_width <= 0.0 {
+            return Vec::new();
+        }
+
+        let x_min = 2.0_f32;
+        let x_max = self.max_distance_m;
+        if x_max <= x_min {
+            return Vec::new();
+        }
+
+        // Дискретизация вдоль аналитической траектории пути с шагом 0.5 м
+        let step_m = 0.5_f32;
+        let num_steps = ((x_max - x_min) / step_m).round().max(10.0) as usize;
+
+        let half_w = self.clearance_width * 0.5;
+        let mut line_bl = Vec::with_capacity(num_steps + 1);
+        let mut line_br = Vec::with_capacity(num_steps + 1);
+        let mut line_tl = Vec::with_capacity(num_steps + 1);
+        let mut line_tr = Vec::with_capacity(num_steps + 1);
+        let mut frames = Vec::new();
+
+        // Поперечные рамки-шпангоуты примерно каждые 4 метра
+        let hoop_dist_m = 4.0_f32;
+        let hoop_step = ((hoop_dist_m / step_m).round().max(1.0)) as usize;
+
+        for i in 0..=num_steps {
+            let t = (i as f32) / (num_steps as f32);
+            let x = x_min + t * (x_max - x_min);
+
+            let y_c = self.poly_y[0] * x * x + self.poly_y[1] * x + self.poly_y[2];
+            let z_surf = self.poly_z[0] * x + self.poly_z[1];
+            let dy_dx = 2.0 * self.poly_y[0] * x + self.poly_y[1];
+            let theta = dy_dx.atan();
+            let sin_t = theta.sin();
+            let cos_t = theta.cos();
+
+            let xl = x + half_w * sin_t;
+            let yl = y_c - half_w * cos_t;
+            let xr = x - half_w * sin_t;
+            let yr = y_c + half_w * cos_t;
+
+            let zb = z_surf + self.min_height_above_rail;
+            let zt = z_surf + self.max_height_above_rail;
+
+            let p_bl = [xl, yl, zb];
+            let p_br = [xr, yr, zb];
+            let p_tr = [xr, yr, zt];
+            let p_tl = [xl, yl, zt];
+
+            line_bl.push(p_bl);
+            line_br.push(p_br);
+            line_tr.push(p_tr);
+            line_tl.push(p_tl);
+
+            if i % hoop_step == 0 || i == num_steps {
+                frames.push(vec![p_bl, p_br, p_tr, p_tl, p_bl]);
+                if i == 0 || i == num_steps {
+                    frames.push(vec![p_bl, p_tr]);
+                    frames.push(vec![p_br, p_tl]);
+                }
+            }
+        }
+
+        let mut strips = Vec::with_capacity(4 + frames.len());
+        strips.push(line_bl);
+        strips.push(line_br);
+        strips.push(line_tl);
+        strips.push(line_tr);
+        strips.extend(frames);
+        strips
+    }
+
+    /// Проецирует 3D полилинии шейпкаста габарита на 2D Range Image в пиксели [col, row].
+    pub fn shapecast_wireframe_2d(&self, geo: &LidarGeometry) -> Vec<Vec<[f32; 2]>> {
+        let strips_3d = self.shapecast_wireframe_3d();
+        let h = geo.height;
+        let w = geo.width;
+        let mut strips_2d = Vec::new();
+
+        for strip in strips_3d {
+            let mut cur_sub_strip = Vec::new();
+            for p in strip {
+                let (row, col) = geo.xyz_to_row_col(p[0], p[1], p[2]);
+                if row >= 0 && (row as usize) < h && col >= 0 && (col as usize) < w {
+                    cur_sub_strip.push([col as f32, row as f32]);
+                } else {
+                    if cur_sub_strip.len() >= 2 {
+                        strips_2d.push(std::mem::take(&mut cur_sub_strip));
+                    } else {
+                        cur_sub_strip.clear();
+                    }
+                }
+            }
+            if cur_sub_strip.len() >= 2 {
+                strips_2d.push(cur_sub_strip);
+            }
+        }
+
+        strips_2d
+    }
 }
 
 /// Алгоритм детекции препятствий на путях
@@ -849,6 +979,11 @@ impl RailTrackDetector {
             avg_intensity_left: avg_i_l,
             avg_intensity_right: avg_i_r,
             obstacles,
+            clearance_width: self.obstacle_config.clearance_width,
+            min_height_above_rail: self.obstacle_config.min_height_above_rail,
+            max_height_above_rail: self.obstacle_config.max_height_above_rail,
+            max_distance_m: self.obstacle_config.max_distance_m,
+            obstacle_enabled: self.obstacle_config.enabled,
         })
     }
 

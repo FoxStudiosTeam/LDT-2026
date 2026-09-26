@@ -220,13 +220,40 @@ pub async fn entry(
                     } else {
                         String::new()
                     };
+                    let num_crit = r.obstacles.iter().filter(|o| o.is_critical).count();
+                    let num_warn = r.obstacles.len() - num_crit;
+                    let obs_str = if num_crit > 0 {
+                        let closest = r
+                            .obstacles
+                            .iter()
+                            .filter(|o| o.is_critical)
+                            .map(|o| o.distance_along_track)
+                            .fold(f32::INFINITY, f32::min);
+                        format!(
+                            " | 🛑 CRITICAL ON TRACK: {} obj (closest {:.1}m)!",
+                            num_crit, closest
+                        )
+                    } else if num_warn > 0 {
+                        let closest = r
+                            .obstacles
+                            .iter()
+                            .map(|o| o.distance_along_track)
+                            .fold(f32::INFINITY, f32::min);
+                        format!(
+                            " | ⚠️ CLEARANCE INTRUSION: {} obj (closest {:.1}m)",
+                            num_warn, closest
+                        )
+                    } else {
+                        " | 🟢 CLEAR TRACK".to_string()
+                    };
                     info!(
-                        "[FRAME {frame_id}] 🛤️ Rail track detected: gauge={:.3}m, radius={}, conf={:.1}%, points={}{}",
+                        "[FRAME {frame_id}] 🛤️ Rail track detected: gauge={:.3}m, radius={}, conf={:.1}%, points={}{}{}",
                         r.gauge,
                         radius_str,
                         r.confidence * 100.0,
                         r.points.len(),
-                        intensity_str
+                        intensity_str,
+                        obs_str
                     );
                 }
                 None => {

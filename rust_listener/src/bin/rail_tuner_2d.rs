@@ -27,10 +27,8 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, ColorImage, Key, TextureHandle, TextureOptions};
-use rerun::{
-    Boxes2D, Boxes3D, Color, LineStrips2D, LineStrips3D, Points2D, Points3D, Radius,
-    RecordingStream, RecordingStreamBuilder,
-};
+use rerun::{Color, Points3D, Radius, RecordingStream, RecordingStreamBuilder};
+use rust_listener::debug::helper::DebugStream;
 use shared::rail_detection::{
     DetectionResult, LidarGeometry, ObstacleDetectionMode, RailTrackDetector,
 };
@@ -181,7 +179,7 @@ impl EguiRangePainter {
         frame: &RangeImage,
         res: Option<&DetectionResult>,
         geo: &LidarGeometry,
-        clearance_width: f32,
+        _clearance_width: f32,
         layer_cfg: &LayerViewConfig,
     ) -> ColorImage {
         let w = frame.width;
@@ -327,31 +325,21 @@ impl EguiRangePainter {
                 draw_line_rgb(&mut rgb, out_w, out_h, &ext_r, [200, 50, 200], 1);
             }
 
-            // Clearance boundary projection (subtle dashed amber/yellow lines)
-            let half_w = clearance_width * 0.5;
-            let mut clear_l = Vec::new();
-            let mut clear_r = Vec::new();
-            for i in (0..r.x_curve.len()).step_by(2) {
-                let x = r.x_curve[i];
-                let y = r.y_center[i];
-                let z = r.z_center[i];
-                let (r_l, c_l) = geo.xyz_to_row_col(x, y - half_w, z);
-                let (r_r, c_r) = geo.xyz_to_row_col(x, y + half_w, z);
-                if r_l >= 0 && (r_l as usize) < h && c_l >= 0 && (c_l as usize) < w {
-                    clear_l.push((
-                        (c_l as usize * self.scale) as i32,
-                        (r_l as usize * self.scale) as i32,
-                    ));
-                }
-                if r_r >= 0 && (r_r as usize) < h && c_r >= 0 && (c_r as usize) < w {
-                    clear_r.push((
-                        (c_r as usize * self.scale) as i32,
-                        (r_r as usize * self.scale) as i32,
-                    ));
-                }
+            // Clearance corridor shapecast 2D wireframe
+            let shapecast_2d = r.shapecast_wireframe_2d(geo);
+            let shapecast_col = r.shapecast_color();
+            for strip in &shapecast_2d {
+                let px_strip: Vec<(i32, i32)> = strip
+                    .iter()
+                    .map(|p| {
+                        (
+                            (p[0] * self.scale as f32) as i32,
+                            (p[1] * self.scale as f32) as i32,
+                        )
+                    })
+                    .collect();
+                draw_line_rgb(&mut rgb, out_w, out_h, &px_strip, shapecast_col, 1);
             }
-            draw_line_rgb(&mut rgb, out_w, out_h, &clear_l, [240, 200, 50], 1);
-            draw_line_rgb(&mut rgb, out_w, out_h, &clear_r, [240, 200, 50], 1);
 
             // Detected discrete points
             for p in &r.points {
@@ -679,35 +667,33 @@ impl RailTuner2DApp {
             fps: 12.0,
             last_tick: Instant::now(),
 
-            depth_step_thresh: detector.depth_step_thresh,
-            max_depth_step_thresh: detector.max_depth_step_thresh,
-            nominal_gauge: detector.nominal_gauge,
-            min_gauge: detector.min_gauge,
-            max_gauge: detector.max_gauge,
-            row_start_pct: detector.row_start_pct,
-            row_end_pct: detector.row_end_pct,
-            max_lateral_jump: detector.max_lateral_jump,
-            max_lateral_rail_jump: detector.max_lateral_rail_jump,
-            extrapolate_m: detector.extrapolate_m,
-            smooth_n: detector.smooth_n,
-
-            contrast_depth: detector.contrast_depth,
-            contrast_intensity: detector.contrast_intensity,
-            blend: detector.blend,
-
-            obstacle_enabled: detector.obstacle_config.enabled,
-            obstacle_mode: detector.obstacle_config.mode,
-            clearance_width: detector.obstacle_config.clearance_width,
-            min_height_above_rail: detector.obstacle_config.min_height_above_rail,
-            max_height_above_rail: detector.obstacle_config.max_height_above_rail,
-            min_points: detector.obstacle_config.min_points,
-            max_distance_m: detector.obstacle_config.max_distance_m,
-            depth_diff_thresh: detector.obstacle_config.depth_diff_thresh,
+            depth_step_thresh: initial_detector.depth_step_thresh,
+            max_depth_step_thresh: initial_detector.max_depth_step_thresh,
+            nominal_gauge: initial_detector.nominal_gauge,
+            min_gauge: initial_detector.min_gauge,
+            max_gauge: initial_detector.max_gauge,
+            row_start_pct: initial_detector.row_start_pct,
+            row_end_pct: initial_detector.row_end_pct,
+            max_lateral_jump: initial_detector.max_lateral_jump,
+            max_lateral_rail_jump: initial_detector.max_lateral_rail_jump,
+            extrapolate_m: initial_detector.extrapolate_m,
+            smooth_n: initial_detector.smooth_n,
+            contrast_depth: initial_detector.contrast_depth,
+            contrast_intensity: initial_detector.contrast_intensity,
+            blend: initial_detector.blend,
+            obstacle_enabled: initial_detector.obstacle_config.enabled,
+            obstacle_mode: initial_detector.obstacle_config.mode,
+            clearance_width: initial_detector.obstacle_config.clearance_width,
+            min_height_above_rail: initial_detector.obstacle_config.min_height_above_rail,
+            max_height_above_rail: initial_detector.obstacle_config.max_height_above_rail,
+            min_points: initial_detector.obstacle_config.min_points,
+            max_distance_m: initial_detector.obstacle_config.max_distance_m,
+            depth_diff_thresh: initial_detector.obstacle_config.depth_diff_thresh,
 
             rec_stream,
             stream_to_rerun: true,
 
-            detector,
+            detector: initial_detector,
             last_res: None,
             last_calc_dur: Duration::ZERO,
             painter: EguiRangePainter::new(3),
@@ -821,375 +807,10 @@ impl RailTuner2DApp {
                         .with_radii([Radius::new_ui_points(1.2)]),
                 );
 
-                if let Some(r) = res {
-                    let center_pts: Vec<[f32; 3]> = (0..r.x_curve.len())
-                        .map(|i| [r.x_curve[i], r.y_center[i], r.z_center[i]])
-                        .collect();
-                    let left_pts: Vec<[f32; 3]> = (0..r.x_left.len())
-                        .map(|i| [r.x_left[i], r.y_left[i], r.z_center[i]])
-                        .collect();
-                    let right_pts: Vec<[f32; 3]> = (0..r.x_right.len())
-                        .map(|i| [r.x_right[i], r.y_right[i], r.z_center[i]])
-                        .collect();
+                let _ = rec.log_rail_detection(res);
 
-                    let _ = rec.log(
-                        "tracks/3d/centerline",
-                        &LineStrips3D::new([center_pts])
-                            .with_colors([Color::from_rgb(0, 255, 60)])
-                            .with_radii([Radius::new_ui_points(2.5)]),
-                    );
-                    let _ = rec.log(
-                        "tracks/3d/left_rail",
-                        &LineStrips3D::new([left_pts])
-                            .with_colors([Color::from_rgb(30, 210, 255)])
-                            .with_radii([Radius::new_ui_points(2.5)]),
-                    );
-                    let _ = rec.log(
-                        "tracks/3d/right_rail",
-                        &LineStrips3D::new([right_pts])
-                            .with_colors([Color::from_rgb(255, 90, 30)])
-                            .with_radii([Radius::new_ui_points(2.5)]),
-                    );
-
-                    let mut sleepers: Vec<Vec<[f32; 3]>> = Vec::new();
-                    for i in (0..r.x_curve.len()).step_by(4) {
-                        sleepers.push(vec![
-                            [r.x_left[i], r.y_left[i], r.z_center[i]],
-                            [r.x_right[i], r.y_right[i], r.z_center[i]],
-                        ]);
-                    }
-                    let _ = rec.log(
-                        "tracks/3d/sleepers",
-                        &LineStrips3D::new(sleepers)
-                            .with_colors([Color::from_rgb(180, 220, 180)])
-                            .with_radii([Radius::new_ui_points(1.2)]),
-                    );
-
-                    // 3D Extrapolation (Magenta)
-                    if !r.x_ext.is_empty() {
-                        let ext_c: Vec<[f32; 3]> = (0..r.x_ext.len())
-                            .map(|i| [r.x_ext[i], r.y_ext[i], r.z_ext[i]])
-                            .collect();
-                        let ext_l: Vec<[f32; 3]> = (0..r.x_ext_l.len())
-                            .map(|i| [r.x_ext_l[i], r.y_ext_l[i], r.z_ext[i]])
-                            .collect();
-                        let ext_r: Vec<[f32; 3]> = (0..r.x_ext_r.len())
-                            .map(|i| [r.x_ext_r[i], r.y_ext_r[i], r.z_ext[i]])
-                            .collect();
-                        let _ = rec.log(
-                            "tracks/3d/extrapolation_center",
-                            &LineStrips3D::new([ext_c])
-                                .with_colors([Color::from_rgb(255, 0, 255)])
-                                .with_radii([Radius::new_ui_points(2.0)]),
-                        );
-                        let _ = rec.log(
-                            "tracks/3d/extrapolation_left",
-                            &LineStrips3D::new([ext_l])
-                                .with_colors([Color::from_rgb(200, 50, 200)])
-                                .with_radii([Radius::new_ui_points(1.5)]),
-                        );
-                        let _ = rec.log(
-                            "tracks/3d/extrapolation_right",
-                            &LineStrips3D::new([ext_r])
-                                .with_colors([Color::from_rgb(200, 50, 200)])
-                                .with_radii([Radius::new_ui_points(1.5)]),
-                        );
-                    }
-
-                    // 3D Obstacles
-                    if !r.obstacles.is_empty() {
-                        let centers: Vec<[f32; 3]> = r
-                            .obstacles
-                            .iter()
-                            .map(|o| {
-                                [
-                                    (o.bbox_3d_min[0] + o.bbox_3d_max[0]) * 0.5,
-                                    (o.bbox_3d_min[1] + o.bbox_3d_max[1]) * 0.5,
-                                    (o.bbox_3d_min[2] + o.bbox_3d_max[2]) * 0.5,
-                                ]
-                            })
-                            .collect();
-                        let sizes: Vec<[f32; 3]> = r
-                            .obstacles
-                            .iter()
-                            .map(|o| {
-                                [
-                                    (o.bbox_3d_max[0] - o.bbox_3d_min[0]).max(0.2),
-                                    (o.bbox_3d_max[1] - o.bbox_3d_min[1]).max(0.2),
-                                    (o.bbox_3d_max[2] - o.bbox_3d_min[2]).max(0.2),
-                                ]
-                            })
-                            .collect();
-                        let colors: Vec<Color> = r
-                            .obstacles
-                            .iter()
-                            .map(|o| {
-                                if o.is_critical {
-                                    Color::from_rgb(255, 30, 30)
-                                } else {
-                                    Color::from_rgb(255, 170, 0)
-                                }
-                            })
-                            .collect();
-                        let labels: Vec<String> = r
-                            .obstacles
-                            .iter()
-                            .map(|o| {
-                                if o.is_critical {
-                                    format!("CRITICAL {:.1}m", o.distance_along_track)
-                                } else {
-                                    format!("WARN {:.1}m", o.distance_along_track)
-                                }
-                            })
-                            .collect();
-
-                        let _ = rec.log(
-                            "tracks/3d/obstacles",
-                            &Boxes3D::from_centers_and_sizes(centers, sizes)
-                                .with_colors(colors)
-                                .with_labels(labels),
-                        );
-                    } else {
-                        let _ = rec.log(
-                            "tracks/3d/obstacles",
-                            &Boxes3D::from_centers_and_sizes(
-                                [] as [[f32; 3]; 0],
-                                [] as [[f32; 3]; 0],
-                            ),
-                        );
-                    }
-                } else {
-                    let _ = rec.log(
-                        "tracks/3d/centerline",
-                        &LineStrips3D::new([] as [Vec<[f32; 3]>; 0]),
-                    );
-                    let _ = rec.log(
-                        "tracks/3d/left_rail",
-                        &LineStrips3D::new([] as [Vec<[f32; 3]>; 0]),
-                    );
-                    let _ = rec.log(
-                        "tracks/3d/right_rail",
-                        &LineStrips3D::new([] as [Vec<[f32; 3]>; 0]),
-                    );
-                    let _ = rec.log(
-                        "tracks/3d/sleepers",
-                        &LineStrips3D::new([] as [Vec<[f32; 3]>; 0]),
-                    );
-                    let _ = rec.log(
-                        "tracks/3d/extrapolation_center",
-                        &LineStrips3D::new([] as [Vec<[f32; 3]>; 0]),
-                    );
-                    let _ = rec.log(
-                        "tracks/3d/obstacles",
-                        &Boxes3D::from_centers_and_sizes([] as [[f32; 3]; 0], [] as [[f32; 3]; 0]),
-                    );
-                }
-
-                // ─── ОКНО 2: 2D Карта глубины и интенсивности ───
-                if let Ok(depth_img) = ri.to_rerun() {
-                    let _ = rec.log("depth_map/image", &depth_img);
-                }
-                if !ri.intensity.is_empty() {
-                    if let Ok(intensity_img) = ri.to_rerun_intensity() {
-                        let _ = rec.log("depth_map/intensity", &intensity_img);
-                    }
-                }
-
-                if let Some(r) = res {
-                    let h = ri.height;
-                    let w = ri.width;
-                    let to_img_pts = |xs: &[f32], ys: &[f32], zs: &[f32]| -> Vec<[f32; 2]> {
-                        let mut out = Vec::new();
-                        for i in 0..xs.len() {
-                            let (row, col) = geo.xyz_to_row_col(xs[i], ys[i], zs[i]);
-                            if row >= 0 && (row as usize) < h && col >= 0 && (col as usize) < w {
-                                out.push([col as f32, row as f32]);
-                            }
-                        }
-                        out
-                    };
-
-                    let pts_c = to_img_pts(&r.x_curve, &r.y_center, &r.z_center);
-                    let pts_l = to_img_pts(&r.x_left, &r.y_left, &r.z_center);
-                    let pts_r = to_img_pts(&r.x_right, &r.y_right, &r.z_center);
-
-                    let _ = rec.log(
-                        "depth_map/tracks/centerline",
-                        &LineStrips2D::new([pts_c])
-                            .with_colors([Color::from_rgb(0, 255, 60)])
-                            .with_radii([Radius::new_ui_points(2.5)]),
-                    );
-                    let _ = rec.log(
-                        "depth_map/tracks/left_rail",
-                        &LineStrips2D::new([pts_l])
-                            .with_colors([Color::from_rgb(30, 210, 255)])
-                            .with_radii([Radius::new_ui_points(2.5)]),
-                    );
-                    let _ = rec.log(
-                        "depth_map/tracks/right_rail",
-                        &LineStrips2D::new([pts_r])
-                            .with_colors([Color::from_rgb(255, 90, 30)])
-                            .with_radii([Radius::new_ui_points(2.5)]),
-                    );
-
-                    // Sleepers 2D
-                    let mut sleepers2d: Vec<Vec<[f32; 2]>> = Vec::new();
-                    for i in (0..r.x_curve.len()).step_by(4) {
-                        let (row_l, col_l) =
-                            geo.xyz_to_row_col(r.x_left[i], r.y_left[i], r.z_center[i]);
-                        let (row_r, col_r) =
-                            geo.xyz_to_row_col(r.x_right[i], r.y_right[i], r.z_center[i]);
-                        if row_l >= 0
-                            && (row_l as usize) < h
-                            && col_l >= 0
-                            && (col_l as usize) < w
-                            && row_r >= 0
-                            && (row_r as usize) < h
-                            && col_r >= 0
-                            && (col_r as usize) < w
-                        {
-                            sleepers2d.push(vec![
-                                [col_l as f32, row_l as f32],
-                                [col_r as f32, row_r as f32],
-                            ]);
-                        }
-                    }
-                    let _ = rec.log(
-                        "depth_map/tracks/sleepers",
-                        &LineStrips2D::new(sleepers2d)
-                            .with_colors([Color::from_rgb(180, 220, 180)])
-                            .with_radii([Radius::new_ui_points(1.2)]),
-                    );
-
-                    // 2D Extrapolation (Magenta)
-                    if !r.x_ext.is_empty() {
-                        let ext_c = to_img_pts(&r.x_ext, &r.y_ext, &r.z_ext);
-                        let ext_l = to_img_pts(&r.x_ext_l, &r.y_ext_l, &r.z_ext);
-                        let ext_r = to_img_pts(&r.x_ext_r, &r.y_ext_r, &r.z_ext);
-                        let _ = rec.log(
-                            "depth_map/tracks/extrapolation_center",
-                            &LineStrips2D::new([ext_c])
-                                .with_colors([Color::from_rgb(255, 0, 255)])
-                                .with_radii([Radius::new_ui_points(2.0)]),
-                        );
-                        let _ = rec.log(
-                            "depth_map/tracks/extrapolation_left",
-                            &LineStrips2D::new([ext_l])
-                                .with_colors([Color::from_rgb(200, 50, 200)])
-                                .with_radii([Radius::new_ui_points(1.5)]),
-                        );
-                        let _ = rec.log(
-                            "depth_map/tracks/extrapolation_right",
-                            &LineStrips2D::new([ext_r])
-                                .with_colors([Color::from_rgb(200, 50, 200)])
-                                .with_radii([Radius::new_ui_points(1.5)]),
-                        );
-                    }
-
-                    // 2D discrete point markers
-                    let mut pts_det_l = Vec::new();
-                    let mut pts_det_r = Vec::new();
-                    for p in &r.points {
-                        if p.row < h {
-                            if p.col_left < w {
-                                pts_det_l.push([p.col_left as f32, p.row as f32]);
-                            }
-                            if p.col_right < w {
-                                pts_det_r.push([p.col_right as f32, p.row as f32]);
-                            }
-                        }
-                    }
-                    let _ = rec.log(
-                        "depth_map/tracks/points_left",
-                        &Points2D::new(pts_det_l)
-                            .with_colors([Color::from_rgb(0, 255, 255)])
-                            .with_radii([Radius::new_ui_points(3.0)]),
-                    );
-                    let _ = rec.log(
-                        "depth_map/tracks/points_right",
-                        &Points2D::new(pts_det_r)
-                            .with_colors([Color::from_rgb(255, 120, 0)])
-                            .with_radii([Radius::new_ui_points(3.0)]),
-                    );
-
-                    // 2D Obstacles
-                    if !r.obstacles.is_empty() {
-                        let mins: Vec<[f32; 2]> = r
-                            .obstacles
-                            .iter()
-                            .map(|o| [o.bbox_2d[0] as f32, o.bbox_2d[1] as f32])
-                            .collect();
-                        let sizes: Vec<[f32; 2]> = r
-                            .obstacles
-                            .iter()
-                            .map(|o| {
-                                [
-                                    (o.bbox_2d[2].saturating_sub(o.bbox_2d[0]) + 1).max(2) as f32,
-                                    (o.bbox_2d[3].saturating_sub(o.bbox_2d[1]) + 1).max(2) as f32,
-                                ]
-                            })
-                            .collect();
-                        let colors: Vec<Color> = r
-                            .obstacles
-                            .iter()
-                            .map(|o| {
-                                if o.is_critical {
-                                    Color::from_rgb(255, 30, 30)
-                                } else {
-                                    Color::from_rgb(255, 170, 0)
-                                }
-                            })
-                            .collect();
-                        let labels: Vec<String> = r
-                            .obstacles
-                            .iter()
-                            .map(|o| {
-                                if o.is_critical {
-                                    format!("CRITICAL {:.1}m", o.distance_along_track)
-                                } else {
-                                    format!("WARN {:.1}m", o.distance_along_track)
-                                }
-                            })
-                            .collect();
-
-                        let _ = rec.log(
-                            "depth_map/tracks/obstacles",
-                            &Boxes2D::from_mins_and_sizes(mins, sizes)
-                                .with_colors(colors)
-                                .with_labels(labels),
-                        );
-                    } else {
-                        let _ = rec.log(
-                            "depth_map/tracks/obstacles",
-                            &Boxes2D::from_mins_and_sizes([] as [[f32; 2]; 0], [] as [[f32; 2]; 0]),
-                        );
-                    }
-                } else {
-                    let _ = rec.log(
-                        "depth_map/tracks/obstacles",
-                        &Boxes2D::from_mins_and_sizes([] as [[f32; 2]; 0], [] as [[f32; 2]; 0]),
-                    );
-                    let _ = rec.log(
-                        "depth_map/tracks/centerline",
-                        &LineStrips2D::new([] as [Vec<[f32; 2]>; 0]),
-                    );
-                    let _ = rec.log(
-                        "depth_map/tracks/left_rail",
-                        &LineStrips2D::new([] as [Vec<[f32; 2]>; 0]),
-                    );
-                    let _ = rec.log(
-                        "depth_map/tracks/right_rail",
-                        &LineStrips2D::new([] as [Vec<[f32; 2]>; 0]),
-                    );
-                    let _ = rec.log(
-                        "depth_map/tracks/sleepers",
-                        &LineStrips2D::new([] as [Vec<[f32; 2]>; 0]),
-                    );
-                    let _ = rec.log(
-                        "depth_map/tracks/extrapolation_center",
-                        &LineStrips2D::new([] as [Vec<[f32; 2]>; 0]),
-                    );
-                }
+                // ─── ОКНО 2: 2D Карта глубины, интенсивности, путей и Shapecast ───
+                let _ = rec.log_rail_detection_2d(ri, geo, res);
             }
         }
     }
@@ -1601,7 +1222,7 @@ impl eframe::App for RailTuner2DApp {
 
                             ui.label("Max Distance (m):");
                             param_changed |= ui
-                                .add(egui::Slider::new(&mut self.max_distance_m, 10.0..=100.0).step_by(5.0))
+                                .add(egui::Slider::new(&mut self.max_distance_m, 5.0..=120.0).step_by(1.0))
                                 .changed();
 
                             if self.obstacle_mode == ObstacleDetectionMode::DepthMatrix2D {
