@@ -126,7 +126,47 @@ impl FrameDataset {
     }
 }
 
-/// 2D визуализатор карты глубины для отображения текстуры в egui
+/// Режим отображения слоёв в 2D вьювере
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImageLayerMode {
+    /// Карта дальности (глубина) с палитрой Turbo
+    Depth,
+    /// Карта интенсивности отражения (рефлективность)
+    Intensity,
+    /// Смешанный слой: глубина + интенсивность
+    Blend,
+}
+
+/// Цветовая палитра слоя интенсивности
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IntensityColormap {
+    Grayscale,
+    Turbo,
+}
+
+/// Конфигурация отображения слоёв
+#[derive(Clone, Copy, Debug)]
+pub struct LayerViewConfig {
+    pub mode: ImageLayerMode,
+    pub intensity_colormap: IntensityColormap,
+    pub contrast_depth: f32,
+    pub contrast_intensity: f32,
+    pub blend: f32,
+}
+
+impl Default for LayerViewConfig {
+    fn default() -> Self {
+        Self {
+            mode: ImageLayerMode::Depth,
+            intensity_colormap: IntensityColormap::Grayscale,
+            contrast_depth: 200.0,
+            contrast_intensity: 20.0,
+            blend: 0.5,
+        }
+    }
+}
+
+/// 2D визуализатор карты глубины и интенсивности для отображения текстуры в egui
 struct EguiRangePainter {
     scale: usize,
 }
@@ -142,6 +182,7 @@ impl EguiRangePainter {
         res: Option<&DetectionResult>,
         geo: &LidarGeometry,
         clearance_width: f32,
+        layer_cfg: &LayerViewConfig,
     ) -> ColorImage {
         let w = frame.width;
         let h = frame.height;
@@ -149,16 +190,67 @@ impl EguiRangePainter {
         let out_h = h * self.scale;
 
         let mut rgb = vec![0u8; out_w * out_h * 3];
+        let has_intensity = !frame.intensity.is_empty();
 
-        // 1. Colorize depth map with Turbo
+        // 1. Colorize pixels based on selected layer mode (Depth, Intensity, or Blend)
         for r in 0..h {
             for c in 0..w {
-                let val = frame.data[r * w + c];
-                let color = if val <= 0.0 {
+                let depth_val = frame.data[r * w + c];
+                let int_val = if has_intensity {
+                    frame.get_intensity(r, c)
+                } else {
+                    0.0
+                };
+
+                let depth_color = if depth_val <= 0.0 {
                     [10, 12, 16]
                 } else {
-                    let norm = (val / 200.0).clamp(0.0, 1.0);
+                    let norm = (depth_val / layer_cfg.contrast_depth.max(1.0)).clamp(0.0, 1.0);
                     turbo_rgb(norm)
+                };
+
+                let int_norm = (int_val / layer_cfg.contrast_intensity.max(0.1)).clamp(0.0, 1.0);
+                let int_color = if int_val <= 0.0 {
+                    [10, 12, 16]
+                } else {
+                    match layer_cfg.intensity_colormap {
+                        IntensityColormap::Grayscale => {
+                            let g = (int_norm * 255.0).round() as u8;
+                            [g, g, g]
+                        }
+                        IntensityColormap::Turbo => turbo_rgb(int_norm),
+                    }
+                };
+
+                let color = match layer_cfg.mode {
+                    ImageLayerMode::Depth => depth_color,
+                    ImageLayerMode::Intensity => {
+                        if !has_intensity {
+                            [25, 25, 30] // Gray placeholder if no intensity data
+                        } else {
+                            int_color
+                        }
+                    }
+                    ImageLayerMode::Blend => {
+                        if !has_intensity || (depth_val <= 0.0 && int_val <= 0.0) {
+                            depth_color
+                        } else if depth_val <= 0.0 {
+                            int_color
+                        } else if int_val <= 0.0 {
+                            depth_color
+                        } else {
+                            let a = layer_cfg.blend.clamp(0.0, 1.0);
+                            let inv_a = 1.0 - a;
+                            [
+                                (depth_color[0] as f32 * inv_a + int_color[0] as f32 * a).round()
+                                    as u8,
+                                (depth_color[1] as f32 * inv_a + int_color[1] as f32 * a).round()
+                                    as u8,
+                                (depth_color[2] as f32 * inv_a + int_color[2] as f32 * a).round()
+                                    as u8,
+                            ]
+                        }
+                    }
                 };
 
                 for sy in 0..self.scale {
@@ -521,6 +613,11 @@ pub struct RailTuner2DApp {
     extrapolate_m: f32,
     smooth_n: usize,
 
+    // Параметры двух текстур и смешивания (синхронизированы с определителем и 2D вьювером)
+    contrast_depth: f32,
+    contrast_intensity: f32,
+    blend: f32,
+
     // Параметры детектора препятствий
     obstacle_enabled: bool,
     obstacle_mode: ObstacleDetectionMode,
@@ -540,6 +637,7 @@ pub struct RailTuner2DApp {
     last_res: Option<DetectionResult>,
     last_calc_dur: Duration,
     painter: EguiRangePainter,
+    layer_cfg: LayerViewConfig,
     texture: Option<TextureHandle>,
     last_painted_frame: Option<usize>,
     copied_toast_time: Option<Instant>,
@@ -547,8 +645,32 @@ pub struct RailTuner2DApp {
 
 impl RailTuner2DApp {
     pub fn new(dataset: FrameDataset, rec_stream: Option<RecordingStream>) -> Self {
-        let initial_geo = LidarGeometry::new(128, 140, 15.0, -25.0, 40.0);
-        let detector = RailTrackDetector::new(initial_geo);
+        let mut initial_detector = RailTrackDetector::new(
+            shared::rail_detection::LidarGeometry::new(128, 140, 15.0, -25.0, 40.0),
+        );
+        initial_detector.depth_step_thresh = 0.100;
+        initial_detector.max_depth_step_thresh = 1.100;
+        initial_detector.nominal_gauge = 1.580;
+        initial_detector.min_gauge = 1.515;
+        initial_detector.max_gauge = 1.560;
+        initial_detector.row_start_pct = 0.880;
+        initial_detector.row_end_pct = 0.430;
+        initial_detector.max_lateral_jump = 0.300;
+        initial_detector.max_lateral_rail_jump = 0.100;
+        initial_detector.extrapolate_m = 24.0;
+        initial_detector.smooth_n = 3;
+        initial_detector.contrast_depth = 195.0;
+        initial_detector.contrast_intensity = 5.0;
+        initial_detector.blend = 1.00;
+        initial_detector.obstacle_config.enabled = true;
+        initial_detector.obstacle_config.mode =
+            shared::rail_detection::ObstacleDetectionMode::Boxcast3D;
+        initial_detector.obstacle_config.clearance_width = 2.50;
+        initial_detector.obstacle_config.min_height_above_rail = 0.15;
+        initial_detector.obstacle_config.max_height_above_rail = 3.70;
+        initial_detector.obstacle_config.min_points = 6;
+        initial_detector.obstacle_config.max_distance_m = 100.0;
+        initial_detector.obstacle_config.depth_diff_thresh = 0.25;
 
         Self {
             dataset,
@@ -569,6 +691,10 @@ impl RailTuner2DApp {
             extrapolate_m: detector.extrapolate_m,
             smooth_n: detector.smooth_n,
 
+            contrast_depth: detector.contrast_depth,
+            contrast_intensity: detector.contrast_intensity,
+            blend: detector.blend,
+
             obstacle_enabled: detector.obstacle_config.enabled,
             obstacle_mode: detector.obstacle_config.mode,
             clearance_width: detector.obstacle_config.clearance_width,
@@ -585,6 +711,13 @@ impl RailTuner2DApp {
             last_res: None,
             last_calc_dur: Duration::ZERO,
             painter: EguiRangePainter::new(3),
+            layer_cfg: LayerViewConfig {
+                mode: ImageLayerMode::Depth,
+                intensity_colormap: IntensityColormap::Grayscale,
+                contrast_depth: 200.0,
+                contrast_intensity: 20.0,
+                blend: 0.0,
+            },
             texture: None,
             last_painted_frame: None,
             copied_toast_time: None,
@@ -603,6 +736,14 @@ impl RailTuner2DApp {
         self.detector.max_lateral_rail_jump = self.max_lateral_rail_jump;
         self.detector.extrapolate_m = self.extrapolate_m;
         self.detector.smooth_n = self.smooth_n;
+
+        self.detector.contrast_depth = self.contrast_depth;
+        self.detector.contrast_intensity = self.contrast_intensity;
+        self.detector.blend = self.blend;
+
+        self.layer_cfg.contrast_depth = self.contrast_depth;
+        self.layer_cfg.contrast_intensity = self.contrast_intensity;
+        self.layer_cfg.blend = self.blend;
 
         self.detector.obstacle_config.enabled = self.obstacle_enabled;
         self.detector.obstacle_config.mode = self.obstacle_mode;
@@ -844,9 +985,14 @@ impl RailTuner2DApp {
                     );
                 }
 
-                // ─── ОКНО 2: 2D Карта глубины ───
+                // ─── ОКНО 2: 2D Карта глубины и интенсивности ───
                 if let Ok(depth_img) = ri.to_rerun() {
                     let _ = rec.log("depth_map/image", &depth_img);
+                }
+                if !ri.intensity.is_empty() {
+                    if let Ok(intensity_img) = ri.to_rerun_intensity() {
+                        let _ = rec.log("depth_map/intensity", &intensity_img);
+                    }
                 }
 
                 if let Some(r) = res {
@@ -1103,6 +1249,7 @@ impl eframe::App for RailTuner2DApp {
                     self.last_res.as_ref(),
                     &self.detector.geometry,
                     self.clearance_width,
+                    &self.layer_cfg,
                 );
                 self.texture = Some(ui.ctx().load_texture(
                     "range_view",
@@ -1149,6 +1296,9 @@ impl eframe::App for RailTuner2DApp {
                              detector.max_lateral_rail_jump = {:.3};\n\
                              detector.extrapolate_m = {:.1};\n\
                              detector.smooth_n = {};\n\
+                             detector.contrast_depth = {:.1};\n\
+                             detector.contrast_intensity = {:.1};\n\
+                             detector.blend = {:.2};\n\
                              detector.obstacle_config.enabled = {};\n\
                              detector.obstacle_config.mode = shared::rail_detection::ObstacleDetectionMode::{:?};\n\
                              detector.obstacle_config.clearance_width = {:.2};\n\
@@ -1168,6 +1318,9 @@ impl eframe::App for RailTuner2DApp {
                             self.max_lateral_rail_jump,
                             self.extrapolate_m,
                             self.smooth_n,
+                            self.contrast_depth,
+                            self.contrast_intensity,
+                            self.blend,
                             self.obstacle_enabled,
                             self.obstacle_mode,
                             self.clearance_width,
@@ -1266,6 +1419,34 @@ impl eframe::App for RailTuner2DApp {
                                 .add(
                                     egui::Slider::new(&mut self.max_depth_step_thresh, 0.30..=2.00)
                                         .step_by(0.05),
+                                )
+                                .changed();
+                        });
+
+                    egui::CollapsingHeader::new("🖼️ Dual Texture & Blending (Depth + Intensity)")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            ui.label("Contrast Depth (m):");
+                            param_changed |= ui
+                                .add(
+                                    egui::Slider::new(&mut self.contrast_depth, 10.0..=300.0)
+                                        .step_by(5.0),
+                                )
+                                .changed();
+
+                            ui.label("Contrast Intensity:");
+                            param_changed |= ui
+                                .add(
+                                    egui::Slider::new(&mut self.contrast_intensity, 5.0..=255.0)
+                                        .step_by(1.0),
+                                )
+                                .changed();
+
+                            ui.label("Blend Ratio (Depth ↔ Intensity):");
+                            param_changed |= ui
+                                .add(
+                                    egui::Slider::new(&mut self.blend, 0.0..=1.0)
+                                        .step_by(0.01),
                                 )
                                 .changed();
                         });
@@ -1442,6 +1623,7 @@ impl eframe::App for RailTuner2DApp {
                             self.last_res.as_ref(),
                             &self.detector.geometry,
                             self.clearance_width,
+                            &self.layer_cfg,
                         );
                         self.texture = Some(left.ctx().load_texture(
                             "range_view",
@@ -1551,7 +1733,100 @@ impl eframe::App for RailTuner2DApp {
                 // ─── RIGHT COLUMN: 2D Range View Preview ───
                 let right = &mut cols[1];
                 right.group(|ui| {
-                    ui.heading("📺 2D Range Image Preview");
+                    let mut layer_changed = false;
+                    ui.horizontal(|ui| {
+                        ui.heading("📺 2D View");
+                        ui.separator();
+                        ui.label("Layer:");
+                        layer_changed |= ui.selectable_value(
+                            &mut self.layer_cfg.mode,
+                            ImageLayerMode::Depth,
+                            "🗺️ Depth",
+                        ).changed();
+                        layer_changed |= ui.selectable_value(
+                            &mut self.layer_cfg.mode,
+                            ImageLayerMode::Intensity,
+                            "💡 Intensity",
+                        ).changed();
+                        layer_changed |= ui.selectable_value(
+                            &mut self.layer_cfg.mode,
+                            ImageLayerMode::Blend,
+                            "🔀 Blend",
+                        ).changed();
+                    });
+
+                    // Layer configuration sub-bar with 3 sliders (contrast_depth, contrast_intensity, blend)
+                    ui.horizontal_wrapped(|ui| {
+                        if self.layer_cfg.mode != ImageLayerMode::Depth {
+                            ui.label("Colormap:");
+                            layer_changed |= ui.selectable_value(
+                                &mut self.layer_cfg.intensity_colormap,
+                                IntensityColormap::Grayscale,
+                                "⚪ Gray",
+                            ).changed();
+                            layer_changed |= ui.selectable_value(
+                                &mut self.layer_cfg.intensity_colormap,
+                                IntensityColormap::Turbo,
+                                "🌈 Turbo",
+                            ).changed();
+                            ui.separator();
+                        }
+
+                        ui.label("Contrast Depth:");
+                        let d_changed = ui.add(
+                            egui::Slider::new(&mut self.layer_cfg.contrast_depth, 10.0..=300.0)
+                                .text("m")
+                                .step_by(5.0),
+                        ).changed();
+                        if d_changed {
+                            self.contrast_depth = self.layer_cfg.contrast_depth;
+                            layer_changed = true;
+                        }
+
+                        ui.separator();
+                        ui.label("Contrast Intensity:");
+                        let i_changed = ui.add(
+                            egui::Slider::new(&mut self.layer_cfg.contrast_intensity, 5.0..=255.0)
+                                .step_by(1.0),
+                        ).changed();
+                        if i_changed {
+                            self.contrast_intensity = self.layer_cfg.contrast_intensity;
+                            layer_changed = true;
+                        }
+
+                        ui.separator();
+                        ui.label("Blend:");
+                        let b_changed = ui.add(
+                            egui::Slider::new(&mut self.layer_cfg.blend, 0.0..=1.0)
+                                .text("D ↔ I")
+                                .step_by(0.01),
+                        ).changed();
+                        if b_changed {
+                            self.blend = self.layer_cfg.blend;
+                            layer_changed = true;
+                        }
+                    });
+
+                    if layer_changed {
+                        self.process_current_frame();
+                        let lock = self.dataset.frames.read().unwrap();
+                        if self.current_frame_idx < lock.len() {
+                            let f = &lock[self.current_frame_idx];
+                            let color_img = self.painter.paint(
+                                &f.range_image,
+                                self.last_res.as_ref(),
+                                &self.detector.geometry,
+                                self.clearance_width,
+                                &self.layer_cfg,
+                            );
+                            self.texture = Some(ui.ctx().load_texture(
+                                "range_view",
+                                color_img,
+                                TextureOptions::LINEAR,
+                            ));
+                        }
+                    }
+
                     if let Some(ref tex) = self.texture {
                         let img_size = tex.size_vec2();
                         let max_w = (ui.available_width() - 20.0).max(100.0);
@@ -1562,6 +1837,11 @@ impl eframe::App for RailTuner2DApp {
                             ui.image((tex.id(), final_size));
                             ui.add_space(4.0);
                             ui.horizontal_wrapped(|ui| {
+                                match self.layer_cfg.mode {
+                                    ImageLayerMode::Depth => ui.colored_label(Color32::from_rgb(180, 180, 240), "[🗺️ Depth]"),
+                                    ImageLayerMode::Intensity => ui.colored_label(Color32::from_rgb(255, 230, 100), "[💡 Intensity]"),
+                                    ImageLayerMode::Blend => ui.colored_label(Color32::from_rgb(120, 230, 180), "[🔀 Blend]"),
+                                };
                                 ui.colored_label(Color32::from_rgb(30, 210, 255), "■ Left Rail");
                                 ui.colored_label(Color32::from_rgb(255, 90, 30), "■ Right Rail");
                                 ui.colored_label(Color32::from_rgb(0, 255, 60), "■ Centerline");

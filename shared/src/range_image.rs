@@ -814,6 +814,25 @@ impl RangeImage {
         let depth_img = DepthImage::new(bytes, format).with_meter(1.0);
         Ok(depth_img)
     }
+
+    /// Преобразование интенсивности в Rerun `Image` (8-битный монохромный слой L8).
+    pub fn to_rerun_intensity(&self) -> Result<rerun::Image, AppError> {
+        let expected_len = self.width * self.height;
+        let mut u8_bytes = Vec::with_capacity(expected_len);
+        if self.intensity.len() == expected_len {
+            for &val in &self.intensity {
+                u8_bytes.push(val.clamp(0.0, 255.0).round() as u8);
+            }
+        } else {
+            u8_bytes.resize(expected_len, 0);
+        }
+
+        let img = rerun::Image::from_l8(
+            u8_bytes,
+            [self.width as u32, self.height as u32],
+        );
+        Ok(img)
+    }
 }
 
 #[cfg(test)]

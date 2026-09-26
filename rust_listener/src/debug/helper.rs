@@ -803,6 +803,13 @@ impl DebugStream for RecordingStream {
         let depth_img = crop_frame.to_rerun()?;
         self.log("depth_map/image", &depth_img).app_error()?;
 
+        // 1.1. Логируем 2D слой интенсивности (Image) в entity "depth_map/intensity"
+        if !crop_frame.intensity.is_empty() {
+            if let Ok(intensity_img) = crop_frame.to_rerun_intensity() {
+                self.log("depth_map/intensity", &intensity_img).app_error()?;
+            }
+        }
+
         let h = crop_frame.height;
         let w = crop_frame.width;
 
