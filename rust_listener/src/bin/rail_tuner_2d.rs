@@ -610,6 +610,7 @@ pub struct RailTuner2DApp {
     obstacle_enabled: bool,
     obstacle_mode: ObstacleDetectionMode,
     clearance_width: f32,
+    clearance_narrowing: f32,
     min_height_above_rail: f32,
     max_height_above_rail: f32,
     min_points: usize,
@@ -636,34 +637,35 @@ pub struct RailTuner2DApp {
 
 impl RailTuner2DApp {
     pub fn new(dataset: FrameDataset, rec_stream: Option<RecordingStream>) -> Self {
-        let mut initial_detector = RailTrackDetector::new(
-            shared::rail_detection::LidarGeometry::new(128, 140, 15.0, -25.0, 40.0),
-        );
-        initial_detector.depth_step_thresh = 0.100;
-        initial_detector.max_depth_step_thresh = 1.100;
-        initial_detector.nominal_gauge = 1.580;
-        initial_detector.min_gauge = 1.515;
-        initial_detector.max_gauge = 1.560;
-        initial_detector.row_start_pct = 0.880;
-        initial_detector.row_end_pct = 0.430;
-        initial_detector.max_lateral_jump = 0.300;
-        initial_detector.max_lateral_rail_jump = 0.100;
-        initial_detector.extrapolate_m = 24.0;
-        initial_detector.smooth_n = 3;
-        initial_detector.contrast_depth = 195.0;
-        initial_detector.contrast_intensity = 5.0;
-        initial_detector.blend = 1.00;
-        initial_detector.obstacle_config.enabled = true;
-        initial_detector.obstacle_config.mode =
-            shared::rail_detection::ObstacleDetectionMode::Boxcast3D;
-        initial_detector.obstacle_config.clearance_width = 2.50;
-        initial_detector.obstacle_config.min_height_above_rail = 0.15;
-        initial_detector.obstacle_config.max_height_above_rail = 3.70;
-        initial_detector.obstacle_config.min_points = 6;
-        initial_detector.obstacle_config.max_distance_m = 100.0;
-        initial_detector.obstacle_config.depth_diff_thresh = 0.25;
-        initial_detector.obstacle_config.upward_curvature = 0.0004;
-
+        // let mut initial_detector = RailTrackDetector::new(
+        //     shared::rail_detection::LidarGeometry::new(128, 140, 15.0, -25.0, 40.0),
+        // );
+        // initial_detector.depth_step_thresh = 0.100;
+        // initial_detector.max_depth_step_thresh = 1.100;
+        // initial_detector.nominal_gauge = 1.580;
+        // initial_detector.min_gauge = 1.515;
+        // initial_detector.max_gauge = 1.560;
+        // initial_detector.row_start_pct = 0.880;
+        // initial_detector.row_end_pct = 0.430;
+        // initial_detector.max_lateral_jump = 0.300;
+        // initial_detector.max_lateral_rail_jump = 0.100;
+        // initial_detector.extrapolate_m = 24.0;
+        // initial_detector.smooth_n = 3;
+        // initial_detector.contrast_depth = 195.0;
+        // initial_detector.contrast_intensity = 5.0;
+        // initial_detector.blend = 1.00;
+        // initial_detector.obstacle_config.enabled = true;
+        // initial_detector.obstacle_config.mode =
+        //     shared::rail_detection::ObstacleDetectionMode::Boxcast3D;
+        // initial_detector.obstacle_config.clearance_width = 2.50;
+        // initial_detector.obstacle_config.min_height_above_rail = 0.15;
+        // initial_detector.obstacle_config.max_height_above_rail = 3.70;
+        // initial_detector.obstacle_config.min_points = 6;
+        // initial_detector.obstacle_config.max_distance_m = 100.0;
+        // initial_detector.obstacle_config.depth_diff_thresh = 0.25;
+        // initial_detector.obstacle_config.upward_curvature = 0.0004;
+        // initial_detector.obstacle_config.clearance_narrowing = 0.005;
+        let initial_detector = RailTrackDetector::default();
         Self {
             dataset,
             current_frame_idx: 0,
@@ -688,6 +690,7 @@ impl RailTuner2DApp {
             obstacle_enabled: initial_detector.obstacle_config.enabled,
             obstacle_mode: initial_detector.obstacle_config.mode,
             clearance_width: initial_detector.obstacle_config.clearance_width,
+            clearance_narrowing: initial_detector.obstacle_config.clearance_narrowing,
             min_height_above_rail: initial_detector.obstacle_config.min_height_above_rail,
             max_height_above_rail: initial_detector.obstacle_config.max_height_above_rail,
             min_points: initial_detector.obstacle_config.min_points,
@@ -747,6 +750,7 @@ impl RailTuner2DApp {
         self.detector.obstacle_config.max_distance_m = self.max_distance_m;
         self.detector.obstacle_config.depth_diff_thresh = self.depth_diff_thresh;
         self.detector.obstacle_config.upward_curvature = self.upward_curvature;
+        self.detector.obstacle_config.clearance_narrowing = self.clearance_narrowing;
     }
 
     fn process_current_frame(&mut self) {
@@ -978,7 +982,8 @@ impl eframe::App for RailTuner2DApp {
                              detector.obstacle_config.min_points = {};\n\
                              detector.obstacle_config.max_distance_m = {:.1};\n\
                              detector.obstacle_config.depth_diff_thresh = {:.2};\n\
-                             detector.obstacle_config.upward_curvature = {:.5};",
+                             detector.obstacle_config.upward_curvature = {:.5};\n\
+                             detector.obstacle_config.clearance_narrowing = {:.4};",
                             self.depth_step_thresh,
                             self.max_depth_step_thresh,
                             self.nominal_gauge,
@@ -1002,6 +1007,7 @@ impl eframe::App for RailTuner2DApp {
                             self.max_distance_m,
                             self.depth_diff_thresh,
                             self.upward_curvature,
+                            self.clearance_narrowing,
                         );
                         ui.ctx().copy_text(cfg.clone());
                         println!("\n{}\n", cfg);
@@ -1163,7 +1169,7 @@ impl eframe::App for RailTuner2DApp {
                             ui.label("Far Row End % (top):");
                             param_changed |= ui
                                 .add(
-                                    egui::Slider::new(&mut self.row_end_pct, 0.10..=0.60)
+                                    egui::Slider::new(&mut self.row_end_pct, -0.1..=0.60)
                                         .step_by(0.01),
                                 )
                                 .changed();
@@ -1252,6 +1258,18 @@ impl eframe::App for RailTuner2DApp {
                             ui.label("Clearance Width (m):");
                             param_changed |= ui
                                 .add(egui::Slider::new(&mut self.clearance_width, 1.6..=4.0).step_by(0.05))
+                                .changed();
+
+                            ui.label("Shapecast Narrowing (Taper):");
+                            param_changed |= ui
+                                .add(
+                                    egui::Slider::new(&mut self.clearance_narrowing, 0.0..=0.030)
+                                        .step_by(0.001)
+                                        .custom_formatter(|val, _| {
+                                            let narr_50m = val * 50.0;
+                                            format!("{:.3} (-{:.2}m @50m)", val, narr_50m)
+                                        }),
+                                )
                                 .changed();
 
                             ui.label("Min Height Above Rail (m):");

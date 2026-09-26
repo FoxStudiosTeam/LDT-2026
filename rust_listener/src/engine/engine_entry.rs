@@ -22,37 +22,39 @@ pub async fn entry(
 ) -> Result<(), AppError> {
     let recording_stream = Arc::new(recording_stream);
 
-    let mut initial_detector = RailTrackDetector::new(shared::rail_detection::LidarGeometry::new(
-        128,
-        140,
-        15.0,
-        -25.0,
-        ENV.PREVIEW_FOV_X_DEG,
-    ));
-    initial_detector.depth_step_thresh = 0.100;
-    initial_detector.max_depth_step_thresh = 1.100;
-    initial_detector.nominal_gauge = 1.580;
-    initial_detector.min_gauge = 1.515;
-    initial_detector.max_gauge = 1.560;
-    initial_detector.row_start_pct = 0.880;
-    initial_detector.row_end_pct = 0.430;
-    initial_detector.max_lateral_jump = 0.300;
-    initial_detector.max_lateral_rail_jump = 0.100;
-    initial_detector.extrapolate_m = 24.0;
-    initial_detector.smooth_n = 3;
-    initial_detector.contrast_depth = 195.0;
-    initial_detector.contrast_intensity = 5.0;
-    initial_detector.blend = 1.00;
-    initial_detector.obstacle_config.enabled = true;
-    initial_detector.obstacle_config.mode =
-        shared::rail_detection::ObstacleDetectionMode::Boxcast3D;
-    initial_detector.obstacle_config.clearance_width = 2.50;
-    initial_detector.obstacle_config.min_height_above_rail = 0.15;
-    initial_detector.obstacle_config.max_height_above_rail = 3.70;
-    initial_detector.obstacle_config.min_points = 6;
-    initial_detector.obstacle_config.max_distance_m = 100.0;
-    initial_detector.obstacle_config.depth_diff_thresh = 0.25;
-    initial_detector.obstacle_config.upward_curvature = 0.0004;
+    // let mut initial_detector = RailTrackDetector::new(shared::rail_detection::LidarGeometry::new(
+    //     128,
+    //     140,
+    //     15.0,
+    //     -25.0,
+    //     ENV.PREVIEW_FOV_X_DEG,
+    // ));
+    // initial_detector.depth_step_thresh = 0.100;
+    // initial_detector.max_depth_step_thresh = 1.100;
+    // initial_detector.nominal_gauge = 1.580;
+    // initial_detector.min_gauge = 1.515;
+    // initial_detector.max_gauge = 1.560;
+    // initial_detector.row_start_pct = 0.880;
+    // initial_detector.row_end_pct = 0.430;
+    // initial_detector.max_lateral_jump = 0.300;
+    // initial_detector.max_lateral_rail_jump = 0.100;
+    // initial_detector.extrapolate_m = 24.0;
+    // initial_detector.smooth_n = 3;
+    // initial_detector.contrast_depth = 195.0;
+    // initial_detector.contrast_intensity = 5.0;
+    // initial_detector.blend = 1.00;
+    // initial_detector.obstacle_config.enabled = true;
+    // initial_detector.obstacle_config.mode =
+    //     shared::rail_detection::ObstacleDetectionMode::Boxcast3D;
+    // initial_detector.obstacle_config.clearance_width = 2.50;
+    // initial_detector.obstacle_config.min_height_above_rail = 0.15;
+    // initial_detector.obstacle_config.max_height_above_rail = 3.70;
+    // initial_detector.obstacle_config.min_points = 6;
+    // initial_detector.obstacle_config.max_distance_m = 100.0;
+    // initial_detector.obstacle_config.depth_diff_thresh = 0.25;
+    // initial_detector.obstacle_config.upward_curvature = 0.0004;
+    // initial_detector.obstacle_config.clearance_narrowing = 0.005;
+    let initial_detector = RailTrackDetector::default();
 
     let rail_detector = Arc::new(std::sync::Mutex::new(initial_detector));
 

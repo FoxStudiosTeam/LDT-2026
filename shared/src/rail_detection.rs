@@ -21,6 +21,12 @@ pub struct LidarGeometry {
     pub dir_z: Vec<f32>,
 }
 
+impl Default for LidarGeometry {
+    fn default() -> Self {
+        Self::new(128, 140, 15.0, -25.0, 40.0)
+    }
+}
+
 impl LidarGeometry {
     pub fn new(
         height: usize,
@@ -204,6 +210,8 @@ pub struct DetectionResult {
     pub max_height_above_rail: f32,
     pub max_distance_m: f32,
     pub upward_curvature: f32,
+    /// Коэффициент сужения габарита с расстоянием (м/м)
+    pub clearance_narrowing: f32,
     pub obstacle_enabled: bool,
     /// Флаг истинных (восстановленных) координат в реальном физическом пространстве
     pub is_real_coordinates: bool,
@@ -271,7 +279,6 @@ impl DetectionResult {
         let step_m = 0.5_f32;
         let num_steps = ((x_max - x_min) / step_m).round().max(10.0) as usize;
 
-        let half_w = self.clearance_width * 0.5;
         let mut line_bl = Vec::with_capacity(num_steps + 1);
         let mut line_br = Vec::with_capacity(num_steps + 1);
         let mut line_tl = Vec::with_capacity(num_steps + 1);
@@ -282,9 +289,16 @@ impl DetectionResult {
         let hoop_dist_m = 4.0_f32;
         let hoop_step = ((hoop_dist_m / step_m).round().max(1.0)) as usize;
 
+        let min_w = self.gauge.max(1.0).min(self.clearance_width);
+
         for i in 0..=num_steps {
             let t = (i as f32) / (num_steps as f32);
             let x = x_min + t * (x_max - x_min);
+
+            // Сужение габарита по мере удаления:
+            let dx = (x - x_min).max(0.0);
+            let cur_w = (self.clearance_width - self.clearance_narrowing * dx).max(min_w);
+            let half_w = cur_w * 0.5;
 
             let y_c = self.poly_y[0] * x * x + self.poly_y[1] * x + self.poly_y[2];
             let z_surf = if self.is_real_coordinates {
@@ -394,6 +408,9 @@ pub struct ObstacleConfig {
     /// Коэффициент квадратичного искривления тоннеля габарита вверх по глубине (1/м), Z_surf(X) += upward_curvature * X^2
     /// Позволяет компенсировать линейный наклон вниз и удерживать габарит на полотне на дальних расстояниях
     pub upward_curvature: f32,
+    /// Коэффициент линейного сужения габарита приближения с расстоянием (м/м)
+    /// Например 0.010 означает сужение коридора на 1.0м каждые 100м дистанции (-0.5м на 50м)
+    pub clearance_narrowing: f32,
 }
 
 impl Default for ObstacleConfig {
@@ -408,6 +425,7 @@ impl Default for ObstacleConfig {
             max_distance_m: 50.0,
             depth_diff_thresh: 0.25,
             upward_curvature: 0.0004,
+            clearance_narrowing: 0.0,
         }
     }
 }
@@ -495,6 +513,37 @@ pub struct RailTrackDetector {
     pub blend: f32,
     pub history: std::collections::VecDeque<DetectionHistoryItem>,
     pub last_frame_idx: Option<usize>,
+}
+
+impl Default for RailTrackDetector {
+    fn default() -> Self {
+        let mut detector = Self::new(LidarGeometry::default());
+        detector.depth_step_thresh = 0.100;
+        detector.max_depth_step_thresh = 0.450;
+        detector.nominal_gauge = 1.580;
+        detector.min_gauge = 1.515;
+        detector.max_gauge = 1.555;
+        detector.row_start_pct = 0.880;
+        detector.row_end_pct = -0.100;
+        detector.max_lateral_jump = 0.300;
+        detector.max_lateral_rail_jump = 0.160;
+        detector.extrapolate_m = 100.0;
+        detector.smooth_n = 3;
+        detector.contrast_depth = 195.0;
+        detector.contrast_intensity = 5.0;
+        detector.blend = 1.00;
+        detector.obstacle_config.enabled = true;
+        detector.obstacle_config.mode = crate::rail_detection::ObstacleDetectionMode::Boxcast3D;
+        detector.obstacle_config.clearance_width = 1.95;
+        detector.obstacle_config.min_height_above_rail = 0.21;
+        detector.obstacle_config.max_height_above_rail = 2.90;
+        detector.obstacle_config.min_points = 6;
+        detector.obstacle_config.max_distance_m = 80.0;
+        detector.obstacle_config.depth_diff_thresh = 0.25;
+        detector.obstacle_config.upward_curvature = 0.00200;
+        detector.obstacle_config.clearance_narrowing = 0.0050;
+        detector
+    }
 }
 
 impl RailTrackDetector {
@@ -1093,6 +1142,7 @@ impl RailTrackDetector {
             avg_intensity_right: avg_i_r,
             obstacles,
             clearance_width: self.obstacle_config.clearance_width,
+            clearance_narrowing: self.obstacle_config.clearance_narrowing,
             min_height_above_rail: self.obstacle_config.min_height_above_rail,
             max_height_above_rail: self.obstacle_config.max_height_above_rail,
             max_distance_m: self.obstacle_config.max_distance_m,
@@ -1123,7 +1173,7 @@ impl RailTrackDetector {
             return Vec::new();
         }
 
-        let half_w = config.clearance_width * 0.5;
+        let min_w = gauge.max(1.0).min(config.clearance_width);
         let half_g = gauge * 0.5;
         let x_min = 2.0_f32;
         let x_max = config.max_distance_m;
@@ -1153,9 +1203,13 @@ impl RailTrackDetector {
                             continue;
                         }
 
+                        let dx = (xc - x_min).max(0.0);
+                        let cur_half_w = (config.clearance_width - config.clearance_narrowing * dx)
+                            .max(min_w)
+                            * 0.5;
                         let dz = z_real - z_surf_real;
 
-                        if d_lat.abs() <= half_w
+                        if d_lat.abs() <= cur_half_w
                             && dz >= config.min_height_above_rail
                             && dz <= config.max_height_above_rail
                         {
@@ -1182,7 +1236,15 @@ impl RailTrackDetector {
 
                         let (xc, _theta, d_lat, z_surf_real) =
                             project_point_to_track(x, y, poly_y, poly_z);
-                        if xc < x_min || xc > x_max || d_lat.abs() > half_w {
+                        if xc < x_min || xc > x_max {
+                            continue;
+                        }
+
+                        let dx = (xc - x_min).max(0.0);
+                        let cur_half_w = (config.clearance_width - config.clearance_narrowing * dx)
+                            .max(min_w)
+                            * 0.5;
+                        if d_lat.abs() > cur_half_w {
                             continue;
                         }
 
@@ -1234,9 +1296,13 @@ impl RailTrackDetector {
                             continue;
                         }
 
+                        let dx = (xc - x_min).max(0.0);
+                        let cur_half_w = (config.clearance_width - config.clearance_narrowing * dx)
+                            .max(min_w)
+                            * 0.5;
                         let dz = z_real - z_surf_real;
 
-                        if d_lat.abs() <= half_w
+                        if d_lat.abs() <= cur_half_w
                             && dz >= config.min_height_above_rail
                             && dz <= config.max_height_above_rail
                         {
@@ -1668,6 +1734,7 @@ mod tests {
             avg_intensity_right: 0.0,
             obstacles: Vec::new(),
             clearance_width: 2.40,
+            clearance_narrowing: 0.0,
             min_height_above_rail: 0.15,
             max_height_above_rail: 3.20,
             max_distance_m: 60.0,
@@ -1731,5 +1798,93 @@ mod tests {
             assert!((d_lat.abs() - half_w).abs() < 1e-3);
             assert!((pt[2] - z_surf - res.max_height_above_rail).abs() < 1e-3);
         }
+    }
+
+    #[test]
+    fn test_shapecast_narrowing() {
+        let poly_y = [0.0_f32, 0.0_f32, 0.0_f32];
+        let poly_z = [0.0_f32, -1.0_f32];
+
+        let mut res = DetectionResult {
+            frame_idx: 0,
+            points: Vec::new(),
+            gauge: 1.52,
+            curvature_a: 0.0,
+            heading_b: 0.0,
+            offset_c: 0.0,
+            turn_radius: 99999.0,
+            turn_direction: "STRAIGHT".to_string(),
+            lateral_shift_15m: 0.0,
+            poly_y,
+            poly_z,
+            x_curve: Vec::new(),
+            y_center: Vec::new(),
+            z_center: Vec::new(),
+            x_left: Vec::new(),
+            y_left: Vec::new(),
+            x_right: Vec::new(),
+            y_right: Vec::new(),
+            confidence: 1.0,
+            extrapolate_m: 0.0,
+            smooth_n: 1,
+            x_ext: Vec::new(),
+            y_ext: Vec::new(),
+            z_ext: Vec::new(),
+            x_ext_l: Vec::new(),
+            y_ext_l: Vec::new(),
+            x_ext_r: Vec::new(),
+            y_ext_r: Vec::new(),
+            has_intensity: false,
+            avg_intensity_left: 0.0,
+            avg_intensity_right: 0.0,
+            obstacles: Vec::new(),
+            clearance_width: 2.50,
+            clearance_narrowing: 0.010, // 0.010 m/m -> 0.50m narrowing over 50m
+            min_height_above_rail: 0.15,
+            max_height_above_rail: 3.20,
+            max_distance_m: 52.0,
+            upward_curvature: 0.0,
+            obstacle_enabled: true,
+            is_real_coordinates: true,
+        };
+
+        let strips = res.shapecast_wireframe_3d();
+        assert!(!strips.is_empty());
+
+        let line_bl = &strips[0];
+        let line_br = &strips[1];
+
+        // Near station (x = 2.0m)
+        let pt_near_l = line_bl.first().unwrap();
+        let pt_near_r = line_br.first().unwrap();
+        let width_near = (pt_near_r[1] - pt_near_l[1]).abs();
+        assert!(
+            (width_near - 2.50).abs() < 1e-3,
+            "Near width should be 2.50, got {}",
+            width_near
+        );
+
+        // Far station (x = 52.0m, dx = 50.0m -> width = 2.50 - 0.010 * 50 = 2.00m)
+        let pt_far_l = line_bl.last().unwrap();
+        let pt_far_r = line_br.last().unwrap();
+        let width_far = (pt_far_r[1] - pt_far_l[1]).abs();
+        assert!(
+            (width_far - 2.00).abs() < 1e-3,
+            "Far width should be 2.00, got {}",
+            width_far
+        );
+
+        // Test clamping to gauge when narrowing is large
+        res.clearance_narrowing = 0.050; // would narrow by 2.5m, dropping below gauge
+        let strips_clamped = res.shapecast_wireframe_3d();
+        let line_br_clamped = &strips_clamped[1];
+        let line_bl_clamped = &strips_clamped[0];
+        let width_far_clamped =
+            (line_br_clamped.last().unwrap()[1] - line_bl_clamped.last().unwrap()[1]).abs();
+        assert!(
+            (width_far_clamped - 1.52).abs() < 1e-3,
+            "Far width should clamp to gauge (1.52), got {}",
+            width_far_clamped
+        );
     }
 }
