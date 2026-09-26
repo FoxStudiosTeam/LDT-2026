@@ -615,6 +615,7 @@ pub struct RailTuner2DApp {
     min_points: usize,
     max_distance_m: f32,
     depth_diff_thresh: f32,
+    upward_curvature: f32,
 
     // Rerun
     rec_stream: Option<RecordingStream>,
@@ -623,6 +624,8 @@ pub struct RailTuner2DApp {
     // UI state
     detector: RailTrackDetector,
     last_res: Option<DetectionResult>,
+    last_bent_res: Option<DetectionResult>,
+    active_range_image: Option<RangeImage>,
     last_calc_dur: Duration,
     painter: EguiRangePainter,
     layer_cfg: LayerViewConfig,
@@ -659,6 +662,7 @@ impl RailTuner2DApp {
         initial_detector.obstacle_config.min_points = 6;
         initial_detector.obstacle_config.max_distance_m = 100.0;
         initial_detector.obstacle_config.depth_diff_thresh = 0.25;
+        initial_detector.obstacle_config.upward_curvature = 0.0004;
 
         Self {
             dataset,
@@ -689,12 +693,15 @@ impl RailTuner2DApp {
             min_points: initial_detector.obstacle_config.min_points,
             max_distance_m: initial_detector.obstacle_config.max_distance_m,
             depth_diff_thresh: initial_detector.obstacle_config.depth_diff_thresh,
+            upward_curvature: initial_detector.obstacle_config.upward_curvature,
 
             rec_stream,
             stream_to_rerun: true,
 
             detector: initial_detector,
             last_res: None,
+            last_bent_res: None,
+            active_range_image: None,
             last_calc_dur: Duration::ZERO,
             painter: EguiRangePainter::new(3),
             layer_cfg: LayerViewConfig {
@@ -739,6 +746,7 @@ impl RailTuner2DApp {
         self.detector.obstacle_config.min_points = self.min_points;
         self.detector.obstacle_config.max_distance_m = self.max_distance_m;
         self.detector.obstacle_config.depth_diff_thresh = self.depth_diff_thresh;
+        self.detector.obstacle_config.upward_curvature = self.upward_curvature;
     }
 
     fn process_current_frame(&mut self) {
@@ -767,11 +775,34 @@ impl RailTuner2DApp {
             );
         }
 
+        let geo = &self.detector.geometry;
+        let raw_ri = &frame.range_image;
+
+        // 1. Искривление всех точек тоннеля и карты глубины/интенсивности:
+        //    Z_bent = Z + c_z * X^2
+        let active_ri = if self.upward_curvature.abs() > 1e-7 {
+            raw_ri.warp_curvature(geo, self.upward_curvature)
+        } else {
+            raw_ri.clone()
+        };
+
         self.sync_detector_params();
 
+        // 2. Детекция путей на искривленном (выпрямленном) представлении
         let t0 = Instant::now();
-        self.last_res = self.detector.detect(&frame.range_image, frame.idx);
+        let bent_res = self.detector.detect(&active_ri, frame.idx);
         self.last_calc_dur = t0.elapsed();
+
+        // 3. Восстановление истинных координат для Rerun и 3D мира:
+        //    Z_real = Z_bent - upward_curvature * X^2
+        let mut real_res = bent_res.clone();
+        if let Some(ref mut r) = real_res {
+            r.restore_real_coordinates();
+        }
+
+        self.last_bent_res = bent_res;
+        self.last_res = real_res;
+        self.active_range_image = Some(active_ri);
 
         // Отправка в Rerun (2 окна: 3D и 2D)
         if self.stream_to_rerun {
@@ -779,38 +810,57 @@ impl RailTuner2DApp {
                 rec.set_time_sequence("frame", frame.idx as i64);
 
                 let geo = &self.detector.geometry;
-                let ri = &frame.range_image;
-                let res = self.last_res.as_ref();
+                let raw_ri = &frame.range_image;
+                let active_ri = self.active_range_image.as_ref().unwrap_or(raw_ri);
 
                 // ─── ОКНО 1: 3D сцена ───
-                // 3D Point cloud из RangeImage
+                // Точки реального облака и искривленного облака из RangeImage
                 let total = geo.height * geo.width;
-                let mut pts = Vec::with_capacity(total);
+                let mut pts_real = Vec::with_capacity(total);
+                let mut pts_bent = Vec::with_capacity(total);
                 let mut colors = Vec::with_capacity(total);
+
                 for row in 0..geo.height {
                     let r_off = row * geo.width;
                     for col in 0..geo.width {
-                        let r = ri.data[r_off + col];
+                        let r = raw_ri.data[r_off + col];
                         if r > 0.5 && r < 200.0 {
                             let (x, y, z) = geo.row_col_range_to_xyz(row, col, r);
-                            pts.push([x, y, z]);
+                            pts_real.push([x, y, z]);
+                            let z_bent = z + self.upward_curvature * x * x;
+                            pts_bent.push([x, y, z_bent]);
+
                             let norm = (r / 200.0).clamp(0.0, 1.0);
                             let c = turbo_rgb(norm);
                             colors.push(Color::from_rgb(c[0], c[1], c[2]));
                         }
                     }
                 }
+
+                // Истинные физические точки лидара в реальном мире:
                 let _ = rec.log(
                     "lidar/point_cloud",
-                    &Points3D::new(pts)
-                        .with_colors(colors)
+                    &Points3D::new(&pts_real)
+                        .with_colors(colors.clone())
                         .with_radii([Radius::new_ui_points(1.2)]),
                 );
 
-                let _ = rec.log_rail_detection(res);
+                // Искривленные точки тоннеля:
+                if self.upward_curvature.abs() > 1e-7 {
+                    let _ = rec.log(
+                        "lidar/point_cloud_bent",
+                        &Points3D::new(&pts_bent)
+                            .with_colors(colors)
+                            .with_radii([Radius::new_ui_points(1.2)]),
+                    );
+                }
+
+                // 3D рельсы с ВОССТАНОВЛЕННЫМ реальным положением (садятся строго на реальные рельсы):
+                let _ = rec.log_rail_detection(self.last_res.as_ref());
 
                 // ─── ОКНО 2: 2D Карта глубины, интенсивности, путей и Shapecast ───
-                let _ = rec.log_rail_detection_2d(ri, geo, res);
+                // Стримим искривленную карту глубины и интенсивности с соответствующими путями:
+                let _ = rec.log_rail_detection_2d(active_ri, geo, self.last_bent_res.as_ref());
             }
         }
     }
@@ -865,9 +915,10 @@ impl eframe::App for RailTuner2DApp {
             let lock = self.dataset.frames.read().unwrap();
             if self.current_frame_idx < lock.len() {
                 let f = &lock[self.current_frame_idx];
+                let active_ri = self.active_range_image.as_ref().unwrap_or(&f.range_image);
                 let color_img = self.painter.paint(
-                    &f.range_image,
-                    self.last_res.as_ref(),
+                    active_ri,
+                    self.last_bent_res.as_ref(),
                     &self.detector.geometry,
                     self.clearance_width,
                     &self.layer_cfg,
@@ -927,7 +978,8 @@ impl eframe::App for RailTuner2DApp {
                              detector.obstacle_config.max_height_above_rail = {:.2};\n\
                              detector.obstacle_config.min_points = {};\n\
                              detector.obstacle_config.max_distance_m = {:.1};\n\
-                             detector.obstacle_config.depth_diff_thresh = {:.2};",
+                             detector.obstacle_config.depth_diff_thresh = {:.2};\n\
+                             detector.obstacle_config.upward_curvature = {:.5};",
                             self.depth_step_thresh,
                             self.max_depth_step_thresh,
                             self.nominal_gauge,
@@ -950,6 +1002,7 @@ impl eframe::App for RailTuner2DApp {
                             self.min_points,
                             self.max_distance_m,
                             self.depth_diff_thresh,
+                            self.upward_curvature,
                         );
                         ui.ctx().copy_text(cfg.clone());
                         println!("\n{}\n", cfg);
@@ -1114,7 +1167,7 @@ impl eframe::App for RailTuner2DApp {
                             ui.label("Far Row End % (top):");
                             param_changed |= ui
                                 .add(
-                                    egui::Slider::new(&mut self.row_end_pct, 0.20..=0.60)
+                                    egui::Slider::new(&mut self.row_end_pct, 0.10..=0.60)
                                         .step_by(0.01),
                                 )
                                 .changed();
@@ -1146,7 +1199,7 @@ impl eframe::App for RailTuner2DApp {
                             ui.label("Extrapolation distance (m):");
                             param_changed |= ui
                                 .add(
-                                    egui::Slider::new(&mut self.extrapolate_m, 0.0..=50.0)
+                                    egui::Slider::new(&mut self.extrapolate_m, 0.0..=100.0)
                                         .step_by(1.0),
                                 )
                                 .changed();
@@ -1225,6 +1278,18 @@ impl eframe::App for RailTuner2DApp {
                                 .add(egui::Slider::new(&mut self.max_distance_m, 5.0..=120.0).step_by(1.0))
                                 .changed();
 
+                            ui.label("Tunnel Upward Curve (c_z):");
+                            param_changed |= ui
+                                .add(
+                                    egui::Slider::new(&mut self.upward_curvature, 0.0..=0.0020)
+                                        .step_by(0.00005)
+                                        .custom_formatter(|val, _| {
+                                            let lift = val * 2500.0;
+                                            format!("{:.5} (+{:.1}m @50m)", val, lift)
+                                        }),
+                                )
+                                .changed();
+
                             if self.obstacle_mode == ObstacleDetectionMode::DepthMatrix2D {
                                 ui.label("Depth Matrix Diff Thresh (m):");
                                 param_changed |= ui
@@ -1239,9 +1304,10 @@ impl eframe::App for RailTuner2DApp {
                     let lock = self.dataset.frames.read().unwrap();
                     if self.current_frame_idx < lock.len() {
                         let f = &lock[self.current_frame_idx];
+                        let active_ri = self.active_range_image.as_ref().unwrap_or(&f.range_image);
                         let color_img = self.painter.paint(
-                            &f.range_image,
-                            self.last_res.as_ref(),
+                            active_ri,
+                            self.last_bent_res.as_ref(),
                             &self.detector.geometry,
                             self.clearance_width,
                             &self.layer_cfg,

@@ -15,6 +15,7 @@ pub struct LidarGeometry {
     pub fov_down_rad: f32,
     pub total_fov_v: f32,
     pub fov_h_rad: f32,
+    pub step_v_rad: f32,
     pub dir_x: Vec<f32>,
     pub dir_y: Vec<f32>,
     pub dir_z: Vec<f32>,
@@ -79,6 +80,7 @@ impl LidarGeometry {
             fov_down_rad,
             total_fov_v,
             fov_h_rad,
+            step_v_rad,
             dir_x,
             dir_y,
             dir_z,
@@ -121,7 +123,7 @@ impl LidarGeometry {
         let pitch = (z / r).clamp(-1.0, 1.0).asin();
         let yaw = y.atan2(x);
 
-        let row = ((self.fov_up_rad - pitch) / 0.125_f32.to_radians()).round() as isize;
+        let row = ((self.fov_up_rad - pitch) / self.step_v_rad).round() as isize;
         let col = ((yaw / self.fov_h_rad * (self.width as f32)) + (self.width as f32) / 2.0 - 0.5)
             .round() as isize;
 
@@ -201,10 +203,43 @@ pub struct DetectionResult {
     pub min_height_above_rail: f32,
     pub max_height_above_rail: f32,
     pub max_distance_m: f32,
+    pub upward_curvature: f32,
     pub obstacle_enabled: bool,
+    /// Флаг истинных (восстановленных) координат в реальном физическом пространстве
+    pub is_real_coordinates: bool,
 }
 
 impl DetectionResult {
+    /// Восстанавливает истинные 3D координаты в реальном физическом пространстве:
+    /// Z_real = Z_bent - upward_curvature * X^2
+    pub fn restore_real_coordinates(&mut self) {
+        if self.is_real_coordinates || self.upward_curvature.abs() < 1e-7 {
+            self.is_real_coordinates = true;
+            return;
+        }
+        let cz = self.upward_curvature;
+        for i in 0..self.x_curve.len() {
+            let x = self.x_curve[i];
+            self.z_center[i] -= cz * x * x;
+        }
+        for i in 0..self.x_ext.len() {
+            let x = self.x_ext[i];
+            self.z_ext[i] -= cz * x * x;
+        }
+        for p in &mut self.points {
+            p.z_left -= cz * p.x_left * p.x_left;
+            p.z_right -= cz * p.x_right * p.x_right;
+            p.z_center -= cz * p.x_center * p.x_center;
+        }
+        for o in &mut self.obstacles {
+            let x = 0.5 * (o.bbox_3d_min[0] + o.bbox_3d_max[0]);
+            let dz = cz * x * x;
+            o.bbox_3d_min[2] -= dz;
+            o.bbox_3d_max[2] -= dz;
+        }
+        self.is_real_coordinates = true;
+    }
+
     /// Возвращает цвет RGB для шейпкаста: Красный при критическом препятствии на колее,
     /// Янтарный при препятствии в габарите, Бирюзовый/Циан при свободном пути.
     pub fn shapecast_color(&self) -> [u8; 3] {
@@ -221,7 +256,7 @@ impl DetectionResult {
 
     /// Генерирует 3D полилинии (wireframe strips) для визуализации шейпкаста габарита приближения:
     /// Коридор шейпкаста строится непосредственно вдоль аналитической кривой пути
-    /// от x_min (2.0 м перед лидаром) до x_max = max_distance_m:
+    /// от x_min (2.0 м перед лидаром) до x_max = max_distance_m с квадратичным подъемом вверх по глубине:
     /// - 4 продольные грани туннеля (нижняя левая/правая, верхняя левая/правая)
     /// - Поперечные прямоугольные рамки (шпангоуты) с шагом ~4 м вдоль кривой
     /// - Торцевые диагональные крестовины (порталы входа и выхода)
@@ -256,7 +291,11 @@ impl DetectionResult {
             let x = x_min + t * (x_max - x_min);
 
             let y_c = self.poly_y[0] * x * x + self.poly_y[1] * x + self.poly_y[2];
-            let z_surf = self.poly_z[0] * x + self.poly_z[1];
+            let z_surf = if self.is_real_coordinates {
+                self.poly_z[0] * x + self.poly_z[1]
+            } else {
+                self.poly_z[0] * x + self.poly_z[1] + self.upward_curvature * x * x
+            };
             let dy_dx = 2.0 * self.poly_y[0] * x + self.poly_y[1];
             let theta = dy_dx.atan();
             let sin_t = theta.sin();
@@ -356,6 +395,9 @@ pub struct ObstacleConfig {
     pub max_distance_m: f32,
     /// Порог перепада глубины для матричного 2D метода (м), default: 0.25 м
     pub depth_diff_thresh: f32,
+    /// Коэффициент квадратичного искривления тоннеля габарита вверх по глубине (1/м), Z_surf(X) += upward_curvature * X^2
+    /// Позволяет компенсировать линейный наклон вниз и удерживать габарит на полотне на дальних расстояниях
+    pub upward_curvature: f32,
 }
 
 impl Default for ObstacleConfig {
@@ -369,6 +411,7 @@ impl Default for ObstacleConfig {
             min_points: 6,
             max_distance_m: 50.0,
             depth_diff_thresh: 0.25,
+            upward_curvature: 0.0004,
         }
     }
 }
@@ -555,7 +598,10 @@ impl RailTrackDetector {
 
                         let dx = xr - xl;
                         let dy = yr - yl;
-                        let dz = zr - zl;
+                        let cz = self.obstacle_config.upward_curvature;
+                        let zl_real = zl - cz * xl * xl;
+                        let zr_real = zr - cz * xr * xr;
+                        let dz = zr_real - zl_real;
                         let gauge = (dx * dx + dy * dy + dz * dz).sqrt();
                         let h_diff = dz.abs();
                         let x_diff = dx.abs();
@@ -563,23 +609,28 @@ impl RailTrackDetector {
                         let xm = 0.5 * (xl + xr);
                         let ym = 0.5 * (yl + yr);
                         let zm = 0.5 * (zl + zr);
+                        let zm_real = zm - cz * xm * xm;
 
                         // Исключаем точки выше уровня земли (провода контактной сети и т.п.)
-                        if zm > -0.5 {
+                        // Проверяем в реальных физических координатах (zm_real), чтобы upward_curvature не отсекала точки на глубине!
+                        if zm_real > -0.3 {
                             continue;
                         }
 
-                        // Адаптивные к дальности допуски: с ростом глубины (xm) шаг лучей лидара
+                        // Адаптивные к дальности допуски: с ростом глубины (xm > 15m) шаг лучей лидара
                         // в метрах увеличивается, а кривизна пути создает естественный сдвиг по X между рельсами.
-                        let tol_gauge = (0.04 + 0.0018 * xm).min(0.08);
-                        let h_tol = (0.05 + 0.0025 * xm).min(0.18);
-                        let x_tol = (0.35 + 0.035 * xm).min(2.0);
+                        let tol_gauge =
+                            (0.04 + 0.0018 * xm.min(15.0) + 0.003 * (xm - 15.0).max(0.0)).min(0.18);
+                        let min_g =
+                            (self.min_gauge - tol_gauge).min(self.nominal_gauge - tol_gauge);
+                        let max_g =
+                            (self.max_gauge + tol_gauge).max(self.nominal_gauge + tol_gauge);
+                        let h_tol =
+                            (0.05 + 0.0025 * xm.min(15.0) + 0.004 * (xm - 15.0).max(0.0)).min(0.30);
+                        let x_tol =
+                            (0.35 + 0.035 * xm.min(15.0) + 0.04 * (xm - 15.0).max(0.0)).min(3.0);
 
-                        if gauge >= self.nominal_gauge - tol_gauge
-                            && gauge <= self.nominal_gauge + tol_gauge
-                            && h_diff < h_tol
-                            && x_diff < x_tol
-                        {
+                        if gauge >= min_g && gauge <= max_g && h_diff < h_tol && x_diff < x_tol {
                             if let Some(pxc) = prev_x_center {
                                 if xm < pxc - 0.5 {
                                     continue;
@@ -707,8 +758,8 @@ impl RailTrackDetector {
                 best.y_center.abs()
             };
 
-            let max_lat = (self.max_lateral_jump + 0.005 * best.x_center).min(0.55);
-            let max_lat_rail = (self.max_lateral_rail_jump + 0.004 * best.x_center).min(0.35);
+            let max_lat = (self.max_lateral_jump + 0.008 * best.x_center).min(0.80);
+            let max_lat_rail = (self.max_lateral_rail_jump + 0.006 * best.x_center).min(0.50);
 
             // Reject sudden lateral discontinuity of center
             if prev_y_center.is_some() && lateral_jump > max_lat {
@@ -762,9 +813,13 @@ impl RailTrackDetector {
         }
 
         // Extract coordinate arrays
+        let cz = self.obstacle_config.upward_curvature;
         let xm: Vec<f32> = candidates.iter().map(|pt| pt.x_center).collect();
         let ym: Vec<f32> = candidates.iter().map(|pt| pt.y_center).collect();
-        let zm: Vec<f32> = candidates.iter().map(|pt| pt.z_center).collect();
+        let zm_real: Vec<f32> = candidates
+            .iter()
+            .map(|pt| pt.z_center - cz * pt.x_center * pt.x_center)
+            .collect();
         let mut gauges: Vec<f32> = candidates.iter().map(|pt| pt.gauge).collect();
         gauges.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let median_gauge = if gauges.len() % 2 == 1 {
@@ -775,8 +830,8 @@ impl RailTrackDetector {
 
         // Fit quadratic curve for centerline: Y(X) = a*X^2 + b*X + c
         let raw_poly_y = polyfit2(&xm, &ym)?;
-        // Fit elevation profile: Z(X) = d*X + e
-        let raw_poly_z = polyfit1(&xm, &zm)?;
+        // Fit elevation profile in REAL coordinates (linear slope): Z_real(X) = d*X + e
+        let raw_poly_z = polyfit1(&xm, &zm_real)?;
         let raw_gauge = median_gauge;
         let raw_x_det_max = xm.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
 
@@ -872,7 +927,7 @@ impl RailTrackDetector {
             let t = (i as f32) / ((n_resample - 1) as f32);
             let xc = x_min + t * (x_max - x_min);
             let yc = a * xc * xc + b * xc + c;
-            let zc = d * xc + e;
+            let zc = d * xc + e + cz * xc * xc;
 
             let dy_dx = 2.0 * a * xc + b;
             let theta = dy_dx.atan();
@@ -908,7 +963,7 @@ impl RailTrackDetector {
                 let t = (i as f32) / ((n_ext - 1) as f32);
                 let xe = x_start + t * (x_end - x_start);
                 let ye = a * xe * xe + b * xe + c;
-                let ze = d * xe + e;
+                let ze = d * xe + e + cz * xe * xe;
 
                 let theta_poly = (2.0 * a * xe + b).atan();
                 let sin_t = theta_poly.sin();
@@ -983,7 +1038,9 @@ impl RailTrackDetector {
             min_height_above_rail: self.obstacle_config.min_height_above_rail,
             max_height_above_rail: self.obstacle_config.max_height_above_rail,
             max_distance_m: self.obstacle_config.max_distance_m,
+            upward_curvature: self.obstacle_config.upward_curvature,
             obstacle_enabled: self.obstacle_config.enabled,
+            is_real_coordinates: false,
         })
     }
 
@@ -1036,7 +1093,7 @@ impl RailTrackDetector {
                         let cos_th = 1.0 / (1.0 + k * k).sqrt();
                         let d_lat = (y - y_c) * cos_th;
 
-                        let z_surf = poly_d * x + poly_e;
+                        let z_surf = poly_d * x + poly_e + config.upward_curvature * x * x;
                         let dz = z - z_surf;
 
                         if d_lat.abs() <= half_w
@@ -1067,7 +1124,7 @@ impl RailTrackDetector {
                             continue;
                         }
 
-                        let z_surf = poly_d * x + poly_e;
+                        let z_surf = poly_d * x + poly_e + config.upward_curvature * x * x;
                         let dz = z - z_surf;
 
                         let idx = r_off + col;
@@ -1107,7 +1164,7 @@ impl RailTrackDetector {
                         let cos_th = 1.0 / (1.0 + k * k).sqrt();
                         let d_lat = (y - y_c) * cos_th;
 
-                        let z_surf = poly_d * x + poly_e;
+                        let z_surf = poly_d * x + poly_e + config.upward_curvature * x * x;
                         let dz = z - z_surf;
 
                         if d_lat.abs() <= half_w
@@ -1201,7 +1258,7 @@ impl RailTrackDetector {
                     let y_c = poly_a * x * x + poly_b * x + poly_c;
                     sum_y_off += y - y_c;
 
-                    let z_surf = poly_d * x + poly_e;
+                    let z_surf = poly_d * x + poly_e + config.upward_curvature * x * x;
                     max_dz = max_dz.max(z - z_surf);
                 }
 

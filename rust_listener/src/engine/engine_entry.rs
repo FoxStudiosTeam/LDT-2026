@@ -52,6 +52,7 @@ pub async fn entry(
     initial_detector.obstacle_config.min_points = 6;
     initial_detector.obstacle_config.max_distance_m = 100.0;
     initial_detector.obstacle_config.depth_diff_thresh = 0.25;
+    initial_detector.obstacle_config.upward_curvature = 0.0004;
 
     let rail_detector = Arc::new(std::sync::Mutex::new(initial_detector));
 
@@ -188,16 +189,33 @@ pub async fn entry(
                 ENV.PREVIEW_FOV_X_DEG,
             );
 
+            // Искривление всех точек тоннеля и карты глубины/интенсивности по Z_bent = Z + c_z * X^2
+            let c_z = {
+                let detector = rail_detector_lock.lock().unwrap();
+                detector.obstacle_config.upward_curvature
+            };
+            let crop_active = if c_z.abs() > 1e-7 {
+                crop_raw.warp_curvature(&geo, c_z)
+            } else {
+                crop_raw.clone()
+            };
+
             // 3.2. Поиск рельсов по перепадам дальности, валидация колеи и полиномиальная экстраполяция (dev_pyrails_rust)
             let rail_fit_start = std::time::Instant::now();
-            let rail_result = {
+            let bent_result = {
                 let mut detector = rail_detector_lock.lock().unwrap();
-                if detector.geometry.height != crop_raw.height || detector.geometry.width != crop_raw.width {
+                if detector.geometry.height != crop_active.height || detector.geometry.width != crop_active.width {
                     detector.geometry = geo.clone();
                 }
-                detector.detect(&crop_raw, frame_id as usize)
+                detector.detect(&crop_active, frame_id as usize)
             };
             let rail_calc_dur = rail_fit_start.elapsed();
+
+            // Восстановление истинных координат для 3D сцены: Z_real = Z_bent - c_z * X^2
+            let mut real_result = bent_result.clone();
+            if let Some(ref mut r) = real_result {
+                r.restore_real_coordinates();
+            }
 
             info!(
                 "[FRAME {frame_id}] ⏱️ Расчет кривой рельсов (2D Range Image) занял: {:.2} мс ({:?})",
@@ -205,7 +223,7 @@ pub async fn entry(
                 rail_calc_dur
             );
 
-            match &rail_result {
+            match &real_result {
                 Some(r) => {
                     let radius_str = if r.turn_radius.is_infinite() || r.turn_radius > 9999.0 {
                         "∞ (прямая)".to_string()
@@ -262,14 +280,28 @@ pub async fn entry(
             }
 
             // 4. Отправка результатов детекции в Rerun:
-            //    Окно 1: 3D сцена с облаком точек, 3D кривыми путей и 3D экстраполяцией
-            if let Err(e) = recording_stream.log_rail_detection(rail_result.as_ref()) {
+            //    Окно 1: 3D сцена с облаком точек, 3D кривыми путей и 3D экстраполяцией в РЕАЛЬНЫХ координатах
+            if let Err(e) = recording_stream.log_rail_detection(real_result.as_ref()) {
                 error!("Ошибка логирования 3D кривой рельсов в rerun: {e:?}");
             }
 
-            //    Окно 2: 2D карта глубины с наложенными 2D путями и экстраполяцией (как в dev_pyrails_rust)
+            //    Искривленные точки тоннеля в Rerun
+            if c_z.abs() > 1e-7 {
+                let mut bent_pts = rerun_points.clone();
+                for p in &mut bent_pts {
+                    p[2] += c_z * p[0] * p[0];
+                }
+                let _ = recording_stream.log(
+                    "lidar/point_cloud_bent",
+                    &rerun::Points3D::new(&bent_pts)
+                        .with_colors(rerun_colors.clone())
+                        .with_radii([rerun::Radius::new_ui_points(1.2)]),
+                );
+            }
+
+            //    Окно 2: 2D карта глубины и интенсивности с наложенными 2D путями и экстраполяцией
             let rerun_depth_start = std::time::Instant::now();
-            if let Err(e) = recording_stream.log_rail_detection_2d(&crop_raw, &geo, rail_result.as_ref()) {
+            if let Err(e) = recording_stream.log_rail_detection_2d(&crop_active, &geo, bent_result.as_ref()) {
                 error!("Ошибка логирования 2D карты глубины в rerun: {e:?}");
             }
             debug!(

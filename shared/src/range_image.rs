@@ -698,6 +698,69 @@ impl RangeImage {
         Ok(())
     }
 
+    /// Искривляет диапазонное изображение и карту интенсивности вдоль оси Z квадратично:
+    /// Z' = Z + upward_curvature * X^2
+    /// Переносит точки в искривленное пространство координат, выпрямляя профиль полотна
+    /// и поднимая дальние точки в зону активных строк сканирования.
+    pub fn warp_curvature(&self, geo: &crate::rail_detection::LidarGeometry, c_z: f32) -> Self {
+        if c_z.abs() < 1e-7 {
+            return self.clone();
+        }
+        let w = self.width;
+        let h = self.height;
+        let mut warped = Self::new(w, h);
+        let has_intensity = !self.intensity.is_empty();
+        if has_intensity {
+            warped.intensity = vec![0.0; w * h];
+        }
+
+        for r in 0..h {
+            let row_off = r * w;
+            for c in 0..w {
+                let range = self.data[row_off + c];
+                if range <= 0.1 {
+                    continue;
+                }
+                let (x, y, z) = geo.row_col_range_to_xyz(r, c, range);
+                let z_bent = z + c_z * x * x;
+                let r_bent = (x * x + y * y + z_bent * z_bent).sqrt();
+                let (r_new, c_new) = geo.xyz_to_row_col(x, y, z_bent);
+
+                if r_new >= 0 && (r_new as usize) < h && c_new >= 0 && (c_new as usize) < w {
+                    let idx = r_new as usize * w + c_new as usize;
+                    if warped.data[idx] == 0.0 || r_bent < warped.data[idx] {
+                        warped.data[idx] = r_bent;
+                        if has_intensity {
+                            warped.intensity[idx] = self.intensity[row_off + c];
+                        }
+                    }
+                }
+            }
+        }
+
+        // Заполнение возможных одиночных пропусков между соседними строками
+        for r in 1..h.saturating_sub(1) {
+            let row_off = r * w;
+            for c in 0..w {
+                let idx = row_off + c;
+                if warped.data[idx] == 0.0 {
+                    let top = warped.data[(r - 1) * w + c];
+                    let bot = warped.data[(r + 1) * w + c];
+                    if top > 0.0 && bot > 0.0 && (top - bot).abs() < 1.0 {
+                        warped.data[idx] = 0.5 * (top + bot);
+                        if has_intensity {
+                            let top_i = warped.intensity[(r - 1) * w + c];
+                            let bot_i = warped.intensity[(r + 1) * w + c];
+                            warped.intensity[idx] = 0.5 * (top_i + bot_i);
+                        }
+                    }
+                }
+            }
+        }
+
+        warped
+    }
+
     /// Загрузка 2D или 3D (2-канальной) матрицы из стандартного формата NumPy `.npy` (v1.0, float32).
     pub fn load_npy<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<Self> {
         let bytes = std::fs::read(path)?;
@@ -827,10 +890,7 @@ impl RangeImage {
             u8_bytes.resize(expected_len, 0);
         }
 
-        let img = rerun::Image::from_l8(
-            u8_bytes,
-            [self.width as u32, self.height as u32],
-        );
+        let img = rerun::Image::from_l8(u8_bytes, [self.width as u32, self.height as u32]);
         Ok(img)
     }
 }
