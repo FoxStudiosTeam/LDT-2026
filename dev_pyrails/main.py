@@ -51,6 +51,7 @@ def run_interactive(frames_dir: str, detector: RailTrackDetector, visualizer: Ra
 
     def on_trackbar(val):
         current_idx[0] = max(0, min(val, n_frames - 1))
+        detector.reset()
 
     cv2.createTrackbar("Frame", window_name, 0, n_frames - 1, on_trackbar)
 
@@ -61,6 +62,8 @@ def run_interactive(frames_dir: str, detector: RailTrackDetector, visualizer: Ra
     print("  [A] / [<-]  : Previous frame")
     print("  [S]         : Save current frame screenshot")
     print("  [Q] / [ESC] : Quit")
+    print("Extrapolation:")
+    print("  [Magenta]   : Polynomial extrapolation (temporal N-frame smoothed)")
     print("=" * 60 + "\n")
 
     out_dir = os.path.join(os.path.dirname(__file__), "output")
@@ -187,6 +190,18 @@ def main():
         "--fps", type=float, default=12.0, help="Video playback / export FPS"
     )
     parser.add_argument(
+        "--extrapolate-m",
+        type=float,
+        default=15.0,
+        help="Extrapolation distance in meters beyond detected track",
+    )
+    parser.add_argument(
+        "--smooth-n",
+        type=int,
+        default=5,
+        help="Number of consecutive frames for temporal averaging (default: 5)",
+    )
+    parser.add_argument(
         "--interactive", action="store_true", help="Launch interactive OpenCV GUI"
     )
 
@@ -198,16 +213,21 @@ def main():
         return
 
     sample_frame = np.load(paths[0])
-    height, width = sample_frame.shape
-
-    print(f"Loaded range image geometry: {height}x{width}")
+    height, width = sample_frame.shape[:2]
+    has_intensity = sample_frame.ndim == 3 and sample_frame.shape[2] >= 2
+    channels_str = f", channels={sample_frame.shape[2]} (range + intensity)" if has_intensity else " (range only)"
+    print(f"Loaded range image geometry: {height}x{width}{channels_str}")
 
     geo = LidarGeometry(
         height=height,
         width=width,
     )
-    detector = RailTrackDetector(geometry=geo)
-    visualizer = RailVisualizer(geometry=geo)
+    detector = RailTrackDetector(
+        geometry=geo,
+        extrapolate_m=args.extrapolate_m,
+        smooth_n=args.smooth_n,
+    )
+    visualizer = RailVisualizer(geometry=geo, max_dist_m=200.0)
 
     if args.interactive:
         run_interactive(args.frames_dir, detector, visualizer)

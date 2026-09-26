@@ -15,30 +15,84 @@ from geometry import LidarGeometry
 from detector import DetectionResult
 
 
+def draw_dashed_polyline(
+    img: np.ndarray,
+    pts: np.ndarray,
+    color: Tuple[int, int, int],
+    thickness: int = 2,
+    dash_step: int = 4,
+):
+    """Draws a dashed polyline along given sequential 2D points."""
+    if len(pts) < 2:
+        return
+    for i in range(0, len(pts) - 1, dash_step):
+        i_end = min(i + max(2, dash_step // 2 + 1), len(pts))
+        sub = pts[i:i_end]
+        if len(sub) > 1:
+            cv2.polylines(img, [sub], False, color, thickness, cv2.LINE_AA)
+
+
 class RailVisualizer:
     def __init__(
         self,
         geometry: Optional[LidarGeometry] = None,
         scale: int = 4,
-        max_dist_m: float = 25.0,
+        max_dist_m: float = 200.0,
         colormap: int = cv2.COLORMAP_TURBO,
     ):
         self.geo = geometry or LidarGeometry()
         self.scale = scale
         self.max_dist_m = max_dist_m
         self.colormap = colormap
+        self._turbo_lut = cv2.applyColorMap(
+            np.arange(256, dtype=np.uint8).reshape(-1, 1),
+            self.colormap,
+        ).reshape(256, 3)
 
     def render_range_view(
         self, frame: np.ndarray, res: Optional[DetectionResult]
     ) -> np.ndarray:
-        """Renders perspective range image with overlaid curves, corridor, and raw points."""
-        h, w = frame.shape
-        clipped = np.clip(frame, 0.0, self.max_dist_m)
-        norm = ((clipped / self.max_dist_m) * 255.0).astype(np.uint8)
-        color_img = cv2.applyColorMap(norm, self.colormap)
+        if frame.ndim == 3:
+            range_frame = frame[:, :, 0]
+        else:
+            range_frame = frame
 
+        h, w = range_frame.shape
+
+        # float32 distance -> [0, 1]
+        normalized = np.clip(
+            range_frame / self.max_dist_m,
+            0.0,
+            1.0,
+        )
+
+        # Позиция внутри 256-цветной Turbo LUT
+        pos = normalized * 255.0
+
+        # Два соседних цвета
+        idx0 = np.floor(pos).astype(np.int32)
+        idx1 = np.minimum(idx0 + 1, 255)
+
+        # Дробная часть между ними
+        alpha = pos - idx0
+
+        color0 = self._turbo_lut[idx0]
+        color1 = self._turbo_lut[idx1]
+
+        # Интерполируем цвет
+        color_img = (
+                color0 * (1.0 - alpha[..., None])
+                + color1 * alpha[..., None]
+        ).astype(np.uint8)
+
+        # 0 = нет измерения
+        color_img[range_frame <= 0.0] = 0
+
+        # Увеличение
         vis = cv2.resize(
-            color_img, (w * self.scale, h * self.scale), interpolation=cv2.INTER_NEAREST
+            color_img,
+            (w * self.scale, h * self.scale),
+            interpolation=cv2.INTER_NEAREST,
         )
 
         if res is None:
@@ -88,6 +142,19 @@ class RailVisualizer:
         if len(pts_c) > 1:
             cv2.polylines(vis, [pts_c], False, (0, 255, 0), 2, cv2.LINE_AA)  # Bright Green
 
+        # 3b. Extrapolation (Purple/Magenta Polynomial, N-frame smoothed)
+        row_ep, col_ep = None, None
+        if res.x_ext is not None and len(res.x_ext) > 1:
+            row_ep, col_ep = self.geo.xyz_to_row_col(res.x_ext, res.y_ext, res.z_ext)
+            row_epl, col_epl = self.geo.xyz_to_row_col(res.x_ext_l, res.y_ext_l, res.z_ext)
+            row_epr, col_epr = self.geo.xyz_to_row_col(res.x_ext_r, res.y_ext_r, res.z_ext)
+            pts_ep = to_pts(row_ep, col_ep)
+            pts_epl = to_pts(row_epl, col_epl)
+            pts_epr = to_pts(row_epr, col_epr)
+            draw_dashed_polyline(vis, pts_ep, (255, 0, 255), 2, dash_step=4)       # Poly Center (Magenta)
+            draw_dashed_polyline(vis, pts_epl, (220, 60, 220), 1, dash_step=4)     # Poly Left (Magenta)
+            draw_dashed_polyline(vis, pts_epr, (220, 60, 220), 1, dash_step=4)     # Poly Right (Magenta)
+
         # 4. Raw detected point markers
         for pt in res.points:
             cv2.circle(
@@ -105,13 +172,22 @@ class RailVisualizer:
                 -1,
             )
 
-        # 5. Distance tick markers (e.g. 5m, 10m, 15m, 20m)
-        for dist in [5.0, 10.0, 15.0, 20.0]:
-            if dist < res.x_curve.min() or dist > res.x_curve.max():
-                continue
-            idx = int(np.argmin(np.abs(res.x_curve - dist)))
-            r_val, c_val = row_c[idx], col_c[idx]
-            if 0 <= r_val < h and 0 <= c_val < w:
+        # 5. Distance tick markers (e.g. 5m, 10m, 15m, 20m, 25m, 30m)
+        for dist in [5.0, 10.0, 15.0, 20.0, 25.0, 30.0]:
+            r_val, c_val = None, None
+            if dist >= res.x_curve.min() and dist <= res.x_curve.max():
+                idx = int(np.argmin(np.abs(res.x_curve - dist)))
+                r_val, c_val = row_c[idx], col_c[idx]
+            elif (
+                res.x_ext is not None
+                and dist >= res.x_ext.min()
+                and dist <= res.x_ext.max()
+                and row_ep is not None
+            ):
+                idx = int(np.argmin(np.abs(res.x_ext - dist)))
+                r_val, c_val = row_ep[idx], col_ep[idx]
+
+            if r_val is not None and 0 <= r_val < h and 0 <= c_val < w:
                 px = int(c_val * self.scale)
                 py = int(r_val * self.scale)
                 cv2.circle(vis, (px, py), 4, (255, 255, 255), -1)
@@ -138,6 +214,11 @@ class RailVisualizer:
             cv2.LINE_AA,
         )
 
+        # Top-right extrapolation legend overlay (Magenta only)
+        if res.x_ext is not None:
+            top_rx = int(w * self.scale) - 230
+            cv2.putText(vis, f"-- Extrap (+{res.extrapolate_m:.0f}m, N={res.smooth_n})", (top_rx, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 0, 255), 1, cv2.LINE_AA)
+
         return vis
 
     def render_bev_view(
@@ -147,9 +228,9 @@ class RailVisualizer:
         bev = np.full((height, width, 3), 20, dtype=np.uint8)
 
         # BEV Coordinate Mapping:
-        # X: [0.0, 24.0] -> [height - 30, 20]
+        # X: [0.0, 35.0] -> [height - 30, 20]
         # Y: [-2.5, +2.5] -> [width - 20, 20]
-        x_max, x_min = 24.0, 0.0
+        x_max, x_min = 35.0, 0.0
         y_max, y_min = 2.5, -2.5
 
         def to_bev_px(x: np.ndarray, y: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -159,9 +240,9 @@ class RailVisualizer:
             px = (width / 2.0) + (y / (y_max - y_min) * (width - 40))
             return px.astype(np.int32), py.astype(np.int32)
 
-        # Grid rings (5m, 10m, 15m, 20m)
+        # Grid rings (5m, 10m, 15m, 20m, 25m, 30m)
         cx, cy = int(width / 2.0), height - 30
-        for d in [5.0, 10.0, 15.0, 20.0]:
+        for d in [5.0, 10.0, 15.0, 20.0, 25.0, 30.0]:
             _, ry = to_bev_px(np.array([d]), np.array([0.0]))
             radius_px = cy - int(ry[0])
             cv2.circle(bev, (cx, cy), radius_px, (45, 45, 45), 1, cv2.LINE_AA)
@@ -211,6 +292,28 @@ class RailVisualizer:
                 cv2.polylines(bev, [bev_r], False, (30, 90, 255), 2, cv2.LINE_AA)
             if len(bev_c) > 1:
                 cv2.polylines(bev, [bev_c], False, (0, 255, 0), 2, cv2.LINE_AA)
+
+            # Extrapolation in BEV (Purple/Magenta Polynomial, N-frame smoothed)
+            if res.x_ext is not None and len(res.x_ext) > 1:
+                px_ep, py_ep = to_bev_px(res.x_ext, res.y_ext)
+                px_epl, py_epl = to_bev_px(res.x_ext_l, res.y_ext_l)
+                px_epr, py_epr = to_bev_px(res.x_ext_r, res.y_ext_r)
+                draw_dashed_polyline(bev, np.column_stack([px_ep, py_ep]), (255, 0, 255), 2, dash_step=4)
+                draw_dashed_polyline(bev, np.column_stack([px_epl, py_epl]), (200, 50, 200), 1, dash_step=4)
+                draw_dashed_polyline(bev, np.column_stack([px_epr, py_epr]), (200, 50, 200), 1, dash_step=4)
+
+                # Label at tip
+                if len(px_ep) > 0:
+                    cv2.putText(
+                        bev,
+                        f"Extrap (+{res.extrapolate_m:.0f}m)",
+                        (int(px_ep[-1]) + 5, int(py_ep[-1])),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.33,
+                        (255, 120, 255),
+                        1,
+                        cv2.LINE_AA,
+                    )
 
             # Raw detected points
             for pt in res.points:
@@ -302,6 +405,8 @@ class RailVisualizer:
             ("Scanlines Found", f"{len(res.points)} / 48"),
             ("Confidence", f"{res.confidence * 100:.0f} %"),
         ]
+        if res.has_intensity:
+            metrics.append(("Intensity L/R", f"{res.avg_intensity_left:.0f} / {res.avg_intensity_right:.0f}"))
 
         y_offset = 135
         for label, val in metrics:
@@ -339,36 +444,97 @@ class RailVisualizer:
             cv2.LINE_AA,
         )
         bar_x = 20
-        bar_y = y_offset + 22
+        bar_y = y_offset + 20
         bar_w = width - 40
-        bar_h = 12
+        bar_h = 10
         cv2.rectangle(hud, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), (40, 40, 40), -1)
         fill_w = int(bar_w * res.confidence)
         fill_col = (0, 220, 80) if res.confidence > 0.7 else (0, 180, 240)
         cv2.rectangle(hud, (bar_x, bar_y), (bar_x + fill_w, bar_y + bar_h), fill_col, -1)
 
+        y_offset = bar_y + bar_h + 18
+
+        # Extrapolation telemetry block (Purple/Magenta Polynomial, N-frame smoothed)
+        if res.x_ext is not None and len(res.x_ext) > 0:
+            cv2.line(hud, (15, y_offset - 2), (width - 15, y_offset - 2), (50, 50, 50), 1)
+            cv2.putText(
+                hud,
+                f"EXTRAPOLATION (+{res.extrapolate_m:.0f}m)",
+                (20, y_offset + 14),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.46,
+                (220, 220, 220),
+                1,
+                cv2.LINE_AA,
+            )
+            y_offset += 32
+            poly_y_end = res.y_ext[-1]
+            cv2.circle(hud, (25, y_offset - 4), 4, (255, 0, 255), -1)
+            cv2.putText(
+                hud,
+                f"Poly Drift:      {poly_y_end:+.2f} m",
+                (36, y_offset),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.42,
+                (255, 120, 255),
+                1,
+                cv2.LINE_AA,
+            )
+            y_offset += 22
+            cv2.putText(
+                hud,
+                f"Filter Buffer:   {res.smooth_n} frame(s)",
+                (36, y_offset),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.40,
+                (170, 170, 170),
+                1,
+                cv2.LINE_AA,
+            )
+
         # Legend at bottom
-        leg_y = height - 45
-        cv2.line(hud, (15, leg_y - 15), (width - 15, leg_y - 15), (50, 50, 50), 1)
-        cv2.putText(hud, "Legend: ", (20, leg_y + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (160, 160, 160), 1)
-        cv2.circle(hud, (80, leg_y + 2), 4, (255, 210, 30), -1)
-        cv2.putText(hud, "Left", (88, leg_y + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 200), 1)
-        cv2.circle(hud, (135, leg_y + 2), 4, (30, 90, 255), -1)
-        cv2.putText(hud, "Right", (143, leg_y + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 200), 1)
-        cv2.circle(hud, (198, leg_y + 2), 4, (0, 255, 0), -1)
-        cv2.putText(hud, "Center", (206, leg_y + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 200), 1)
+        leg_y = height - 56
+        cv2.line(hud, (15, leg_y - 10), (width - 15, leg_y - 10), (50, 50, 50), 1)
+        cv2.putText(hud, "Track: ", (18, leg_y + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (140, 140, 140), 1)
+        cv2.circle(hud, (72, leg_y + 3), 4, (255, 210, 30), -1)
+        cv2.putText(hud, "Left", (80, leg_y + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (200, 200, 200), 1)
+        cv2.circle(hud, (126, leg_y + 3), 4, (30, 90, 255), -1)
+        cv2.putText(hud, "Right", (134, leg_y + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (200, 200, 200), 1)
+        cv2.circle(hud, (188, leg_y + 3), 4, (0, 255, 0), -1)
+        cv2.putText(hud, "Center", (196, leg_y + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (200, 200, 200), 1)
+
+        cv2.putText(hud, "Extrap:", (18, leg_y + 26), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (140, 140, 140), 1)
+        cv2.circle(hud, (72, leg_y + 23), 4, (255, 0, 255), -1)
+        cv2.putText(hud, "Poly (Magenta)", (80, leg_y + 26), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (255, 120, 255), 1)
 
         return hud
 
     def render_composite(
-        self, frame: np.ndarray, res: Optional[DetectionResult]
+            self,
+            frame: np.ndarray,
+            res: Optional[DetectionResult],
     ) -> np.ndarray:
-        """Assembles Range View, BEV Map, and Telemetry HUD into one composite frame."""
+
         range_view = self.render_range_view(frame, res)
+
         h = range_view.shape[0]
 
-        bev_view = self.render_bev_view(res, width=360, height=h)
-        hud_view = self.render_hud(res, width=320, height=h)
+        bev_view = self.render_bev_view(
+            res,
+            width=360,
+            height=h,
+        )
 
-        composite = np.hstack([range_view, bev_view, hud_view])
+        hud_view = self.render_hud(
+            res,
+            width=320,
+            height=h,
+        )
+
+        composite = np.hstack([
+            range_view,
+            bev_view,
+            hud_view,
+        ])
+
         return composite

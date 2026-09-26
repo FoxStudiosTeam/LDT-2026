@@ -48,10 +48,10 @@ class LidarGeometry:
 
     def range_image_to_xyz(self, frame):
         """Vectorized conversion of entire range image to X, Y, Z arrays."""
-
-        X = frame * self.dir_x
-        Y = frame * self.dir_y
-        Z = frame * self.dir_z
+        r = frame[:, :, 0] if frame.ndim == 3 else frame
+        X = r * self.dir_x
+        Y = r * self.dir_y
+        Z = r * self.dir_z
         return X, Y, Z
 
     def xyz_to_row_col(self, x, y, z):

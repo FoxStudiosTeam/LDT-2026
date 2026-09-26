@@ -27,7 +27,14 @@ def process_frame(file_path: str):
     Матрица имеет форму [128, crop_w], dtype=float32.
     Каждое значение — дальность в метрах (0.0 — отсутствие возврата).
     """
-    depth = np.load(file_path)
+    raw = np.load(file_path)
+    if raw.ndim == 3:
+        depth = raw[:, :, 0]
+        intensity = raw[:, :, 1]
+    else:
+        depth = raw
+        intensity = None
+
     height, width = depth.shape
     valid_mask = depth > 0.0
     valid_points = depth[valid_mask]
@@ -36,9 +43,13 @@ def process_frame(file_path: str):
     max_range = valid_points.max() if len(valid_points) > 0 else 0.0
 
     print(f"Кадр {os.path.basename(file_path)}:")
-    print(f"  Разрешение: {width}x{height} (колонок x колец)")
+    chan_str = f" x 2 (range + intensity)" if intensity is not None else ""
+    print(f"  Разрешение: {width}x{height}{chan_str} (колонок x колец)")
     print(f"  Число валидных точек: {len(valid_points)} из {depth.size} ({len(valid_points)/depth.size*100:.1f}%)")
     print(f"  Диапазон дальности: [{min_range:.2f}м .. {max_range:.2f}м]")
+    if intensity is not None:
+        valid_i = intensity[valid_mask]
+        print(f"  Диапазон intensity: [{intensity.min():.1f} .. {intensity.max():.1f}], среднее: {valid_i.mean():.1f}")
 
     # ── Пример алгоритма: поиск ближайшего объекта в колее ──
     # Берем центральный сектор по ширине (колея) и нижние кольца (дорожное полотно / препятствие)
