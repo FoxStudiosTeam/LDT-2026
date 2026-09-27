@@ -997,6 +997,12 @@ pub struct RailTuner2DApp {
     extrapolate_m: f32,
     smooth_n: usize,
 
+    // Межкадровое отбрасывание скачков и опорная дальняя точка
+    temporal_jump_reject_enabled: bool,
+    max_interframe_jump_m: f32,
+    max_outlier_frames: usize,
+    far_anchor_enabled: bool,
+
     // Параметры двух текстур и смешивания (синхронизированы с определителем и 2D вьювером)
     contrast_depth: f32,
     contrast_intensity: f32,
@@ -1063,6 +1069,10 @@ impl RailTuner2DApp {
             max_lateral_rail_jump: detector.max_lateral_rail_jump,
             extrapolate_m: detector.extrapolate_m,
             smooth_n: detector.smooth_n,
+            temporal_jump_reject_enabled: detector.temporal_jump_reject_enabled,
+            max_interframe_jump_m: detector.max_interframe_jump_m,
+            max_outlier_frames: detector.max_outlier_frames,
+            far_anchor_enabled: detector.far_anchor_enabled,
             contrast_depth: detector.contrast_depth,
             contrast_intensity: detector.contrast_intensity,
             blend: detector.blend,
@@ -1138,6 +1148,10 @@ impl RailTuner2DApp {
         self.detector.max_lateral_rail_jump = self.max_lateral_rail_jump;
         self.detector.extrapolate_m = self.extrapolate_m;
         self.detector.smooth_n = self.smooth_n;
+        self.detector.temporal_jump_reject_enabled = self.temporal_jump_reject_enabled;
+        self.detector.max_interframe_jump_m = self.max_interframe_jump_m;
+        self.detector.max_outlier_frames = self.max_outlier_frames;
+        self.detector.far_anchor_enabled = self.far_anchor_enabled;
 
         self.detector.contrast_depth = self.contrast_depth;
         self.detector.contrast_intensity = self.contrast_intensity;
@@ -1208,7 +1222,7 @@ impl RailTuner2DApp {
             .detector
             .detect_with_raw(&active_ri, Some(raw_ri), frame.idx);
         if let Some(r) = &bent_res {
-            println!("Radius: {}", r.turn_radius);
+            // println!("Radius: {}", r.turn_radius);
             // 400 - max
             // self.detector.obstacle_config.clearance_narrowing_width = r.turn_radius;
         }
@@ -1482,7 +1496,11 @@ impl eframe::App for RailTuner2DApp {
                              detector.obstacle_config.upward_curvature = {:.5};\n\
                              detector.obstacle_config.clearance_narrowing_width = {:.4};\n\
                              detector.obstacle_config.clearance_narrowing_height = {:.4};\n\
-                             detector.obstacle_config.cluster_depth_thresh = {:.2};",
+                             detector.obstacle_config.cluster_depth_thresh = {:.2};\n\
+                             detector.temporal_jump_reject_enabled = {};\n\
+                             detector.max_interframe_jump_m = {:.3};\n\
+                             detector.max_outlier_frames = {};\n\
+                             detector.far_anchor_enabled = {};",
                             self.depth_step_thresh,
                             self.max_depth_step_thresh,
                             self.nominal_gauge,
@@ -1509,6 +1527,10 @@ impl eframe::App for RailTuner2DApp {
                             self.clearance_narrowing_width,
                             self.clearance_narrowing_height,
                             self.cluster_depth_thresh,
+                            self.temporal_jump_reject_enabled,
+                            self.max_interframe_jump_m,
+                            self.max_outlier_frames,
+                            self.far_anchor_enabled,
                         );
                         ui.ctx().copy_text(cfg.clone());
                         println!("\n{}\n", cfg);
@@ -1716,6 +1738,56 @@ impl eframe::App for RailTuner2DApp {
                                 .add(egui::Slider::new(&mut self.smooth_n, 1..=15))
                                 .changed();
 
+                            ui.separator();
+                            param_changed |= ui
+                                .checkbox(
+                                    &mut self.temporal_jump_reject_enabled,
+                                    "🛡️ Reject Outlier Jumps (Inter-frame Gating)",
+                                )
+                                .on_hover_text("Отбрасывает резкие боковые скачки между соседними кадрами и удерживает траекторию (coasting)")
+                                .changed();
+
+                            if self.temporal_jump_reject_enabled {
+                                ui.label("Max Inter-frame Jump (m):");
+                                param_changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut self.max_interframe_jump_m, 0.05..=1.00)
+                                            .step_by(0.01)
+                                            .text("m"),
+                                    )
+                                    .changed();
+
+                                ui.label("Max Coasting Frames (N):");
+                                param_changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut self.max_outlier_frames, 1..=10)
+                                            .text("frames"),
+                                    )
+                                    .on_hover_text("Сколько кадров подряд удерживать проверенную траекторию при срыве детекции")
+                                    .changed();
+                            }
+
+                            ui.separator();
+                            param_changed |= ui
+                                .checkbox(
+                                    &mut self.far_anchor_enabled,
+                                    "⚓ Use Far Anchor Point from Previous Frame",
+                                )
+                                .on_hover_text("Включает опорную дальнюю точку предыдущего кадра для стабилизации горизонта")
+                                .changed();
+
+                            if self.far_anchor_enabled {
+                                if let Some(anchor) = self.detector.last_far_anchor {
+                                    ui.colored_label(
+                                        Color32::from_rgb(100, 220, 255),
+                                        format!("⚓ Anchor: X={:.1}m, Y={:.2}m, Z={:.2}m", anchor[0], anchor[1], anchor[2]),
+                                    );
+                                } else {
+                                    ui.colored_label(Color32::GRAY, "⚓ Anchor: waiting for first stable frame...");
+                                }
+                            }
+
+                            ui.add_space(4.0);
                             if ui.button("🔄 Reset Temporal History").clicked() {
                                 self.detector.reset();
                                 param_changed = true;
@@ -1881,6 +1953,18 @@ impl eframe::App for RailTuner2DApp {
                             "Detection Latency: {:.2} ms",
                             self.profiling.detector_total_ms
                         ));
+
+                        if r.is_coasting {
+                            ui.colored_label(
+                                Color32::from_rgb(255, 90, 90),
+                                format!("⚠️ Status: COASTING (Streak: {}/{})", r.outlier_streak, self.max_outlier_frames),
+                            );
+                        } else {
+                            ui.colored_label(Color32::GREEN, "🛡️ Status: TRACKING (Continuity locked)");
+                        }
+                        if r.far_anchor_active {
+                            ui.colored_label(Color32::from_rgb(100, 220, 255), "⚓ Far Anchor: Active in fit");
+                        }
 
                         ui.add_space(4.0);
                         ui.separator();

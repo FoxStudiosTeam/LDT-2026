@@ -42,6 +42,10 @@ impl Into<RailTrackDetector> for DetectionPreset {
                 detector.obstacle_config.cluster_depth_thresh = 1.20;
                 detector.obstacle_config.clearance_narrowing_width = 0.003;
                 detector.obstacle_config.clearance_narrowing_height = 0.003;
+                detector.temporal_jump_reject_enabled = true;
+                detector.max_interframe_jump_m = 0.25;
+                detector.max_outlier_frames = 4;
+                detector.far_anchor_enabled = true;
                 detector
             }
             Self::StrictRail => {
@@ -74,6 +78,10 @@ impl Into<RailTrackDetector> for DetectionPreset {
                 detector.obstacle_config.clearance_narrowing_width = 0.0030;
                 detector.obstacle_config.clearance_narrowing_height = 0.0030;
                 detector.obstacle_config.cluster_depth_thresh = 1.20;
+                detector.temporal_jump_reject_enabled = true;
+                detector.max_interframe_jump_m = 0.25;
+                detector.max_outlier_frames = 4;
+                detector.far_anchor_enabled = true;
                 detector
             }
         }
@@ -82,6 +90,6 @@ impl Into<RailTrackDetector> for DetectionPreset {
 
 impl DetectionPreset {
     pub fn current() -> Self {
-        DetectionPreset::Default
+        DetectionPreset::StrictRail
     }
 }

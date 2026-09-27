@@ -217,6 +217,12 @@ pub struct DetectionResult {
     pub obstacle_enabled: bool,
     /// Флаг истинных (восстановленных) координат в реальном физическом пространстве
     pub is_real_coordinates: bool,
+    /// Режим удержания траектории (coasting) при отбрасывании скачка
+    pub is_coasting: bool,
+    /// Длина серии отброшенных выбросов подряд
+    pub outlier_streak: usize,
+    /// Использована ли дальняя опорная точка из предыдущего кадра
+    pub far_anchor_active: bool,
     /// Время детекции рельсов (мс)
     pub timing_rail_ms: f32,
     /// Время проверки и кластеризации препятствий (мс)
@@ -536,6 +542,26 @@ pub struct RailTrackDetector {
     pub blend: f32,
     pub history: std::collections::VecDeque<DetectionHistoryItem>,
     pub last_frame_idx: Option<usize>,
+    /// Отбрасывание резких боковых скачков траектории между кадрами (gating)
+    pub temporal_jump_reject_enabled: bool,
+    /// Максимальный допустимый боковой скачок траектории между кадрами (м)
+    pub max_interframe_jump_m: f32,
+    /// Максимальное число кадров подряд для удержания траектории при срыве (coasting)
+    pub max_outlier_frames: usize,
+    /// Включение функционала дальней опорной точки из предыдущего кадра
+    pub far_anchor_enabled: bool,
+    /// Счётчик последовательных отброшенных кадров-выбросов
+    pub outlier_streak: usize,
+    /// Последняя валидированная полиномиальная траектория Y(X) = a*X^2 + b*X + c
+    pub last_valid_poly_y: Option<[f32; 3]>,
+    /// Последний валидированный высотный профиль Z(X) = d*X + e
+    pub last_valid_poly_z: Option<[f32; 2]>,
+    /// Последняя валидированная ширина колеи
+    pub last_valid_gauge: Option<f32>,
+    /// Последняя максимальная дистанция подтвержденных точек
+    pub last_valid_x_max: Option<f32>,
+    /// Опорная дальняя точка [x, y, z] из предыдущего подтверждённого кадра
+    pub last_far_anchor: Option<[f32; 3]>,
 }
 
 impl RailTrackDetector {
@@ -560,6 +586,16 @@ impl RailTrackDetector {
             blend: 0.0,
             history: std::collections::VecDeque::new(),
             last_frame_idx: None,
+            temporal_jump_reject_enabled: true,
+            max_interframe_jump_m: 0.25,
+            max_outlier_frames: 4,
+            far_anchor_enabled: true,
+            outlier_streak: 0,
+            last_valid_poly_y: None,
+            last_valid_poly_z: None,
+            last_valid_gauge: None,
+            last_valid_x_max: None,
+            last_far_anchor: None,
         }
     }
 
@@ -567,6 +603,12 @@ impl RailTrackDetector {
     pub fn reset(&mut self) {
         self.history.clear();
         self.last_frame_idx = None;
+        self.outlier_streak = 0;
+        self.last_valid_poly_y = None;
+        self.last_valid_poly_z = None;
+        self.last_valid_gauge = None;
+        self.last_valid_x_max = None;
+        self.last_far_anchor = None;
     }
 
     /// Analyzes a single range frame and returns DetectionResult or None if no track is found.
@@ -955,9 +997,9 @@ impl RailTrackDetector {
 
         // Extract coordinate arrays
         let cz = self.obstacle_config.upward_curvature;
-        let xm: Vec<f32> = candidates.iter().map(|pt| pt.x_center).collect();
-        let ym: Vec<f32> = candidates.iter().map(|pt| pt.y_center).collect();
-        let zm_real: Vec<f32> = candidates
+        let mut xm: Vec<f32> = candidates.iter().map(|pt| pt.x_center).collect();
+        let mut ym: Vec<f32> = candidates.iter().map(|pt| pt.y_center).collect();
+        let mut zm_real: Vec<f32> = candidates
             .iter()
             .map(|pt| pt.z_center - cz * pt.x_center * pt.x_center)
             .collect();
@@ -968,6 +1010,22 @@ impl RailTrackDetector {
         } else {
             0.5 * (gauges[gauges.len() / 2 - 1] + gauges[gauges.len() / 2])
         };
+
+        // If far anchor point feature is enabled, anchor the far horizon with previous frame's furthest verified point
+        let mut far_anchor_active = false;
+        if self.far_anchor_enabled {
+            if let Some(anchor) = self.last_far_anchor {
+                if anchor[0] > 15.0 {
+                    // Inject anchor point with moderate weight (3 sample points) into least-squares fit
+                    for _ in 0..3 {
+                        xm.push(anchor[0]);
+                        ym.push(anchor[1]);
+                        zm_real.push(anchor[2]);
+                    }
+                    far_anchor_active = true;
+                }
+            }
+        }
 
         // Fit quadratic curve for centerline: Y(X) = a*X^2 + b*X + c
         let raw_poly_y = polyfit2(&xm, &ym)?;
@@ -980,54 +1038,149 @@ impl RailTrackDetector {
         if let Some(last_idx) = self.last_frame_idx {
             if last_idx.abs_diff(frame_idx) > 2 {
                 self.history.clear();
+                self.outlier_streak = 0;
+                self.last_valid_poly_y = None;
+                self.last_valid_poly_z = None;
+                self.last_valid_gauge = None;
+                self.last_valid_x_max = None;
+                self.last_far_anchor = None;
             }
         }
         self.last_frame_idx = Some(frame_idx);
 
-        if self.history.len() >= self.smooth_n.max(1) {
-            self.history.pop_front();
-        }
-        self.history.push_back(DetectionHistoryItem {
-            poly_y: raw_poly_y,
-            poly_z: raw_poly_z,
-            gauge: raw_gauge,
-            x_det_max: raw_x_det_max,
-        });
+        let mut is_coasting = false;
+        let mut accepted_poly_y = raw_poly_y;
+        let mut accepted_poly_z = raw_poly_z;
+        let mut accepted_gauge = raw_gauge;
+        let mut accepted_x_max = raw_x_det_max;
 
-        // Weighted moving average
-        let (poly_y, poly_z, median_gauge, smooth_det_max) = if self.history.len() == 1 {
-            (raw_poly_y, raw_poly_z, raw_gauge, raw_x_det_max)
-        } else {
-            let mut total_w = 0.0_f64;
-            let mut sum_y = [0.0_f64; 3];
-            let mut sum_z = [0.0_f64; 2];
-            let mut sum_gauge = 0.0_f64;
-            let mut sum_xmax = 0.0_f64;
+        if self.temporal_jump_reject_enabled {
+            if let Some(prev_poly_y) = self.last_valid_poly_y {
+                // Check lateral deviation at multiple distances along track
+                let test_xs = [
+                    5.0_f32,
+                    15.0_f32,
+                    30.0_f32,
+                    raw_x_det_max.min(60.0).max(10.0),
+                ];
+                let mut max_dev = 0.0_f32;
+                for &tx in &test_xs {
+                    let y_raw = raw_poly_y[0] * tx * tx + raw_poly_y[1] * tx + raw_poly_y[2];
+                    let y_prev = prev_poly_y[0] * tx * tx + prev_poly_y[1] * tx + prev_poly_y[2];
+                    max_dev = max_dev.max((y_raw - y_prev).abs());
+                }
 
-            for (i, item) in self.history.iter().enumerate() {
-                let w = (i + 1) as f64;
-                total_w += w;
-                sum_y[0] += item.poly_y[0] as f64 * w;
-                sum_y[1] += item.poly_y[1] as f64 * w;
-                sum_y[2] += item.poly_y[2] as f64 * w;
-                sum_z[0] += item.poly_z[0] as f64 * w;
-                sum_z[1] += item.poly_z[1] as f64 * w;
-                sum_gauge += item.gauge as f64 * w;
-                sum_xmax += item.x_det_max as f64 * w;
+                if max_dev > self.max_interframe_jump_m {
+                    self.outlier_streak += 1;
+                    if self.outlier_streak <= self.max_outlier_frames {
+                        // Reject outlier jump! Coast using previous valid trajectory
+                        is_coasting = true;
+                        accepted_poly_y = prev_poly_y;
+                        if let Some(pz) = self.last_valid_poly_z {
+                            accepted_poly_z = pz;
+                        }
+                        if let Some(g) = self.last_valid_gauge {
+                            accepted_gauge = g;
+                        }
+                        if let Some(xm_max) = self.last_valid_x_max {
+                            accepted_x_max = xm_max;
+                        }
+                    } else {
+                        // Outlier streak exceeded threshold (e.g. genuine turn / switch): accept new trajectory
+                        self.outlier_streak = 0;
+                        self.last_valid_poly_y = Some(raw_poly_y);
+                        self.last_valid_poly_z = Some(raw_poly_z);
+                        self.last_valid_gauge = Some(raw_gauge);
+                        self.last_valid_x_max = Some(raw_x_det_max);
+                    }
+                } else {
+                    // Valid continuous trajectory
+                    self.outlier_streak = 0;
+                    self.last_valid_poly_y = Some(raw_poly_y);
+                    self.last_valid_poly_z = Some(raw_poly_z);
+                    self.last_valid_gauge = Some(raw_gauge);
+                    self.last_valid_x_max = Some(raw_x_det_max);
+                }
+            } else {
+                // Initial frame
+                self.outlier_streak = 0;
+                self.last_valid_poly_y = Some(raw_poly_y);
+                self.last_valid_poly_z = Some(raw_poly_z);
+                self.last_valid_gauge = Some(raw_gauge);
+                self.last_valid_x_max = Some(raw_x_det_max);
             }
+        } else {
+            self.outlier_streak = 0;
+            self.last_valid_poly_y = Some(raw_poly_y);
+            self.last_valid_poly_z = Some(raw_poly_z);
+            self.last_valid_gauge = Some(raw_gauge);
+            self.last_valid_x_max = Some(raw_x_det_max);
+        }
 
-            let inv_w = 1.0 / total_w;
-            (
-                [
-                    (sum_y[0] * inv_w) as f32,
-                    (sum_y[1] * inv_w) as f32,
-                    (sum_y[2] * inv_w) as f32,
-                ],
-                [(sum_z[0] * inv_w) as f32, (sum_z[1] * inv_w) as f32],
-                (sum_gauge * inv_w) as f32,
-                (sum_xmax * inv_w) as f32,
-            )
-        };
+        if !is_coasting {
+            if self.history.len() >= self.smooth_n.max(1) {
+                self.history.pop_front();
+            }
+            self.history.push_back(DetectionHistoryItem {
+                poly_y: accepted_poly_y,
+                poly_z: accepted_poly_z,
+                gauge: accepted_gauge,
+                x_det_max: accepted_x_max,
+            });
+
+            // Update far anchor from furthest candidate point on valid frame
+            if self.far_anchor_enabled {
+                if let Some(furthest) = candidates.iter().max_by(|a, b| {
+                    a.x_center
+                        .partial_cmp(&b.x_center)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                }) {
+                    self.last_far_anchor =
+                        Some([furthest.x_center, furthest.y_center, furthest.z_center]);
+                }
+            }
+        }
+
+        // Weighted moving average (when coasting, directly use accepted model)
+        let (poly_y, poly_z, median_gauge, smooth_det_max) =
+            if self.history.len() == 1 || is_coasting {
+                (
+                    accepted_poly_y,
+                    accepted_poly_z,
+                    accepted_gauge,
+                    accepted_x_max,
+                )
+            } else {
+                let mut total_w = 0.0_f64;
+                let mut sum_y = [0.0_f64; 3];
+                let mut sum_z = [0.0_f64; 2];
+                let mut sum_gauge = 0.0_f64;
+                let mut sum_xmax = 0.0_f64;
+
+                for (i, item) in self.history.iter().enumerate() {
+                    let w = (i + 1) as f64;
+                    total_w += w;
+                    sum_y[0] += item.poly_y[0] as f64 * w;
+                    sum_y[1] += item.poly_y[1] as f64 * w;
+                    sum_y[2] += item.poly_y[2] as f64 * w;
+                    sum_z[0] += item.poly_z[0] as f64 * w;
+                    sum_z[1] += item.poly_z[1] as f64 * w;
+                    sum_gauge += item.gauge as f64 * w;
+                    sum_xmax += item.x_det_max as f64 * w;
+                }
+
+                let inv_w = 1.0 / total_w;
+                (
+                    [
+                        (sum_y[0] * inv_w) as f32,
+                        (sum_y[1] * inv_w) as f32,
+                        (sum_y[2] * inv_w) as f32,
+                    ],
+                    [(sum_z[0] * inv_w) as f32, (sum_z[1] * inv_w) as f32],
+                    (sum_gauge * inv_w) as f32,
+                    (sum_xmax * inv_w) as f32,
+                )
+            };
 
         let [a, b, c] = poly_y;
         let [d, e] = poly_z;
@@ -1204,6 +1357,9 @@ impl RailTrackDetector {
             upward_curvature: self.obstacle_config.upward_curvature,
             obstacle_enabled: self.obstacle_config.enabled,
             is_real_coordinates: false,
+            is_coasting,
+            outlier_streak: self.outlier_streak,
+            far_anchor_active,
             timing_rail_ms,
             timing_obstacles_ms,
             timing_total_ms,
@@ -1824,6 +1980,9 @@ mod tests {
             upward_curvature: 0.0,
             obstacle_enabled: true,
             is_real_coordinates: true,
+            is_coasting: false,
+            outlier_streak: 0,
+            far_anchor_active: false,
             timing_rail_ms: 0.0,
             timing_obstacles_ms: 0.0,
             timing_total_ms: 0.0,
@@ -1933,6 +2092,9 @@ mod tests {
             upward_curvature: 0.0,
             obstacle_enabled: true,
             is_real_coordinates: true,
+            is_coasting: false,
+            outlier_streak: 0,
+            far_anchor_active: false,
             timing_rail_ms: 0.0,
             timing_obstacles_ms: 0.0,
             timing_total_ms: 0.0,
