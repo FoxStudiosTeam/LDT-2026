@@ -24,11 +24,14 @@ const PANDAR128_HORIZONTAL_RES_STANDARD_DEG: f32 = 0.2;
 
 const PANDAR128_RANGE_IMAGE_WIDTH: usize = 3600;
 
+/// Специальное значение-маркер: в данном пикселе нет исходной точки лидара.
+pub const NO_POINT_INDEX: u32 = u32::MAX;
+
 #[derive(Clone, Copy, Debug)]
 pub struct RangeImageConfig {
-    /// Число столбцов карты глубины (горизонтальное разрешение)
+    /// Число столбцов карты глубин (горизонтальное разрешение)
     pub width: usize,
-    /// Число строк карты глубины (вертикальное разрешение, для Pandar128 обычно 128)
+    /// Число строк карты глубин (вертикальное разрешение, для Pandar128 обычно 128)
     pub height: usize,
     /// Верхний предел вертикального угла (в радианах), по умолчанию +15°
     pub fov_up_rad: f32,
@@ -64,6 +67,9 @@ pub struct RangeImage {
     pub data: Vec<f32>,
     /// Прямой буфер интенсивности отражения. Размер `width * height`.
     pub intensity: Vec<f32>,
+    /// Индексы точек в исходном PointCloud. Размер `width * height`.
+    /// Если пиксель не содержит точки, значение равно `NO_POINT_INDEX`.
+    pub point_indices: Vec<u32>,
 }
 
 /// Расчётная вертикальная геометрия Pandar128E3X.
@@ -227,6 +233,7 @@ impl RangeImage {
             height,
             data: vec![0.0; width * height],
             intensity: vec![0.0; width * height],
+            point_indices: vec![NO_POINT_INDEX; width * height],
         }
     }
 
@@ -255,6 +262,28 @@ impl RangeImage {
             self.intensity = vec![0.0; self.width * self.height];
         }
         self.intensity[row * self.width + col] = val;
+    }
+
+    #[inline(always)]
+    pub fn get_point_index(&self, row: usize, col: usize) -> Option<usize> {
+        if self.point_indices.is_empty() {
+            None
+        } else {
+            let idx = self.point_indices[row * self.width + col];
+            if idx != NO_POINT_INDEX {
+                Some(idx as usize)
+            } else {
+                None
+            }
+        }
+    }
+
+    #[inline(always)]
+    pub fn set_point_index(&mut self, row: usize, col: usize, point_idx: usize) {
+        if self.point_indices.is_empty() {
+            self.point_indices = vec![NO_POINT_INDEX; self.width * self.height];
+        }
+        self.point_indices[row * self.width + col] = point_idx as u32;
     }
 
     /// Быстрое формирование Range Image из организованного облака Hesai Pandar128E3X.
@@ -375,6 +404,7 @@ impl RangeImage {
                     if current == 0.0 || range < current {
                         image.data[idx] = range;
                         image.intensity[idx] = intensity;
+                        image.point_indices[idx] = i as u32;
                     }
                 }
             }
@@ -562,6 +592,7 @@ impl RangeImage {
                     if current == 0.0 || range < current {
                         image.data[idx] = range;
                         image.intensity[idx] = intensity;
+                        image.point_indices[idx] = _point_idx as u32;
                     }
                 }
             }
@@ -581,6 +612,7 @@ impl RangeImage {
         let w = self.width;
         let h = self.height;
         let has_intensity = !self.intensity.is_empty();
+        let has_indices = !self.point_indices.is_empty();
         for r in 0..h {
             let row_offset = r * w;
             for c in 1..w - 1 {
@@ -593,6 +625,9 @@ impl RangeImage {
                         if has_intensity {
                             self.intensity[idx] =
                                 (self.intensity[idx - 1] + self.intensity[idx + 1]) * 0.5;
+                        }
+                        if has_indices {
+                            self.point_indices[idx] = self.point_indices[idx - 1];
                         }
                     } else if c + 2 < w
                         && left > 0.0
@@ -607,6 +642,10 @@ impl RangeImage {
                             let i_r2 = self.intensity[idx + 2];
                             self.intensity[idx] = i_left * 0.67 + i_r2 * 0.33;
                             self.intensity[idx + 1] = i_left * 0.33 + i_r2 * 0.67;
+                        }
+                        if has_indices {
+                            self.point_indices[idx] = self.point_indices[idx - 1];
+                            self.point_indices[idx + 1] = self.point_indices[idx + 2];
                         }
                     }
                 }
@@ -634,7 +673,7 @@ impl RangeImage {
         let _fov_v_inv = 1.0 / total_fov_v;
         let two_pi = 2.0 * std::f32::consts::PI;
 
-        for (&x, &y, &z, &intensity, &r) in cloud.iter(queue) {
+        for (i, (&x, &y, &z, &intensity, &r)) in cloud.iter(queue).enumerate() {
             let r2 = x * x + y * y + z * z;
             if r2 < config.min_range_m * config.min_range_m
                 || r2 > config.max_range_m * config.max_range_m
@@ -644,7 +683,7 @@ impl RangeImage {
 
             let range = r2.sqrt();
             let _pitch = (z / range).clamp(-1.0, 1.0).asin();
-            let yaw = fast_atan2(y, x); // [-PI, PI], 0 = вперед по оси X
+            let yaw = fast_atan2(y, x); // [-PI, PI], 0 = вперёд по оси X
 
             // Проекция по вертикали: pitch -> [0..height-1]
             // pitch = fov_up -> row 0 (верх), pitch = fov_down -> row height-1 (низ)
@@ -657,7 +696,7 @@ impl RangeImage {
             }
 
             // Проекция по горизонтали: yaw -> [0..width-1]
-            // yaw = 0 (вперед) -> центр изображения (width / 2)
+            // yaw = 0 (вперёд) -> центр изображения (width / 2)
             let h_norm = (yaw + std::f32::consts::PI) / two_pi;
             let col = ((h_norm * (width as f32)).floor() as usize).min(width - 1);
 
@@ -666,6 +705,7 @@ impl RangeImage {
             if current == 0.0 || range < current {
                 image.data[idx] = range;
                 image.intensity[idx] = intensity;
+                image.point_indices[idx] = i as u32;
             }
         }
 
@@ -684,6 +724,7 @@ impl RangeImage {
         let new_height = self.height * factor;
         let mut new_data = Vec::with_capacity(new_height * self.width);
         let mut new_intensity = Vec::with_capacity(new_height * self.width);
+        let mut new_indices = Vec::with_capacity(new_height * self.width);
 
         for row in 0..self.height {
             let row_slice = &self.data[row * self.width..(row + 1) * self.width];
@@ -692,10 +733,18 @@ impl RangeImage {
             } else {
                 &[]
             };
+            let idx_slice = if !self.point_indices.is_empty() {
+                &self.point_indices[row * self.width..(row + 1) * self.width]
+            } else {
+                &[]
+            };
             for _ in 0..factor {
                 new_data.extend_from_slice(row_slice);
                 if !int_slice.is_empty() {
                     new_intensity.extend_from_slice(int_slice);
+                }
+                if !idx_slice.is_empty() {
+                    new_indices.extend_from_slice(idx_slice);
                 }
             }
         }
@@ -705,11 +754,12 @@ impl RangeImage {
             height: new_height,
             data: new_data,
             intensity: new_intensity,
+            point_indices: new_indices,
         }
     }
 
     /// Извлечение переднего сектора по ходу поезда с заданным горизонтальным углом обзора `fov_x_deg`
-    /// (центрировано строго вокруг курса поезда вперед) и плавной билинейной интерполяцией
+    /// (центрировано строго вокруг курса поезда вперёд) и плавной билинейной интерполяцией
     /// в целевое разрешение (например 800x600 в 4:3).
     ///
     /// - `fov_x_deg`: угол обзора по горизонтали в градусах (например, 20°..30° для плотного кадрирования
@@ -772,6 +822,7 @@ impl RangeImage {
             height: target_h,
             data: out,
             intensity: Vec::new(),
+            point_indices: vec![NO_POINT_INDEX; target_w * target_h],
         }
     }
 
@@ -799,6 +850,7 @@ impl RangeImage {
 
         let mut out = vec![0.0_f32; self.height * actual_w];
         let mut out_intensity = vec![0.0_f32; self.height * actual_w];
+        let mut out_indices = vec![NO_POINT_INDEX; self.height * actual_w];
         for r in 0..self.height {
             let src_off = r * self.width + start_col;
             let dst_off = r * actual_w;
@@ -808,6 +860,10 @@ impl RangeImage {
                 out_intensity[dst_off..dst_off + actual_w]
                     .copy_from_slice(&self.intensity[src_off..src_off + actual_w]);
             }
+            if !self.point_indices.is_empty() {
+                out_indices[dst_off..dst_off + actual_w]
+                    .copy_from_slice(&self.point_indices[src_off..src_off + actual_w]);
+            }
         }
 
         Self {
@@ -815,6 +871,7 @@ impl RangeImage {
             height: self.height,
             data: out,
             intensity: out_intensity,
+            point_indices: out_indices,
         }
     }
 
@@ -923,6 +980,7 @@ impl RangeImage {
         if has_intensity {
             warped.intensity = vec![0.0; w * h];
         }
+        let has_indices = !self.point_indices.is_empty();
 
         for r in 0..h {
             let row_off = r * w;
@@ -943,6 +1001,9 @@ impl RangeImage {
                         if has_intensity {
                             warped.intensity[idx] = self.intensity[row_off + c];
                         }
+                        if has_indices {
+                            warped.point_indices[idx] = self.point_indices[row_off + c];
+                        }
                     }
                 }
             }
@@ -962,6 +1023,9 @@ impl RangeImage {
                             let top_i = warped.intensity[(r - 1) * w + c];
                             let bot_i = warped.intensity[(r + 1) * w + c];
                             warped.intensity[idx] = 0.5 * (top_i + bot_i);
+                        }
+                        if has_indices {
+                            warped.point_indices[idx] = warped.point_indices[(r - 1) * w + c];
                         }
                     }
                 }
@@ -1064,11 +1128,14 @@ impl RangeImage {
             }
         }
 
+        let point_indices = vec![NO_POINT_INDEX; height * width];
+
         Ok(Self {
             width,
             height,
             data,
             intensity,
+            point_indices,
         })
     }
 
@@ -1150,6 +1217,18 @@ mod tests {
     }
 
     #[test]
+    fn test_point_indices_tracking() {
+        let mut img = RangeImage::new(10, 10);
+        assert_eq!(img.get_point_index(0, 0), None);
+        img.set(2, 3, 15.5);
+        img.set_point_index(2, 3, 42);
+        assert_eq!(img.get_point_index(2, 3), Some(42));
+
+        let cropped = img.crop_fov(360.0);
+        assert_eq!(cropped.get_point_index(2, 3), Some(42));
+    }
+
+    #[test]
     fn test_fast_atan2_accuracy() {
         let mut max_err = 0.0_f32;
         for deg in -180..=180 {
@@ -1217,7 +1296,7 @@ mod tests {
         let ch27 = geometry.pitch_rad[26].to_degrees();
         let ch89 = geometry.pitch_rad[88].to_degrees();
         let ch90 = geometry.pitch_rad[89].to_degrees();
-        let ch127 = geometry.pitch_rad[126].to_degrees();
+        let _ch127 = geometry.pitch_rad[126].to_degrees();
         let ch128 = geometry.pitch_rad[127].to_degrees();
 
         assert!((ch1 - 15.0).abs() < 1e-5);

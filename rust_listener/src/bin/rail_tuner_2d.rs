@@ -1220,7 +1220,7 @@ impl RailTuner2DApp {
         let t_detect = Instant::now();
         let bent_res = self
             .detector
-            .detect_with_raw(&active_ri, Some(raw_ri), frame.idx);
+            .detect_with_raw(&active_ri, Some(raw_ri), None, frame.idx);
         if let Some(r) = &bent_res {
             // println!("Radius: {}", r.turn_radius);
             // 400 - max
