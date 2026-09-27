@@ -21,12 +21,6 @@ pub struct LidarGeometry {
     pub dir_z: Vec<f32>,
 }
 
-impl Default for LidarGeometry {
-    fn default() -> Self {
-        Self::new(128, 140, 15.0, -25.0, 40.0)
-    }
-}
-
 impl LidarGeometry {
     pub fn new(
         height: usize,
@@ -210,8 +204,10 @@ pub struct DetectionResult {
     pub max_height_above_rail: f32,
     pub max_distance_m: f32,
     pub upward_curvature: f32,
-    /// Коэффициент сужения габарита с расстоянием (м/м)
-    pub clearance_narrowing: f32,
+    /// Коэффициент сужения ширины габарита с расстоянием (м/м)
+    pub clearance_narrowing_width: f32,
+    /// Коэффициент снижения высотного габарита с расстоянием (м/м)
+    pub clearance_narrowing_height: f32,
     pub obstacle_enabled: bool,
     /// Флаг истинных (восстановленных) координат в реальном физическом пространстве
     pub is_real_coordinates: bool,
@@ -290,6 +286,7 @@ impl DetectionResult {
         let hoop_step = ((hoop_dist_m / step_m).round().max(1.0)) as usize;
 
         let min_w = self.gauge.max(1.0).min(self.clearance_width);
+        let min_h = (self.min_height_above_rail + 0.30).min(self.max_height_above_rail);
 
         for i in 0..=num_steps {
             let t = (i as f32) / (num_steps as f32);
@@ -297,7 +294,9 @@ impl DetectionResult {
 
             // Сужение габарита по мере удаления:
             let dx = (x - x_min).max(0.0);
-            let cur_w = (self.clearance_width - self.clearance_narrowing * dx).max(min_w);
+            let cur_w = (self.clearance_width - self.clearance_narrowing_width * dx).max(min_w);
+            let cur_max_h =
+                (self.max_height_above_rail - self.clearance_narrowing_height * dx).max(min_h);
             let half_w = cur_w * 0.5;
 
             let y_c = self.poly_y[0] * x * x + self.poly_y[1] * x + self.poly_y[2];
@@ -317,7 +316,7 @@ impl DetectionResult {
             let yr = y_c + half_w * cos_t;
 
             let zb = z_surf + self.min_height_above_rail;
-            let zt = z_surf + self.max_height_above_rail;
+            let zt = z_surf + cur_max_h;
 
             let p_bl = [xl, yl, zb];
             let p_br = [xr, yr, zb];
@@ -408,9 +407,15 @@ pub struct ObstacleConfig {
     /// Коэффициент квадратичного искривления тоннеля габарита вверх по глубине (1/м), Z_surf(X) += upward_curvature * X^2
     /// Позволяет компенсировать линейный наклон вниз и удерживать габарит на полотне на дальних расстояниях
     pub upward_curvature: f32,
-    /// Коэффициент линейного сужения габарита приближения с расстоянием (м/м)
-    /// Например 0.010 означает сужение коридора на 1.0м каждые 100м дистанции (-0.5м на 50м)
-    pub clearance_narrowing: f32,
+    /// Коэффициент линейного сужения ширины габарита приближения с расстоянием (м/м)
+    /// Например 0.010 означает сужение ширины коридора на 1.0м каждые 100м дистанции (-0.5м на 50м)
+    pub clearance_narrowing_width: f32,
+    /// Коэффициент линейного снижения высотного габарита приближения с расстоянием (м/м)
+    /// Например 0.010 означает снижение потолка коридора на 1.0м каждые 100м дистанции (-0.5м на 50м)
+    pub clearance_narrowing_height: f32,
+    /// Максимальный разрыв по дальности (м) между соседними точками для объединения в один кластер, default: 1.20 м
+    /// Предотвращает склейку разноудаленных объектов на одной линии визирования
+    pub cluster_depth_thresh: f32,
 }
 
 impl Default for ObstacleConfig {
@@ -425,7 +430,9 @@ impl Default for ObstacleConfig {
             max_distance_m: 50.0,
             depth_diff_thresh: 0.25,
             upward_curvature: 0.0004,
-            clearance_narrowing: 0.0,
+            clearance_narrowing_width: 0.0,
+            clearance_narrowing_height: 0.0,
+            cluster_depth_thresh: 1.20,
         }
     }
 }
@@ -515,39 +522,9 @@ pub struct RailTrackDetector {
     pub last_frame_idx: Option<usize>,
 }
 
-impl Default for RailTrackDetector {
-    fn default() -> Self {
-        let mut detector = Self::new(LidarGeometry::default());
-        detector.depth_step_thresh = 0.100;
-        detector.max_depth_step_thresh = 0.450;
-        detector.nominal_gauge = 1.580;
-        detector.min_gauge = 1.515;
-        detector.max_gauge = 1.555;
-        detector.row_start_pct = 0.880;
-        detector.row_end_pct = -0.100;
-        detector.max_lateral_jump = 0.300;
-        detector.max_lateral_rail_jump = 0.160;
-        detector.extrapolate_m = 100.0;
-        detector.smooth_n = 3;
-        detector.contrast_depth = 195.0;
-        detector.contrast_intensity = 5.0;
-        detector.blend = 1.00;
-        detector.obstacle_config.enabled = true;
-        detector.obstacle_config.mode = crate::rail_detection::ObstacleDetectionMode::Boxcast3D;
-        detector.obstacle_config.clearance_width = 1.95;
-        detector.obstacle_config.min_height_above_rail = 0.21;
-        detector.obstacle_config.max_height_above_rail = 2.90;
-        detector.obstacle_config.min_points = 6;
-        detector.obstacle_config.max_distance_m = 80.0;
-        detector.obstacle_config.depth_diff_thresh = 0.25;
-        detector.obstacle_config.upward_curvature = 0.00200;
-        detector.obstacle_config.clearance_narrowing = 0.0050;
-        detector
-    }
-}
-
 impl RailTrackDetector {
     pub fn new(geometry: LidarGeometry) -> Self {
+        // Tuned RailTrackDetector Config
         Self {
             geometry,
             nominal_gauge: 1.520,
@@ -1142,7 +1119,8 @@ impl RailTrackDetector {
             avg_intensity_right: avg_i_r,
             obstacles,
             clearance_width: self.obstacle_config.clearance_width,
-            clearance_narrowing: self.obstacle_config.clearance_narrowing,
+            clearance_narrowing_width: self.obstacle_config.clearance_narrowing_width,
+            clearance_narrowing_height: self.obstacle_config.clearance_narrowing_height,
             min_height_above_rail: self.obstacle_config.min_height_above_rail,
             max_height_above_rail: self.obstacle_config.max_height_above_rail,
             max_distance_m: self.obstacle_config.max_distance_m,
@@ -1174,6 +1152,7 @@ impl RailTrackDetector {
         }
 
         let min_w = gauge.max(1.0).min(config.clearance_width);
+        let min_h = (config.min_height_above_rail + 0.30).min(config.max_height_above_rail);
         let half_g = gauge * 0.5;
         let x_min = 2.0_f32;
         let x_max = config.max_distance_m;
@@ -1204,14 +1183,18 @@ impl RailTrackDetector {
                         }
 
                         let dx = (xc - x_min).max(0.0);
-                        let cur_half_w = (config.clearance_width - config.clearance_narrowing * dx)
+                        let cur_half_w = (config.clearance_width
+                            - config.clearance_narrowing_width * dx)
                             .max(min_w)
                             * 0.5;
+                        let cur_max_h = (config.max_height_above_rail
+                            - config.clearance_narrowing_height * dx)
+                            .max(min_h);
                         let dz = z_real - z_surf_real;
 
                         if d_lat.abs() <= cur_half_w
                             && dz >= config.min_height_above_rail
-                            && dz <= config.max_height_above_rail
+                            && dz <= cur_max_h
                         {
                             is_intrusion[r_off + col] = true;
                         }
@@ -1241,9 +1224,13 @@ impl RailTrackDetector {
                         }
 
                         let dx = (xc - x_min).max(0.0);
-                        let cur_half_w = (config.clearance_width - config.clearance_narrowing * dx)
+                        let cur_half_w = (config.clearance_width
+                            - config.clearance_narrowing_width * dx)
                             .max(min_w)
                             * 0.5;
+                        let cur_max_h = (config.max_height_above_rail
+                            - config.clearance_narrowing_height * dx)
+                            .max(min_h);
                         if d_lat.abs() > cur_half_w {
                             continue;
                         }
@@ -1266,7 +1253,7 @@ impl RailTrackDetector {
 
                         if depth_diff >= config.depth_diff_thresh
                             && dz >= config.min_height_above_rail
-                            && dz <= config.max_height_above_rail
+                            && dz <= cur_max_h
                         {
                             is_intrusion[r_off + col] = true;
                         }
@@ -1297,14 +1284,18 @@ impl RailTrackDetector {
                         }
 
                         let dx = (xc - x_min).max(0.0);
-                        let cur_half_w = (config.clearance_width - config.clearance_narrowing * dx)
+                        let cur_half_w = (config.clearance_width
+                            - config.clearance_narrowing_width * dx)
                             .max(min_w)
                             * 0.5;
+                        let cur_max_h = (config.max_height_above_rail
+                            - config.clearance_narrowing_height * dx)
+                            .max(min_h);
                         let dz = z_real - z_surf_real;
 
                         if d_lat.abs() <= cur_half_w
                             && dz >= config.min_height_above_rail
-                            && dz <= config.max_height_above_rail
+                            && dz <= cur_max_h
                         {
                             is_intrusion[r_off + col] = true;
                         }
@@ -1332,6 +1323,7 @@ impl RailTrackDetector {
 
                 while let Some((cr, cc)) = queue.pop_front() {
                     cluster_cells.push((cr, cc));
+                    let r_curr = frame.data[cr * w + cc];
 
                     for dr in -1..=1 {
                         for dc in -2..=2 {
@@ -1343,8 +1335,16 @@ impl RailTrackDetector {
                             if nr >= 0 && (nr as usize) < h && nc >= 0 && (nc as usize) < w {
                                 let n_idx = (nr as usize) * w + (nc as usize);
                                 if is_intrusion[n_idx] && !visited[n_idx] {
-                                    visited[n_idx] = true;
-                                    queue.push_back((nr as usize, nc as usize));
+                                    let r_next = frame.data[n_idx];
+                                    let depth_ok = if config.cluster_depth_thresh > 0.0 {
+                                        (r_next - r_curr).abs() <= config.cluster_depth_thresh
+                                    } else {
+                                        true
+                                    };
+                                    if depth_ok {
+                                        visited[n_idx] = true;
+                                        queue.push_back((nr as usize, nc as usize));
+                                    }
                                 }
                             }
                         }
@@ -1734,7 +1734,8 @@ mod tests {
             avg_intensity_right: 0.0,
             obstacles: Vec::new(),
             clearance_width: 2.40,
-            clearance_narrowing: 0.0,
+            clearance_narrowing_width: 0.0,
+            clearance_narrowing_height: 0.0,
             min_height_above_rail: 0.15,
             max_height_above_rail: 3.20,
             max_distance_m: 60.0,
@@ -1839,9 +1840,10 @@ mod tests {
             avg_intensity_right: 0.0,
             obstacles: Vec::new(),
             clearance_width: 2.50,
-            clearance_narrowing: 0.010, // 0.010 m/m -> 0.50m narrowing over 50m
+            clearance_narrowing_width: 0.010, // 0.010 m/m -> 0.50m width narrowing over 50m
+            clearance_narrowing_height: 0.015, // 0.015 m/m -> 0.75m height reduction over 50m
             min_height_above_rail: 0.15,
-            max_height_above_rail: 3.20,
+            max_height_above_rail: 3.05,
             max_distance_m: 52.0,
             upward_curvature: 0.0,
             obstacle_enabled: true,
@@ -1853,38 +1855,113 @@ mod tests {
 
         let line_bl = &strips[0];
         let line_br = &strips[1];
+        let line_tl = &strips[2];
 
         // Near station (x = 2.0m)
         let pt_near_l = line_bl.first().unwrap();
         let pt_near_r = line_br.first().unwrap();
+        let pt_near_tl = line_tl.first().unwrap();
         let width_near = (pt_near_r[1] - pt_near_l[1]).abs();
+        let height_near = pt_near_tl[2] - pt_near_l[2];
         assert!(
             (width_near - 2.50).abs() < 1e-3,
             "Near width should be 2.50, got {}",
             width_near
         );
+        assert!(
+            (height_near - 2.90).abs() < 1e-3,
+            "Near height should be 2.90 (3.05 - 0.15), got {}",
+            height_near
+        );
 
-        // Far station (x = 52.0m, dx = 50.0m -> width = 2.50 - 0.010 * 50 = 2.00m)
+        // Far station (x = 52.0m, dx = 50.0m)
+        // width = 2.50 - 0.010 * 50 = 2.00m
+        // height = (3.05 - 0.015 * 50) - 0.15 = 2.30 - 0.15 = 2.15m
         let pt_far_l = line_bl.last().unwrap();
         let pt_far_r = line_br.last().unwrap();
+        let pt_far_tl = line_tl.last().unwrap();
         let width_far = (pt_far_r[1] - pt_far_l[1]).abs();
+        let height_far = pt_far_tl[2] - pt_far_l[2];
         assert!(
             (width_far - 2.00).abs() < 1e-3,
             "Far width should be 2.00, got {}",
             width_far
         );
+        assert!(
+            (height_far - 2.15).abs() < 1e-3,
+            "Far height should be 2.15, got {}",
+            height_far
+        );
 
-        // Test clamping to gauge when narrowing is large
-        res.clearance_narrowing = 0.050; // would narrow by 2.5m, dropping below gauge
+        // Test clamping to gauge and min_h when narrowing is large
+        res.clearance_narrowing_width = 0.050; // would narrow by 2.5m, dropping below gauge
+        res.clearance_narrowing_height = 0.080; // would drop below min_h
         let strips_clamped = res.shapecast_wireframe_3d();
         let line_br_clamped = &strips_clamped[1];
         let line_bl_clamped = &strips_clamped[0];
+        let line_tl_clamped = &strips_clamped[2];
         let width_far_clamped =
             (line_br_clamped.last().unwrap()[1] - line_bl_clamped.last().unwrap()[1]).abs();
+        let height_far_clamped =
+            line_tl_clamped.last().unwrap()[2] - line_bl_clamped.last().unwrap()[2];
         assert!(
             (width_far_clamped - 1.52).abs() < 1e-3,
             "Far width should clamp to gauge (1.52), got {}",
             width_far_clamped
+        );
+        assert!(
+            (height_far_clamped - 0.30).abs() < 1e-3,
+            "Far height should clamp to min_h delta (0.30), got {}",
+            height_far_clamped
+        );
+    }
+
+    #[test]
+    fn test_cluster_depth_threshold_splits_adjacent_objects() {
+        let geo = LidarGeometry::new(100, 100, 15.0, -25.0, 40.0);
+        let detector = RailTrackDetector::new(geo);
+
+        let mut frame = RangeImage::new(100, 100);
+        // Leave background empty (0.0)
+
+        // Object 1: Near object at depth ~12m (rows 45..=47, cols 48..=52)
+        for r in 45..=47 {
+            for c in 48..=52 {
+                frame.set(r, c, 12.0);
+            }
+        }
+
+        // Object 2: Far object at depth ~20m (rows 42..=44, cols 48..=52)
+        // Row 44 touches Row 45 on 2D grid, but depth jumps from 12m to 20m (+8m gap!)
+        for r in 42..=44 {
+            for c in 48..=52 {
+                frame.set(r, c, 20.0);
+            }
+        }
+
+        let poly_y = [0.0, 0.0, 0.0];
+        let poly_z = [0.0, -1.5];
+
+        let mut cfg = ObstacleConfig::default();
+        cfg.min_points = 5;
+        cfg.mode = ObstacleDetectionMode::HybridGrid;
+
+        // 1. With cluster_depth_thresh = 1.20m, the two objects must be separated into 2 distinct obstacles!
+        cfg.cluster_depth_thresh = 1.20;
+        let obs_split = detector.detect_obstacles(&frame, &poly_y, &poly_z, 1.52, &cfg, false);
+        assert_eq!(
+            obs_split.len(),
+            2,
+            "Objects at 12m and 20m touching in 2D grid must be split into 2 obstacles"
+        );
+
+        // 2. With cluster_depth_thresh = 0.0 (disabled), they get merged into 1 giant obstacle!
+        cfg.cluster_depth_thresh = 0.0;
+        let obs_merged = detector.detect_obstacles(&frame, &poly_y, &poly_z, 1.52, &cfg, false);
+        assert_eq!(
+            obs_merged.len(),
+            1,
+            "Without depth threshold, 2D adjacent objects get merged into 1 obstacle"
         );
     }
 }

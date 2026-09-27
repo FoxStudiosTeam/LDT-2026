@@ -610,10 +610,12 @@ pub struct RailTuner2DApp {
     obstacle_enabled: bool,
     obstacle_mode: ObstacleDetectionMode,
     clearance_width: f32,
-    clearance_narrowing: f32,
+    clearance_narrowing_width: f32,
+    clearance_narrowing_height: f32,
     min_height_above_rail: f32,
     max_height_above_rail: f32,
     min_points: usize,
+    cluster_depth_thresh: f32,
     max_distance_m: f32,
     depth_diff_thresh: f32,
     upward_curvature: f32,
@@ -637,35 +639,37 @@ pub struct RailTuner2DApp {
 
 impl RailTuner2DApp {
     pub fn new(dataset: FrameDataset, rec_stream: Option<RecordingStream>) -> Self {
-        // let mut initial_detector = RailTrackDetector::new(
-        //     shared::rail_detection::LidarGeometry::new(128, 140, 15.0, -25.0, 40.0),
-        // );
-        // initial_detector.depth_step_thresh = 0.100;
-        // initial_detector.max_depth_step_thresh = 1.100;
-        // initial_detector.nominal_gauge = 1.580;
-        // initial_detector.min_gauge = 1.515;
-        // initial_detector.max_gauge = 1.560;
-        // initial_detector.row_start_pct = 0.880;
-        // initial_detector.row_end_pct = 0.430;
-        // initial_detector.max_lateral_jump = 0.300;
-        // initial_detector.max_lateral_rail_jump = 0.100;
-        // initial_detector.extrapolate_m = 24.0;
-        // initial_detector.smooth_n = 3;
-        // initial_detector.contrast_depth = 195.0;
-        // initial_detector.contrast_intensity = 5.0;
-        // initial_detector.blend = 1.00;
-        // initial_detector.obstacle_config.enabled = true;
-        // initial_detector.obstacle_config.mode =
-        //     shared::rail_detection::ObstacleDetectionMode::Boxcast3D;
-        // initial_detector.obstacle_config.clearance_width = 2.50;
-        // initial_detector.obstacle_config.min_height_above_rail = 0.15;
-        // initial_detector.obstacle_config.max_height_above_rail = 3.70;
-        // initial_detector.obstacle_config.min_points = 6;
-        // initial_detector.obstacle_config.max_distance_m = 100.0;
-        // initial_detector.obstacle_config.depth_diff_thresh = 0.25;
-        // initial_detector.obstacle_config.upward_curvature = 0.0004;
-        // initial_detector.obstacle_config.clearance_narrowing = 0.005;
-        let initial_detector = RailTrackDetector::default();
+        let mut detector = RailTrackDetector::new(shared::rail_detection::LidarGeometry::new(
+            128, 140, 15.0, -25.0, 40.0,
+        ));
+        // Tuned RailTrackDetector Config
+        detector.depth_step_thresh = 0.100;
+        detector.max_depth_step_thresh = 1.100;
+        detector.nominal_gauge = 1.580;
+        detector.min_gauge = 1.515;
+        detector.max_gauge = 1.560;
+        detector.row_start_pct = 0.880;
+        detector.row_end_pct = -0.100;
+        detector.max_lateral_jump = 0.300;
+        detector.max_lateral_rail_jump = 0.100;
+        detector.extrapolate_m = 24.0;
+        detector.smooth_n = 3;
+        detector.contrast_depth = 195.0;
+        detector.contrast_intensity = 5.0;
+        detector.blend = 1.00;
+        detector.obstacle_config.enabled = true;
+        detector.obstacle_config.mode = shared::rail_detection::ObstacleDetectionMode::Boxcast3D;
+        detector.obstacle_config.clearance_width = 2.50;
+        detector.obstacle_config.min_height_above_rail = 0.15;
+        detector.obstacle_config.max_height_above_rail = 3.20;
+        detector.obstacle_config.min_points = 8;
+        detector.obstacle_config.max_distance_m = 100.0;
+        detector.obstacle_config.depth_diff_thresh = 0.25;
+        detector.obstacle_config.upward_curvature = 0.00200;
+        detector.obstacle_config.clearance_narrowing_width = 0.0050;
+        detector.obstacle_config.clearance_narrowing_height = 0.0050;
+        detector.obstacle_config.cluster_depth_thresh = 1.20;
+
         Self {
             dataset,
             current_frame_idx: 0,
@@ -673,35 +677,37 @@ impl RailTuner2DApp {
             fps: 12.0,
             last_tick: Instant::now(),
 
-            depth_step_thresh: initial_detector.depth_step_thresh,
-            max_depth_step_thresh: initial_detector.max_depth_step_thresh,
-            nominal_gauge: initial_detector.nominal_gauge,
-            min_gauge: initial_detector.min_gauge,
-            max_gauge: initial_detector.max_gauge,
-            row_start_pct: initial_detector.row_start_pct,
-            row_end_pct: initial_detector.row_end_pct,
-            max_lateral_jump: initial_detector.max_lateral_jump,
-            max_lateral_rail_jump: initial_detector.max_lateral_rail_jump,
-            extrapolate_m: initial_detector.extrapolate_m,
-            smooth_n: initial_detector.smooth_n,
-            contrast_depth: initial_detector.contrast_depth,
-            contrast_intensity: initial_detector.contrast_intensity,
-            blend: initial_detector.blend,
-            obstacle_enabled: initial_detector.obstacle_config.enabled,
-            obstacle_mode: initial_detector.obstacle_config.mode,
-            clearance_width: initial_detector.obstacle_config.clearance_width,
-            clearance_narrowing: initial_detector.obstacle_config.clearance_narrowing,
-            min_height_above_rail: initial_detector.obstacle_config.min_height_above_rail,
-            max_height_above_rail: initial_detector.obstacle_config.max_height_above_rail,
-            min_points: initial_detector.obstacle_config.min_points,
-            max_distance_m: initial_detector.obstacle_config.max_distance_m,
-            depth_diff_thresh: initial_detector.obstacle_config.depth_diff_thresh,
-            upward_curvature: initial_detector.obstacle_config.upward_curvature,
+            depth_step_thresh: detector.depth_step_thresh,
+            max_depth_step_thresh: detector.max_depth_step_thresh,
+            nominal_gauge: detector.nominal_gauge,
+            min_gauge: detector.min_gauge,
+            max_gauge: detector.max_gauge,
+            row_start_pct: detector.row_start_pct,
+            row_end_pct: detector.row_end_pct,
+            max_lateral_jump: detector.max_lateral_jump,
+            max_lateral_rail_jump: detector.max_lateral_rail_jump,
+            extrapolate_m: detector.extrapolate_m,
+            smooth_n: detector.smooth_n,
+            contrast_depth: detector.contrast_depth,
+            contrast_intensity: detector.contrast_intensity,
+            blend: detector.blend,
+            obstacle_enabled: detector.obstacle_config.enabled,
+            obstacle_mode: detector.obstacle_config.mode,
+            clearance_width: detector.obstacle_config.clearance_width,
+            clearance_narrowing_width: detector.obstacle_config.clearance_narrowing_width,
+            clearance_narrowing_height: detector.obstacle_config.clearance_narrowing_height,
+            min_height_above_rail: detector.obstacle_config.min_height_above_rail,
+            max_height_above_rail: detector.obstacle_config.max_height_above_rail,
+            min_points: detector.obstacle_config.min_points,
+            cluster_depth_thresh: detector.obstacle_config.cluster_depth_thresh,
+            max_distance_m: detector.obstacle_config.max_distance_m,
+            depth_diff_thresh: detector.obstacle_config.depth_diff_thresh,
+            upward_curvature: detector.obstacle_config.upward_curvature,
 
             rec_stream,
             stream_to_rerun: true,
 
-            detector: initial_detector,
+            detector: detector,
             last_res: None,
             last_bent_res: None,
             active_range_image: None,
@@ -750,7 +756,9 @@ impl RailTuner2DApp {
         self.detector.obstacle_config.max_distance_m = self.max_distance_m;
         self.detector.obstacle_config.depth_diff_thresh = self.depth_diff_thresh;
         self.detector.obstacle_config.upward_curvature = self.upward_curvature;
-        self.detector.obstacle_config.clearance_narrowing = self.clearance_narrowing;
+        self.detector.obstacle_config.clearance_narrowing_width = self.clearance_narrowing_width;
+        self.detector.obstacle_config.clearance_narrowing_height = self.clearance_narrowing_height;
+        self.detector.obstacle_config.cluster_depth_thresh = self.cluster_depth_thresh;
     }
 
     fn process_current_frame(&mut self) {
@@ -983,7 +991,9 @@ impl eframe::App for RailTuner2DApp {
                              detector.obstacle_config.max_distance_m = {:.1};\n\
                              detector.obstacle_config.depth_diff_thresh = {:.2};\n\
                              detector.obstacle_config.upward_curvature = {:.5};\n\
-                             detector.obstacle_config.clearance_narrowing = {:.4};",
+                             detector.obstacle_config.clearance_narrowing_width = {:.4};\n\
+                             detector.obstacle_config.clearance_narrowing_height = {:.4};\n\
+                             detector.obstacle_config.cluster_depth_thresh = {:.2};",
                             self.depth_step_thresh,
                             self.max_depth_step_thresh,
                             self.nominal_gauge,
@@ -1007,7 +1017,9 @@ impl eframe::App for RailTuner2DApp {
                             self.max_distance_m,
                             self.depth_diff_thresh,
                             self.upward_curvature,
-                            self.clearance_narrowing,
+                            self.clearance_narrowing_width,
+                            self.clearance_narrowing_height,
+                            self.cluster_depth_thresh,
                         );
                         ui.ctx().copy_text(cfg.clone());
                         println!("\n{}\n", cfg);
@@ -1260,10 +1272,22 @@ impl eframe::App for RailTuner2DApp {
                                 .add(egui::Slider::new(&mut self.clearance_width, 1.6..=4.0).step_by(0.05))
                                 .changed();
 
-                            ui.label("Shapecast Narrowing (Taper):");
+                            ui.label("Narrowing Width (m/m):");
                             param_changed |= ui
                                 .add(
-                                    egui::Slider::new(&mut self.clearance_narrowing, 0.0..=0.030)
+                                    egui::Slider::new(&mut self.clearance_narrowing_width, 0.0..=0.030)
+                                        .step_by(0.001)
+                                        .custom_formatter(|val, _| {
+                                            let narr_50m = val * 50.0;
+                                            format!("{:.3} (-{:.2}m @50m)", val, narr_50m)
+                                        }),
+                                )
+                                .changed();
+
+                            ui.label("Narrowing Height (m/m):");
+                            param_changed |= ui
+                                .add(
+                                    egui::Slider::new(&mut self.clearance_narrowing_height, 0.0..=0.030)
                                         .step_by(0.001)
                                         .custom_formatter(|val, _| {
                                             let narr_50m = val * 50.0;
@@ -1285,6 +1309,21 @@ impl eframe::App for RailTuner2DApp {
                             ui.label("Min Cluster Points:");
                             param_changed |= ui
                                 .add(egui::Slider::new(&mut self.min_points, 2..=30))
+                                .changed();
+
+                            ui.label("Cluster Max Depth Gap (m):");
+                            param_changed |= ui
+                                .add(
+                                    egui::Slider::new(&mut self.cluster_depth_thresh, 0.20..=5.00)
+                                        .step_by(0.10)
+                                        .custom_formatter(|val, _| {
+                                            if val <= 0.0 {
+                                                "Disabled (2D only)".to_string()
+                                            } else {
+                                                format!("{:.2} m", val)
+                                            }
+                                        }),
+                                )
                                 .changed();
 
                             ui.label("Max Distance (m):");
