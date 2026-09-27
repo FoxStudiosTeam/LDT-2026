@@ -1809,7 +1809,7 @@ impl eframe::App for RailTuner2DApp {
                             ui.label("Narrowing Width (m/m):");
                             param_changed |= ui
                                 .add(
-                                    egui::Slider::new(&mut self.clearance_narrowing_width, 0.0..=0.030)
+                                    egui::Slider::new(&mut self.clearance_narrowing_width, 0.0..=0.050)
                                         .step_by(0.001)
                                         .custom_formatter(|val, _| {
                                             let narr_50m = val * 50.0;

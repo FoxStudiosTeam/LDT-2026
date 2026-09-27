@@ -1,7 +1,8 @@
 pub mod debug;
 pub mod engine;
+use kaiv_utils::env_config;
 
-kaiv_utils::env_config! {
+env_config! {
     ".env" => pub ENV = pub Env {
         RERUN_URL : String = "rerun+http://host.docker.internal:9876/proxy".to_string(),
         ROS_DOMAIN_ID : u16 = 42,
