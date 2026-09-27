@@ -515,17 +515,6 @@ impl FrameDataset {
     }
 }
 
-/// Режим отображения слоёв в 2D вьювере
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ImageLayerMode {
-    /// Карта дальности (глубина) с палитрой Turbo
-    Depth,
-    /// Карта интенсивности отражения (рефлективность)
-    Intensity,
-    /// Смешанный слой: глубина + интенсивность
-    Blend,
-}
-
 /// Цветовая палитра слоя интенсивности
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IntensityColormap {
@@ -533,24 +522,20 @@ pub enum IntensityColormap {
     Turbo,
 }
 
-/// Конфигурация отображения слоёв
+/// Конфигурация отображения слоя интенсивности (карта глубины вырезана)
 #[derive(Clone, Copy, Debug)]
 pub struct LayerViewConfig {
-    pub mode: ImageLayerMode,
     pub intensity_colormap: IntensityColormap,
-    pub contrast_depth: f32,
     pub contrast_intensity: f32,
-    pub blend: f32,
+    pub invert_intensity: bool,
 }
 
 impl Default for LayerViewConfig {
     fn default() -> Self {
         Self {
-            mode: ImageLayerMode::Depth,
             intensity_colormap: IntensityColormap::Grayscale,
-            contrast_depth: 200.0,
             contrast_intensity: 20.0,
-            blend: 0.5,
+            invert_intensity: true,
         }
     }
 }
@@ -581,7 +566,7 @@ impl EguiRangePainter {
         let mut rgb = vec![0u8; out_w * out_h * 3];
         let has_intensity = !frame.intensity.is_empty();
 
-        // 1. Colorize pixels based on selected layer mode (Depth, Intensity, or Blend)
+        // 1. Colorize pixels using Inverted Intensity map (depth map is cut out)
         for r in 0..h {
             for c in 0..w {
                 let depth_val = frame.data[r * w + c];
@@ -591,54 +576,22 @@ impl EguiRangePainter {
                     0.0
                 };
 
-                let depth_color = if depth_val <= 0.0 {
-                    [10, 12, 16]
-                } else {
-                    let norm = (depth_val / layer_cfg.contrast_depth.max(1.0)).clamp(0.0, 1.0);
-                    turbo_rgb(norm)
-                };
-
                 let int_norm = (int_val / layer_cfg.contrast_intensity.max(0.1)).clamp(0.0, 1.0);
-                let int_color = if int_val <= 0.0 {
-                    [10, 12, 16]
+                let color = if !has_intensity || depth_val <= 0.0 {
+                    [0, 0, 0] // Пустота (void / нет измерений) -> всегда черная
                 } else {
+                    let val_norm = if layer_cfg.invert_intensity {
+                        1.0 - int_norm
+                    } else {
+                        int_norm
+                    };
+
                     match layer_cfg.intensity_colormap {
                         IntensityColormap::Grayscale => {
-                            let g = (int_norm * 255.0).round() as u8;
+                            let g = (val_norm * 255.0).round() as u8;
                             [g, g, g]
                         }
-                        IntensityColormap::Turbo => turbo_rgb(int_norm),
-                    }
-                };
-
-                let color = match layer_cfg.mode {
-                    ImageLayerMode::Depth => depth_color,
-                    ImageLayerMode::Intensity => {
-                        if !has_intensity {
-                            [25, 25, 30] // Gray placeholder if no intensity data
-                        } else {
-                            int_color
-                        }
-                    }
-                    ImageLayerMode::Blend => {
-                        if !has_intensity || (depth_val <= 0.0 && int_val <= 0.0) {
-                            depth_color
-                        } else if depth_val <= 0.0 {
-                            int_color
-                        } else if int_val <= 0.0 {
-                            depth_color
-                        } else {
-                            let a = layer_cfg.blend.clamp(0.0, 1.0);
-                            let inv_a = 1.0 - a;
-                            [
-                                (depth_color[0] as f32 * inv_a + int_color[0] as f32 * a).round()
-                                    as u8,
-                                (depth_color[1] as f32 * inv_a + int_color[1] as f32 * a).round()
-                                    as u8,
-                                (depth_color[2] as f32 * inv_a + int_color[2] as f32 * a).round()
-                                    as u8,
-                            ]
-                        }
+                        IntensityColormap::Turbo => turbo_rgb(val_norm),
                     }
                 };
 
@@ -1136,11 +1089,9 @@ impl RailTuner2DApp {
             last_calc_dur: Duration::ZERO,
             painter: EguiRangePainter::new(3),
             layer_cfg: LayerViewConfig {
-                mode: ImageLayerMode::Depth,
                 intensity_colormap: IntensityColormap::Grayscale,
-                contrast_depth: 200.0,
                 contrast_intensity: 20.0,
-                blend: 0.0,
+                invert_intensity: true,
             },
             texture: None,
             last_painted_frame: None,
@@ -1192,9 +1143,7 @@ impl RailTuner2DApp {
         self.detector.contrast_intensity = self.contrast_intensity;
         self.detector.blend = self.blend;
 
-        self.layer_cfg.contrast_depth = self.contrast_depth;
         self.layer_cfg.contrast_intensity = self.contrast_intensity;
-        self.layer_cfg.blend = self.blend;
 
         self.detector.obstacle_config.enabled = self.obstacle_enabled;
         self.detector.obstacle_config.mode = self.obstacle_mode;
@@ -1685,7 +1634,7 @@ impl eframe::App for RailTuner2DApp {
                             ui.label("Nominal Gauge (m):");
                             param_changed |= ui
                                 .add(
-                                    egui::Slider::new(&mut self.nominal_gauge, 1.40..=1.65)
+                                    egui::Slider::new(&mut self.nominal_gauge, 0.00..=3.0)
                                         .step_by(0.005),
                                 )
                                 .changed();
@@ -1693,7 +1642,7 @@ impl eframe::App for RailTuner2DApp {
                             ui.label("Min Allowed Gauge (m):");
                             param_changed |= ui
                                 .add(
-                                    egui::Slider::new(&mut self.min_gauge, 1.40..=1.55)
+                                    egui::Slider::new(&mut self.min_gauge, 0.00..=3.0)
                                         .step_by(0.005),
                                 )
                                 .changed();
@@ -1701,7 +1650,7 @@ impl eframe::App for RailTuner2DApp {
                             ui.label("Max Allowed Gauge (m):");
                             param_changed |= ui
                                 .add(
-                                    egui::Slider::new(&mut self.max_gauge, 1.50..=1.65)
+                                    egui::Slider::new(&mut self.max_gauge, 0.00..=3.00)
                                         .step_by(0.005),
                                 )
                                 .changed();
@@ -2071,55 +2020,25 @@ impl eframe::App for RailTuner2DApp {
                 let right = &mut cols[1];
                 right.group(|ui| {
                     let mut layer_changed = false;
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.heading("📺 2D View");
                         ui.separator();
-                        ui.label("Layer:");
+                        ui.label("Intensity Colormap:");
                         layer_changed |= ui.selectable_value(
-                            &mut self.layer_cfg.mode,
-                            ImageLayerMode::Depth,
-                            "🗺️ Depth",
-                        ).changed();
-                        layer_changed |= ui.selectable_value(
-                            &mut self.layer_cfg.mode,
-                            ImageLayerMode::Intensity,
-                            "💡 Intensity",
+                            &mut self.layer_cfg.intensity_colormap,
+                            IntensityColormap::Grayscale,
+                            "⚪ Gray",
                         ).changed();
                         layer_changed |= ui.selectable_value(
-                            &mut self.layer_cfg.mode,
-                            ImageLayerMode::Blend,
-                            "🔀 Blend",
+                            &mut self.layer_cfg.intensity_colormap,
+                            IntensityColormap::Turbo,
+                            "🌈 Turbo",
                         ).changed();
-                    });
-
-                    // Layer configuration sub-bar with 3 sliders (contrast_depth, contrast_intensity, blend)
-                    ui.horizontal_wrapped(|ui| {
-                        if self.layer_cfg.mode != ImageLayerMode::Depth {
-                            ui.label("Colormap:");
-                            layer_changed |= ui.selectable_value(
-                                &mut self.layer_cfg.intensity_colormap,
-                                IntensityColormap::Grayscale,
-                                "⚪ Gray",
-                            ).changed();
-                            layer_changed |= ui.selectable_value(
-                                &mut self.layer_cfg.intensity_colormap,
-                                IntensityColormap::Turbo,
-                                "🌈 Turbo",
-                            ).changed();
-                            ui.separator();
-                        }
-
-                        ui.label("Contrast Depth:");
-                        let d_changed = ui.add(
-                            egui::Slider::new(&mut self.layer_cfg.contrast_depth, 10.0..=300.0)
-                                .text("m")
-                                .step_by(5.0),
+                        ui.separator();
+                        layer_changed |= ui.checkbox(
+                            &mut self.layer_cfg.invert_intensity,
+                            "🔄 Invert Intensity",
                         ).changed();
-                        if d_changed {
-                            self.contrast_depth = self.layer_cfg.contrast_depth;
-                            layer_changed = true;
-                        }
-
                         ui.separator();
                         ui.label("Contrast Intensity:");
                         let i_changed = ui.add(
@@ -2128,18 +2047,6 @@ impl eframe::App for RailTuner2DApp {
                         ).changed();
                         if i_changed {
                             self.contrast_intensity = self.layer_cfg.contrast_intensity;
-                            layer_changed = true;
-                        }
-
-                        ui.separator();
-                        ui.label("Blend:");
-                        let b_changed = ui.add(
-                            egui::Slider::new(&mut self.layer_cfg.blend, 0.0..=1.0)
-                                .text("D ↔ I")
-                                .step_by(0.01),
-                        ).changed();
-                        if b_changed {
-                            self.blend = self.layer_cfg.blend;
                             layer_changed = true;
                         }
                     });
@@ -2158,11 +2065,11 @@ impl eframe::App for RailTuner2DApp {
                             ui.image((tex.id(), final_size));
                             ui.add_space(4.0);
                             ui.horizontal_wrapped(|ui| {
-                                match self.layer_cfg.mode {
-                                    ImageLayerMode::Depth => ui.colored_label(Color32::from_rgb(180, 180, 240), "[🗺️ Depth]"),
-                                    ImageLayerMode::Intensity => ui.colored_label(Color32::from_rgb(255, 230, 100), "[💡 Intensity]"),
-                                    ImageLayerMode::Blend => ui.colored_label(Color32::from_rgb(120, 230, 180), "[🔀 Blend]"),
-                                };
+                                if self.layer_cfg.invert_intensity {
+                                    ui.colored_label(Color32::from_rgb(255, 230, 100), "[💡 Intensity (Inverted)]");
+                                } else {
+                                    ui.colored_label(Color32::from_rgb(255, 230, 100), "[💡 Intensity]");
+                                }
                                 ui.colored_label(Color32::from_rgb(30, 210, 255), "■ Left Rail");
                                 ui.colored_label(Color32::from_rgb(255, 90, 30), "■ Right Rail");
                                 ui.colored_label(Color32::from_rgb(0, 255, 60), "■ Centerline");

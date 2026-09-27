@@ -821,13 +821,10 @@ impl DebugStream for RecordingStream {
         geo: &shared::rail_detection::LidarGeometry,
         res: Option<&shared::rail_detection::DetectionResult>,
     ) -> Result<(), AppError> {
-        // 1. Логируем 2D карту глубины (DepthImage) в entity "depth_map/image"
-        let depth_img = crop_frame.to_rerun()?;
-        self.log("depth_map/image", &depth_img).app_error()?;
-
-        // 1.1. Логируем 2D слой интенсивности (Image) в entity "depth_map/intensity"
+        // 1. Логируем 2D инвертированную карту интенсивности (Image) в entity "depth_map/intensity"
+        // (Карта глубины вырезана, используется инвертированная интенсивность: белые пустоты, темные рельсы)
         if !crop_frame.intensity.is_empty() {
-            if let Ok(intensity_img) = crop_frame.to_rerun_intensity() {
+            if let Ok(intensity_img) = crop_frame.to_rerun_intensity_inverted(20.0) {
                 self.log("depth_map/intensity", &intensity_img)
                     .app_error()?;
             }

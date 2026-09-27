@@ -1103,6 +1103,38 @@ impl RangeImage {
         let img = rerun::Image::from_l8(u8_bytes, [self.width as u32, self.height as u32]);
         Ok(img)
     }
+
+    /// Преобразование инвертированной интенсивности в Rerun `Image` (8-битный монохромный слой L8).
+    /// Пустоты (void / нет измерений) -> черные (0),
+    /// Низкая отражаемость (земля, фон) -> светлые / белые (255),
+    /// Высокая отражаемость (рельсы) -> темные / черные (0).
+    pub fn to_rerun_intensity_inverted(&self, contrast: f32) -> Result<rerun::Image, AppError> {
+        let expected_len = self.width * self.height;
+        let mut u8_bytes = Vec::with_capacity(expected_len);
+        let ci = contrast.max(0.1);
+        if self.intensity.len() == expected_len {
+            for (i, &val) in self.intensity.iter().enumerate() {
+                let d = if i < self.data.len() {
+                    self.data[i]
+                } else {
+                    0.0
+                };
+                if d <= 0.0 {
+                    // Пустота (нет луча / нет данных) -> черная (0)
+                    u8_bytes.push(0);
+                } else {
+                    let norm = (val / ci).clamp(0.0, 1.0);
+                    let g = ((1.0 - norm) * 255.0).round() as u8;
+                    u8_bytes.push(g);
+                }
+            }
+        } else {
+            u8_bytes.resize(expected_len, 0);
+        }
+
+        let img = rerun::Image::from_l8(u8_bytes, [self.width as u32, self.height as u32]);
+        Ok(img)
+    }
 }
 
 #[cfg(test)]
