@@ -217,6 +217,12 @@ pub struct DetectionResult {
     pub obstacle_enabled: bool,
     /// Флаг истинных (восстановленных) координат в реальном физическом пространстве
     pub is_real_coordinates: bool,
+    /// Время детекции рельсов (мс)
+    pub timing_rail_ms: f32,
+    /// Время проверки и кластеризации препятствий (мс)
+    pub timing_obstacles_ms: f32,
+    /// Общее время работы алгоритма детекции (мс)
+    pub timing_total_ms: f32,
 }
 
 impl DetectionResult {
@@ -292,18 +298,22 @@ impl DetectionResult {
         let hoop_step = ((hoop_dist_m / step_m).round().max(1.0)) as usize;
 
         let min_w = self.gauge.max(1.0).min(self.clearance_width);
-        let min_h = (self.min_height_above_rail + 0.30).min(self.max_height_above_rail);
+        let nom_h = (self.max_height_above_rail - self.min_height_above_rail).max(0.1);
+        let center_h = (self.min_height_above_rail + self.max_height_above_rail) * 0.5;
+        let min_h_thickness = 0.30_f32.min(nom_h);
 
         for i in 0..=num_steps {
             let t = (i as f32) / (num_steps as f32);
             let x = x_min + t * (x_max - x_min);
 
-            // Сужение габарита по мере удаления:
+            // Сужение габарита по мере удаления (центрированно по ширине и высоте):
             let dx = (x - x_min).max(0.0);
             let cur_w = (self.clearance_width - self.clearance_narrowing_width * dx).max(min_w);
-            let cur_max_h =
-                (self.max_height_above_rail - self.clearance_narrowing_height * dx).max(min_h);
+            let cur_h = (nom_h - self.clearance_narrowing_height * dx).max(min_h_thickness);
             let half_w = cur_w * 0.5;
+            let half_h = cur_h * 0.5;
+            let cur_min_h = center_h - half_h;
+            let cur_max_h = center_h + half_h;
 
             let y_c = self.poly_y[0] * x * x + self.poly_y[1] * x + self.poly_y[2];
             let z_surf = if self.is_real_coordinates {
@@ -321,7 +331,7 @@ impl DetectionResult {
             let xr = x - half_w * sin_t;
             let yr = y_c + half_w * cos_t;
 
-            let zb = z_surf + self.min_height_above_rail;
+            let zb = z_surf + cur_min_h;
             let zt = z_surf + cur_max_h;
 
             let p_bl = [xl, yl, zb];
@@ -572,6 +582,7 @@ impl RailTrackDetector {
         raw_frame: Option<&RangeImage>,
         frame_idx: usize,
     ) -> Option<DetectionResult> {
+        let t_start_rail = std::time::Instant::now();
         let frame = active_frame;
         let h = frame.height;
         let w = frame.width;
@@ -1073,6 +1084,9 @@ impl RailTrackDetector {
             (0.0, 0.0)
         };
 
+        let t_rail_dur = t_start_rail.elapsed();
+
+        let t_start_obs = std::time::Instant::now();
         let obstacles = if self.obstacle_config.enabled {
             let (obs_frame, is_warped) = if let Some(raw) = raw_frame {
                 (raw, false)
@@ -1090,6 +1104,11 @@ impl RailTrackDetector {
         } else {
             Vec::new()
         };
+        let t_obs_dur = t_start_obs.elapsed();
+
+        let timing_rail_ms = t_rail_dur.as_secs_f32() * 1000.0;
+        let timing_obstacles_ms = t_obs_dur.as_secs_f32() * 1000.0;
+        let timing_total_ms = timing_rail_ms + timing_obstacles_ms;
 
         Some(DetectionResult {
             frame_idx,
@@ -1133,6 +1152,9 @@ impl RailTrackDetector {
             upward_curvature: self.obstacle_config.upward_curvature,
             obstacle_enabled: self.obstacle_config.enabled,
             is_real_coordinates: false,
+            timing_rail_ms,
+            timing_obstacles_ms,
+            timing_total_ms,
         })
     }
 
@@ -1158,7 +1180,9 @@ impl RailTrackDetector {
         }
 
         let min_w = gauge.max(1.0).min(config.clearance_width);
-        let min_h = (config.min_height_above_rail + 0.30).min(config.max_height_above_rail);
+        let nom_h = (config.max_height_above_rail - config.min_height_above_rail).max(0.1);
+        let center_h = (config.min_height_above_rail + config.max_height_above_rail) * 0.5;
+        let min_h_thickness = 0.30_f32.min(nom_h);
         let half_g = gauge * 0.5;
         let x_min = 2.0_f32;
         let x_max = config.max_distance_m;
@@ -1193,15 +1217,14 @@ impl RailTrackDetector {
                             - config.clearance_narrowing_width * dx)
                             .max(min_w)
                             * 0.5;
-                        let cur_max_h = (config.max_height_above_rail
-                            - config.clearance_narrowing_height * dx)
-                            .max(min_h);
+                        let cur_h =
+                            (nom_h - config.clearance_narrowing_height * dx).max(min_h_thickness);
+                        let cur_half_h = cur_h * 0.5;
+                        let cur_min_h = center_h - cur_half_h;
+                        let cur_max_h = center_h + cur_half_h;
                         let dz = z_real - z_surf_real;
 
-                        if d_lat.abs() <= cur_half_w
-                            && dz >= config.min_height_above_rail
-                            && dz <= cur_max_h
-                        {
+                        if d_lat.abs() <= cur_half_w && dz >= cur_min_h && dz <= cur_max_h {
                             is_intrusion[r_off + col] = true;
                         }
                     }
@@ -1234,9 +1257,11 @@ impl RailTrackDetector {
                             - config.clearance_narrowing_width * dx)
                             .max(min_w)
                             * 0.5;
-                        let cur_max_h = (config.max_height_above_rail
-                            - config.clearance_narrowing_height * dx)
-                            .max(min_h);
+                        let cur_h =
+                            (nom_h - config.clearance_narrowing_height * dx).max(min_h_thickness);
+                        let cur_half_h = cur_h * 0.5;
+                        let cur_min_h = center_h - cur_half_h;
+                        let cur_max_h = center_h + cur_half_h;
                         if d_lat.abs() > cur_half_w {
                             continue;
                         }
@@ -1258,7 +1283,7 @@ impl RailTrackDetector {
                         let depth_diff = r_ground - r;
 
                         if depth_diff >= config.depth_diff_thresh
-                            && dz >= config.min_height_above_rail
+                            && dz >= cur_min_h
                             && dz <= cur_max_h
                         {
                             is_intrusion[r_off + col] = true;
@@ -1294,15 +1319,14 @@ impl RailTrackDetector {
                             - config.clearance_narrowing_width * dx)
                             .max(min_w)
                             * 0.5;
-                        let cur_max_h = (config.max_height_above_rail
-                            - config.clearance_narrowing_height * dx)
-                            .max(min_h);
+                        let cur_h =
+                            (nom_h - config.clearance_narrowing_height * dx).max(min_h_thickness);
+                        let cur_half_h = cur_h * 0.5;
+                        let cur_min_h = center_h - cur_half_h;
+                        let cur_max_h = center_h + cur_half_h;
                         let dz = z_real - z_surf_real;
 
-                        if d_lat.abs() <= cur_half_w
-                            && dz >= config.min_height_above_rail
-                            && dz <= cur_max_h
-                        {
+                        if d_lat.abs() <= cur_half_w && dz >= cur_min_h && dz <= cur_max_h {
                             is_intrusion[r_off + col] = true;
                         }
                     }
@@ -1748,6 +1772,9 @@ mod tests {
             upward_curvature: 0.0,
             obstacle_enabled: true,
             is_real_coordinates: true,
+            timing_rail_ms: 0.0,
+            timing_obstacles_ms: 0.0,
+            timing_total_ms: 0.0,
         };
 
         let strips = res.shapecast_wireframe_3d();
@@ -1854,6 +1881,9 @@ mod tests {
             upward_curvature: 0.0,
             obstacle_enabled: true,
             is_real_coordinates: true,
+            timing_rail_ms: 0.0,
+            timing_obstacles_ms: 0.0,
+            timing_total_ms: 0.0,
         };
 
         let strips = res.shapecast_wireframe_3d();
@@ -1897,6 +1927,19 @@ mod tests {
             (height_far - 2.15).abs() < 1e-3,
             "Far height should be 2.15, got {}",
             height_far
+        );
+        // Centered narrowing: center above rail is (0.15 + 3.05)/2 = 1.60m.
+        // Bottom boundary rises from 0.15 to 1.60 - 2.15/2 = 0.525m (relative to rail surface z=-1.0, so z = -0.475m).
+        // Top boundary drops from 3.05 to 1.60 + 2.15/2 = 2.675m (relative to rail surface z=-1.0, so z = +1.675m).
+        assert!(
+            (pt_far_l[2] - (-0.475)).abs() < 1e-3,
+            "Far bottom boundary should rise centered to -0.475 (-1.0 + 0.525), got {}",
+            pt_far_l[2]
+        );
+        assert!(
+            (pt_far_tl[2] - 1.675).abs() < 1e-3,
+            "Far top boundary should drop centered to 1.675 (-1.0 + 2.675), got {}",
+            pt_far_tl[2]
         );
 
         // Test clamping to gauge and min_h when narrowing is large

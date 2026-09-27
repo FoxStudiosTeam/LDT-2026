@@ -27,13 +27,16 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, ColorImage, Key, TextureHandle, TextureOptions};
+use rayon::prelude::*;
 use rerun::{Color, Points3D, Radius, RecordingStream, RecordingStreamBuilder};
+use rusqlite::{Connection, OpenFlags};
 use rust_listener::debug::helper::DebugStream;
 use shared::configs::DetectionPreset;
 use shared::rail_detection::{
     DetectionResult, LidarGeometry, ObstacleDetectionMode, RailTrackDetector,
 };
 use shared::range_image::RangeImage;
+use shared::transport::PointCloud2;
 
 /// Google Turbo Colormap polynomial approximation
 #[inline(always)]
@@ -53,6 +56,159 @@ fn turbo_rgb(x: f32) -> [u8; 3] {
         (g.clamp(0.0, 1.0) * 255.0).round() as u8,
         (b.clamp(0.0, 1.0) * 255.0).round() as u8,
     ]
+}
+
+/// Источник трека данных (ROS2 .db3 или директория с .npy)
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TrackSource {
+    Db3(PathBuf),
+    NpyDir(PathBuf),
+}
+
+impl TrackSource {
+    pub fn label(&self) -> String {
+        match self {
+            TrackSource::Db3(p) => {
+                let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("db3");
+                let parent = p
+                    .parent()
+                    .and_then(|pr| pr.file_name())
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("");
+                if parent.is_empty() || parent == "dataset" || parent == "." {
+                    format!("📁 [DB3] {}", stem)
+                } else if stem.starts_with(parent) {
+                    format!("📁 [DB3] {}", stem)
+                } else {
+                    format!("📁 [DB3] {} ({})", parent, stem)
+                }
+            }
+            TrackSource::NpyDir(p) => {
+                let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("npy");
+                format!("📂 [NPY] {}", name)
+            }
+        }
+    }
+}
+
+/// Рекурсивно находит файлы .db3 с размером > 1 МБ (исключая пустые заглушки)
+fn scan_db3_in_dir(dir: &Path, out: &mut Vec<PathBuf>) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                scan_db3_in_dir(&p, out);
+            } else if p.extension().and_then(|s| s.to_str()) == Some("db3") {
+                if let Ok(meta) = std::fs::metadata(&p) {
+                    if meta.len() > 1024 * 1024 {
+                        out.push(p);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Находит доступные треки: .db3 датасеты и .npy директории
+pub fn discover_available_tracks(cli_arg: Option<&str>) -> Vec<TrackSource> {
+    let mut tracks = Vec::new();
+
+    // 1. Приоритетный путь из аргументов командной строки
+    if let Some(arg) = cli_arg {
+        let p = PathBuf::from(arg);
+        if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("db3") {
+            tracks.push(TrackSource::Db3(p));
+        } else if p.is_dir() {
+            let npy = scan_npy_frames(&p);
+            if !npy.is_empty() {
+                tracks.push(TrackSource::NpyDir(p.clone()));
+            }
+            let mut db3s = Vec::new();
+            scan_db3_in_dir(&p, &mut db3s);
+            for d in db3s {
+                tracks.push(TrackSource::Db3(d));
+            }
+        }
+    }
+
+    // 2. Сканирование папки dataset и текущей директории на наличие db3
+    let search_roots = [
+        PathBuf::from("dataset"),
+        PathBuf::from("../dataset"),
+        PathBuf::from("."),
+    ];
+
+    let mut db3_found = Vec::new();
+    for root in &search_roots {
+        if root.exists() && root.is_dir() {
+            scan_db3_in_dir(root, &mut db3_found);
+        }
+    }
+    db3_found.sort();
+    db3_found.dedup();
+
+    for d in db3_found {
+        let ts = TrackSource::Db3(d);
+        if !tracks.contains(&ts) {
+            tracks.push(ts);
+        }
+    }
+
+    // 3. Сканирование известных папок с .npy кадрами
+    let npy_roots = [
+        PathBuf::from("frames"),
+        PathBuf::from("../frames"),
+        PathBuf::from("dev_pyrails/frames"),
+    ];
+    for n in &npy_roots {
+        if n.exists() && n.is_dir() {
+            let npy = scan_npy_frames(n);
+            if !npy.is_empty() {
+                let ts = TrackSource::NpyDir(n.clone());
+                if !tracks.contains(&ts) {
+                    tracks.push(ts);
+                }
+            }
+        }
+    }
+
+    tracks
+}
+
+/// Поиск ID топика PointCloud2 в SQLite базе rosbag2
+fn find_pointcloud_topic_id(conn: &Connection) -> Option<i64> {
+    if let Ok(mut stmt) =
+        conn.prepare("SELECT id FROM topics WHERE type = 'sensor_msgs/msg/PointCloud2' LIMIT 1")
+    {
+        if let Ok(mut rows) = stmt.query([]) {
+            if let Ok(Some(row)) = rows.next() {
+                if let Ok(id) = row.get(0) {
+                    return Some(id);
+                }
+            }
+        }
+    }
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT id FROM topics WHERE type LIKE '%PointCloud%' OR name LIKE '%point%' LIMIT 1",
+    ) {
+        if let Ok(mut rows) = stmt.query([]) {
+            if let Ok(Some(row)) = rows.next() {
+                if let Ok(id) = row.get(0) {
+                    return Some(id);
+                }
+            }
+        }
+    }
+    if let Ok(mut stmt) = conn.prepare("SELECT id FROM topics LIMIT 1") {
+        if let Ok(mut rows) = stmt.query([]) {
+            if let Ok(Some(row)) = rows.next() {
+                if let Ok(id) = row.get(0) {
+                    return Some(id);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Находит все файлы frame_*.npy в директории
@@ -83,44 +239,278 @@ pub struct TunerFrame {
     pub range_image: RangeImage,
 }
 
-/// Хранилище загруженных кадров
+/// Хранилище загруженных кадров в оперативной памяти (RAM)
 pub struct FrameDataset {
+    pub source: TrackSource,
     pub frames: Arc<RwLock<Vec<TunerFrame>>>,
     pub is_loading: Arc<AtomicBool>,
     pub loaded_count: Arc<AtomicUsize>,
-    pub total_count: usize,
+    pub total_count: Arc<AtomicUsize>,
+    pub cancel_flag: Arc<AtomicBool>,
 }
 
 impl FrameDataset {
-    pub fn from_npy_paths(paths: Vec<(usize, PathBuf)>) -> Self {
-        let total = paths.len();
+    /// Сигнализирует фоновому потоку остановить чтение кадров
+    pub fn stop(&self) {
+        self.cancel_flag.store(true, Ordering::SeqCst);
+    }
+
+    /// Загружает датасет из указанного источника (db3 или npy директория)
+    pub fn from_source(source: TrackSource) -> Self {
+        match source {
+            TrackSource::Db3(ref p) => Self::from_db3(source.clone(), p),
+            TrackSource::NpyDir(ref p) => Self::from_npy_dir(source.clone(), p),
+        }
+    }
+
+    /// Потоковая фоновая загрузка .db3 файла в RAM с параллельной конвертацией в RangeImage
+    pub fn from_db3(source: TrackSource, path: &Path) -> Self {
+        let frames = Arc::new(RwLock::new(Vec::new()));
+        let is_loading = Arc::new(AtomicBool::new(true));
+        let loaded_count = Arc::new(AtomicUsize::new(0));
+        let total_count = Arc::new(AtomicUsize::new(0));
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+
+        let mut total_messages = 0usize;
+        if let Ok(conn) = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+            let topic_id = find_pointcloud_topic_id(&conn).unwrap_or(1);
+            if let Ok(mut stmt) = conn.prepare("SELECT count(*) FROM messages WHERE topic_id = ?") {
+                if let Ok(count) = stmt.query_row([topic_id], |row| row.get::<_, i64>(0)) {
+                    total_messages = count as usize;
+                }
+            }
+        }
+        total_count.store(total_messages, Ordering::Relaxed);
+
+        let bg_path = path.to_path_buf();
+        let bg_frames = Arc::clone(&frames);
+        let bg_is_loading = Arc::clone(&is_loading);
+        let bg_loaded_count = Arc::clone(&loaded_count);
+        let bg_cancel = Arc::clone(&cancel_flag);
+
+        std::thread::spawn(move || {
+            let conn = match Connection::open_with_flags(&bg_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!(
+                        "[-] Не удалось открыть SQLite {}: {:?}",
+                        bg_path.display(),
+                        e
+                    );
+                    bg_is_loading.store(false, Ordering::SeqCst);
+                    return;
+                }
+            };
+
+            let topic_id = find_pointcloud_topic_id(&conn).unwrap_or(1);
+            let mut stmt =
+                match conn.prepare("SELECT data FROM messages WHERE topic_id = ? ORDER BY id") {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("[-] Ошибка подготовки запроса к messages: {:?}", e);
+                        bg_is_loading.store(false, Ordering::SeqCst);
+                        return;
+                    }
+                };
+
+            let mut rows = match stmt.query([topic_id]) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("[-] Ошибка выполнения запроса к messages: {:?}", e);
+                    bg_is_loading.store(false, Ordering::SeqCst);
+                    return;
+                }
+            };
+
+            println!("[FrameDataset] Загрузка .db3 в RAM: {}", bg_path.display());
+
+            const BATCH_SIZE: usize = 16;
+            let mut batch: Vec<(usize, Vec<u8>)> = Vec::with_capacity(BATCH_SIZE);
+            let mut global_idx = 0usize;
+
+            while let Ok(Some(row)) = rows.next() {
+                if bg_cancel.load(Ordering::Relaxed) {
+                    println!("[FrameDataset] Загрузка отменена: {}", bg_path.display());
+                    return;
+                }
+
+                let raw_data: Vec<u8> = match row.get(0) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                batch.push((global_idx, raw_data));
+                global_idx += 1;
+
+                if batch.len() >= BATCH_SIZE {
+                    let cancel = Arc::clone(&bg_cancel);
+                    let parsed: Vec<TunerFrame> = batch
+                        .into_par_iter()
+                        .filter_map(|(idx, raw_bytes)| {
+                            if cancel.load(Ordering::Relaxed) {
+                                return None;
+                            }
+                            let cloud: PointCloud2 = match cdr::deserialize(&raw_bytes) {
+                                Ok(c) => c,
+                                Err(e) => {
+                                    if idx < 3 {
+                                        eprintln!(
+                                            "[-] Frame {} CDR deserialize error: {:?}",
+                                            idx, e
+                                        );
+                                    }
+                                    return None;
+                                }
+                            };
+                            let ri =
+                                match RangeImage::from_pandar128_point_cloud2(&cloud, Some(40.0)) {
+                                    Some(r) => r,
+                                    None => {
+                                        if idx < 3 {
+                                            eprintln!(
+                                                "[-] Frame {} RangeImage conversion returned None",
+                                                idx
+                                            );
+                                        }
+                                        return None;
+                                    }
+                                };
+                            Some(TunerFrame {
+                                idx,
+                                range_image: ri,
+                            })
+                        })
+                        .collect();
+
+                    if bg_cancel.load(Ordering::Relaxed) {
+                        return;
+                    }
+
+                    {
+                        let mut w = bg_frames.write().unwrap();
+                        w.extend(parsed);
+                        bg_loaded_count.store(w.len(), Ordering::Relaxed);
+                    }
+                    batch = Vec::with_capacity(BATCH_SIZE);
+                }
+            }
+
+            if !batch.is_empty() && !bg_cancel.load(Ordering::Relaxed) {
+                let cancel = Arc::clone(&bg_cancel);
+                let parsed: Vec<TunerFrame> = batch
+                    .into_par_iter()
+                    .filter_map(|(idx, raw_bytes)| {
+                        if cancel.load(Ordering::Relaxed) {
+                            return None;
+                        }
+                        let cloud: PointCloud2 = match cdr::deserialize(&raw_bytes) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                if idx < 3 {
+                                    eprintln!("[-] Frame {} CDR deserialize error: {:?}", idx, e);
+                                }
+                                return None;
+                            }
+                        };
+                        let ri = match RangeImage::from_pandar128_point_cloud2(&cloud, Some(40.0)) {
+                            Some(r) => r,
+                            None => {
+                                if idx < 3 {
+                                    eprintln!(
+                                        "[-] Frame {} RangeImage conversion returned None",
+                                        idx
+                                    );
+                                }
+                                return None;
+                            }
+                        };
+                        Some(TunerFrame {
+                            idx,
+                            range_image: ri,
+                        })
+                    })
+                    .collect();
+
+                if !bg_cancel.load(Ordering::Relaxed) {
+                    let mut w = bg_frames.write().unwrap();
+                    w.extend(parsed);
+                    bg_loaded_count.store(w.len(), Ordering::Relaxed);
+                }
+            }
+
+            bg_is_loading.store(false, Ordering::SeqCst);
+            println!(
+                "[FrameDataset] Загрузка завершена: {} кадров",
+                bg_loaded_count.load(Ordering::Relaxed)
+            );
+        });
+
+        Self {
+            source,
+            frames,
+            is_loading,
+            loaded_count,
+            total_count,
+            cancel_flag,
+        }
+    }
+
+    /// Фоновая загрузка кадров из папки с .npy файлами
+    pub fn from_npy_dir(source: TrackSource, dir: &Path) -> Self {
+        let npy_files = scan_npy_frames(dir);
+        let total = npy_files.len();
         let frames = Arc::new(RwLock::new(Vec::with_capacity(total)));
         let is_loading = Arc::new(AtomicBool::new(true));
         let loaded_count = Arc::new(AtomicUsize::new(0));
+        let total_count = Arc::new(AtomicUsize::new(total));
+        let cancel_flag = Arc::new(AtomicBool::new(false));
 
         let bg_frames = Arc::clone(&frames);
         let bg_is_loading = Arc::clone(&is_loading);
         let bg_loaded_count = Arc::clone(&loaded_count);
+        let bg_cancel = Arc::clone(&cancel_flag);
 
         std::thread::spawn(move || {
-            for (idx, path) in paths {
-                if let Ok(ri) = RangeImage::load_npy(&path) {
-                    let mut lock = bg_frames.write().unwrap();
-                    lock.push(TunerFrame {
-                        idx,
-                        range_image: ri,
-                    });
-                    bg_loaded_count.fetch_add(1, Ordering::Relaxed);
+            const BATCH_SIZE: usize = 16;
+            for chunk in npy_files.chunks(BATCH_SIZE) {
+                if bg_cancel.load(Ordering::Relaxed) {
+                    return;
+                }
+                let cancel = Arc::clone(&bg_cancel);
+                let parsed: Vec<TunerFrame> = chunk
+                    .par_iter()
+                    .filter_map(|(idx, path)| {
+                        if cancel.load(Ordering::Relaxed) {
+                            return None;
+                        }
+                        let ri = RangeImage::load_npy(path).ok()?;
+                        Some(TunerFrame {
+                            idx: *idx,
+                            range_image: ri,
+                        })
+                    })
+                    .collect();
+
+                if bg_cancel.load(Ordering::Relaxed) {
+                    return;
+                }
+
+                {
+                    let mut w = bg_frames.write().unwrap();
+                    w.extend(parsed);
+                    bg_loaded_count.store(w.len(), Ordering::Relaxed);
                 }
             }
             bg_is_loading.store(false, Ordering::SeqCst);
         });
 
         Self {
+            source,
             frames,
             is_loading,
             loaded_count,
-            total_count: total,
+            total_count,
+            cancel_flag,
         }
     }
 }
@@ -581,8 +971,60 @@ fn draw_line_rgb(rgb: &mut [u8], w: usize, h: usize, pts: &[(i32, i32)], col: [u
     }
 }
 
+/// Замеры времени выполнения стадий конвейера обработки кадра
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PipelineProfiling {
+    /// 1. Искривление / компенсация кривизны тоннеля (warp_curvature)
+    pub warp_ms: f32,
+    /// 2. Детекция геометрии рельсов (поиск ступеней и аппроксимация полинома)
+    pub rail_detect_ms: f32,
+    /// 3. Проверка габарита приближения и кластеризация препятствий
+    pub obstacle_detect_ms: f32,
+    /// 4. Общее время работы детектора (detect_with_raw)
+    pub detector_total_ms: f32,
+    /// 5. Восстановление истинных 3D координат
+    pub restore_coords_ms: f32,
+    /// 6. Формирование и отправка сцен в Rerun (3D + 2D окна)
+    pub rerun_stream_ms: f32,
+    /// 7. 2D растеризация и оверлеи в Turbo палитре (painter.paint)
+    pub egui_paint_ms: f32,
+    /// 8. Загрузка текстуры на GPU (egui load_texture)
+    pub texture_upload_ms: f32,
+    /// Время основных вычислений до отрисовки интерфейса
+    pub calc_pipeline_ms: f32,
+    /// Полное сквозное время обработки и отображения одного кадра (end-to-end)
+    pub total_pipeline_ms: f32,
+
+    // Сглаженные средние значения (EMA, alpha = 0.15)
+    pub ema_total_ms: f32,
+    pub ema_detector_ms: f32,
+    pub ema_rerun_ms: f32,
+    pub ema_paint_ms: f32,
+}
+
+impl PipelineProfiling {
+    pub fn update_ema(&mut self) {
+        let alpha = 0.15;
+        if self.ema_total_ms <= 0.0 {
+            self.ema_total_ms = self.total_pipeline_ms;
+            self.ema_detector_ms = self.detector_total_ms;
+            self.ema_rerun_ms = self.rerun_stream_ms;
+            self.ema_paint_ms = self.egui_paint_ms + self.texture_upload_ms;
+        } else {
+            self.ema_total_ms = self.ema_total_ms * (1.0 - alpha) + self.total_pipeline_ms * alpha;
+            self.ema_detector_ms =
+                self.ema_detector_ms * (1.0 - alpha) + self.detector_total_ms * alpha;
+            self.ema_rerun_ms = self.ema_rerun_ms * (1.0 - alpha) + self.rerun_stream_ms * alpha;
+            self.ema_paint_ms = self.ema_paint_ms * (1.0 - alpha)
+                + (self.egui_paint_ms + self.texture_upload_ms) * alpha;
+        }
+    }
+}
+
 /// Интерактивное приложение RailTuner2D
 pub struct RailTuner2DApp {
+    available_tracks: Vec<TrackSource>,
+    selected_track_idx: usize,
     dataset: FrameDataset,
     current_frame_idx: usize,
     is_playing: bool,
@@ -636,13 +1078,21 @@ pub struct RailTuner2DApp {
     texture: Option<TextureHandle>,
     last_painted_frame: Option<usize>,
     copied_toast_time: Option<Instant>,
+    profiling: PipelineProfiling,
 }
 
 impl RailTuner2DApp {
-    pub fn new(dataset: FrameDataset, rec_stream: Option<RecordingStream>) -> Self {
+    pub fn new(
+        available_tracks: Vec<TrackSource>,
+        selected_track_idx: usize,
+        dataset: FrameDataset,
+        rec_stream: Option<RecordingStream>,
+    ) -> Self {
         let detector: RailTrackDetector = DetectionPreset::current().into();
 
         Self {
+            available_tracks,
+            selected_track_idx,
             dataset,
             current_frame_idx: 0,
             is_playing: false,
@@ -695,7 +1145,34 @@ impl RailTuner2DApp {
             texture: None,
             last_painted_frame: None,
             copied_toast_time: None,
+            profiling: PipelineProfiling::default(),
         }
+    }
+
+    /// Переключение на другой трек: выгрузка предыдущего из RAM и потоковая загрузка нового
+    pub fn open_track(&mut self, track_idx: usize) {
+        if track_idx >= self.available_tracks.len() {
+            return;
+        }
+        // 1. Прерываем предыдущую фоновую загрузку (если шла)
+        self.dataset.stop();
+
+        // 2. Освобождаем память предыдущего датасета и начинаем загрузку нового
+        let source = self.available_tracks[track_idx].clone();
+        println!("[RailTuner2D] Смена трека на: {}", source.label());
+        self.dataset = FrameDataset::from_source(source);
+        self.selected_track_idx = track_idx;
+
+        // 3. Сбрасываем плеер, превью и детектор
+        self.is_playing = false;
+        self.current_frame_idx = 0;
+        self.last_painted_frame = None;
+        self.texture = None;
+        self.active_range_image = None;
+        self.last_res = None;
+        self.last_bent_res = None;
+        self.profiling = PipelineProfiling::default();
+        self.detector.reset();
     }
 
     fn sync_detector_params(&mut self) {
@@ -747,6 +1224,8 @@ impl RailTuner2DApp {
             return;
         };
 
+        let t_pipeline = Instant::now();
+
         if self.detector.geometry.height != frame.range_image.height
             || self.detector.geometry.width != frame.range_image.width
         {
@@ -764,33 +1243,48 @@ impl RailTuner2DApp {
 
         // 1. Искривление всех точек тоннеля и карты глубины/интенсивности:
         //    Z_bent = Z + c_z * X^2
+        let t_warp = Instant::now();
         let active_ri = if self.upward_curvature.abs() > 1e-7 {
             raw_ri.warp_curvature(geo, self.upward_curvature)
         } else {
             raw_ri.clone()
         };
+        self.profiling.warp_ms = t_warp.elapsed().as_secs_f32() * 1000.0;
 
         self.sync_detector_params();
 
         // 2. Детекция путей на искривленном (выпрямленном) представлении и габарита на истинных координатах
-        let t0 = Instant::now();
+        let t_detect = Instant::now();
         let bent_res = self
             .detector
             .detect_with_raw(&active_ri, Some(raw_ri), frame.idx);
-        self.last_calc_dur = t0.elapsed();
+        let detect_dur = t_detect.elapsed();
+        self.last_calc_dur = detect_dur;
+        self.profiling.detector_total_ms = detect_dur.as_secs_f32() * 1000.0;
+
+        if let Some(ref r) = bent_res {
+            self.profiling.rail_detect_ms = r.timing_rail_ms;
+            self.profiling.obstacle_detect_ms = r.timing_obstacles_ms;
+        } else {
+            self.profiling.rail_detect_ms = 0.0;
+            self.profiling.obstacle_detect_ms = 0.0;
+        }
 
         // 3. Восстановление истинных координат для Rerun и 3D мира:
         //    Z_real = Z_bent - upward_curvature * X^2
+        let t_restore = Instant::now();
         let mut real_res = bent_res.clone();
         if let Some(ref mut r) = real_res {
             r.restore_real_coordinates();
         }
+        self.profiling.restore_coords_ms = t_restore.elapsed().as_secs_f32() * 1000.0;
 
         self.last_bent_res = bent_res;
         self.last_res = real_res;
         self.active_range_image = Some(active_ri);
 
         // Отправка в Rerun (2 окна: 3D и 2D)
+        let t_rerun = Instant::now();
         if self.stream_to_rerun {
             if let Some(ref rec) = self.rec_stream {
                 rec.set_time_sequence("frame", frame.idx as i64);
@@ -848,6 +1342,38 @@ impl RailTuner2DApp {
                 // Стримим искривленную карту глубины и интенсивности с соответствующими путями:
                 let _ = rec.log_rail_detection_2d(active_ri, geo, self.last_bent_res.as_ref());
             }
+            self.profiling.rerun_stream_ms = t_rerun.elapsed().as_secs_f32() * 1000.0;
+        } else {
+            self.profiling.rerun_stream_ms = 0.0;
+        }
+
+        self.profiling.calc_pipeline_ms = t_pipeline.elapsed().as_secs_f32() * 1000.0;
+    }
+
+    fn update_preview_texture(&mut self, ctx: &egui::Context) {
+        let lock = self.dataset.frames.read().unwrap();
+        if self.current_frame_idx < lock.len() {
+            let f = &lock[self.current_frame_idx];
+            let active_ri = self.active_range_image.as_ref().unwrap_or(&f.range_image);
+
+            let t_paint = Instant::now();
+            let color_img = self.painter.paint(
+                active_ri,
+                self.last_bent_res.as_ref(),
+                &self.detector.geometry,
+                self.clearance_width,
+                &self.layer_cfg,
+            );
+            self.profiling.egui_paint_ms = t_paint.elapsed().as_secs_f32() * 1000.0;
+
+            let t_upload = Instant::now();
+            self.texture = Some(ctx.load_texture("range_view", color_img, TextureOptions::LINEAR));
+            self.profiling.texture_upload_ms = t_upload.elapsed().as_secs_f32() * 1000.0;
+
+            self.profiling.total_pipeline_ms = self.profiling.calc_pipeline_ms
+                + self.profiling.egui_paint_ms
+                + self.profiling.texture_upload_ms;
+            self.profiling.update_ema();
         }
     }
 }
@@ -894,41 +1420,77 @@ impl eframe::App for RailTuner2DApp {
         if self.last_painted_frame != Some(self.current_frame_idx) && total_loaded > 0 {
             self.process_current_frame();
             self.last_painted_frame = Some(self.current_frame_idx);
-
-            let lock = self.dataset.frames.read().unwrap();
-            if self.current_frame_idx < lock.len() {
-                let f = &lock[self.current_frame_idx];
-                let active_ri = self.active_range_image.as_ref().unwrap_or(&f.range_image);
-                let color_img = self.painter.paint(
-                    active_ri,
-                    self.last_bent_res.as_ref(),
-                    &self.detector.geometry,
-                    self.clearance_width,
-                    &self.layer_cfg,
-                );
-                self.texture = Some(ui.ctx().load_texture(
-                    "range_view",
-                    color_img,
-                    TextureOptions::LINEAR,
-                ));
-            }
+            self.update_preview_texture(ui.ctx());
         }
 
         // Main 2-column layout: Controls on Left, 2D Range View on Right
         egui::ScrollArea::vertical().show(ui, |ui| {
             // Header Bar
             ui.horizontal(|ui| {
-                ui.heading("🛤️ Rail Tuner 2D — Range Image Rail & Extrapolation Tuner");
+                ui.heading("🛤️ Rail Tuner 2D");
                 ui.separator();
-                let is_loading = self.dataset.is_loading.load(Ordering::Relaxed);
-                if is_loading {
-                    ui.label(format!(
-                        "⏳ Loading: {}/{} frames",
-                        total_loaded, self.dataset.total_count
-                    ));
-                } else {
-                    ui.label(format!("✅ Ready: {} frames", total_loaded));
+
+                if !self.available_tracks.is_empty() {
+                    let cur_label = self
+                        .available_tracks
+                        .get(self.selected_track_idx)
+                        .map(|t| t.label())
+                        .unwrap_or_else(|| "Select track...".to_string());
+
+                    let mut next_track_idx = self.selected_track_idx;
+                    egui::ComboBox::from_id_salt("track_select")
+                        .width(260.0)
+                        .selected_text(cur_label)
+                        .show_ui(ui, |ui| {
+                            for (idx, track) in self.available_tracks.iter().enumerate() {
+                                let label = track.label();
+                                let is_selected = self.selected_track_idx == idx;
+                                if ui.selectable_label(is_selected, label).clicked() {
+                                    next_track_idx = idx;
+                                }
+                            }
+                        });
+                    if next_track_idx != self.selected_track_idx {
+                        self.open_track(next_track_idx);
+                    }
                 }
+
+                ui.separator();
+
+                let is_loading = self.dataset.is_loading.load(Ordering::Relaxed);
+                let loaded = self.dataset.loaded_count.load(Ordering::Relaxed);
+                let total = self.dataset.total_count.load(Ordering::Relaxed);
+                let approx_mb = (loaded * 400) / 1024;
+                if is_loading {
+                    let pct = if total > 0 { (loaded * 100) / total } else { 0 };
+                    ui.colored_label(
+                        Color32::from_rgb(255, 190, 50),
+                        format!("⏳ RAM: {}/{} кадров ({}%)", loaded, total, pct),
+                    );
+                    ui.ctx().request_repaint_after(Duration::from_millis(50));
+                } else {
+                    ui.colored_label(
+                        Color32::from_rgb(80, 220, 100),
+                        format!("💾 RAM: {} кадров (~{} МБ)", loaded, approx_mb),
+                    );
+                }
+
+                ui.separator();
+                let tot_ema = self.profiling.ema_total_ms;
+                let badge_color = if tot_ema <= 0.0 {
+                    Color32::GRAY
+                } else if tot_ema < 30.0 {
+                    Color32::from_rgb(80, 220, 100)
+                } else if tot_ema < 60.0 {
+                    Color32::from_rgb(255, 190, 50)
+                } else {
+                    Color32::from_rgb(255, 90, 70)
+                };
+                let fps_val = if tot_ema > 0.0 { 1000.0 / tot_ema } else { 0.0 };
+                ui.colored_label(
+                    badge_color,
+                    format!("⚡ {:.1} ms ({:.0} FPS)", tot_ema, fps_val),
+                );
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if let Some(t) = self.copied_toast_time {
@@ -1326,23 +1888,7 @@ impl eframe::App for RailTuner2DApp {
 
                 if param_changed {
                     self.process_current_frame();
-                    let lock = self.dataset.frames.read().unwrap();
-                    if self.current_frame_idx < lock.len() {
-                        let f = &lock[self.current_frame_idx];
-                        let active_ri = self.active_range_image.as_ref().unwrap_or(&f.range_image);
-                        let color_img = self.painter.paint(
-                            active_ri,
-                            self.last_bent_res.as_ref(),
-                            &self.detector.geometry,
-                            self.clearance_width,
-                            &self.layer_cfg,
-                        );
-                        self.texture = Some(left.ctx().load_texture(
-                            "range_view",
-                            color_img,
-                            TextureOptions::LINEAR,
-                        ));
-                    }
+                    self.update_preview_texture(left.ctx());
                 }
 
                 left.add_space(4.0);
@@ -1373,8 +1919,8 @@ impl eframe::App for RailTuner2DApp {
                             ));
                         }
                         ui.label(format!(
-                            "Calc Latency: {:.2} ms",
-                            self.last_calc_dur.as_secs_f64() * 1000.0
+                            "Detection Latency: {:.2} ms",
+                            self.profiling.detector_total_ms
                         ));
 
                         ui.add_space(4.0);
@@ -1425,13 +1971,13 @@ impl eframe::App for RailTuner2DApp {
                                         ui.colored_label(badge_color, format!("#{} [{}]", o.id, status_str));
                                         ui.label(format!(
                                             "Dist: {:.1}m | Lat: {:+.2}m | H: {:.2}m | Pts: {} | Dim: {:.1}x{:.1}x{:.1}m",
-                                            o.distance_along_track,
-                                            o.lateral_offset,
-                                            o.height_above_rail,
-                                            o.points_count,
-                                            o.size_m[0],
-                                            o.size_m[1],
-                                            o.size_m[2],
+                                             o.distance_along_track,
+                                             o.lateral_offset,
+                                             o.height_above_rail,
+                                             o.points_count,
+                                             o.size_m[0],
+                                             o.size_m[1],
+                                             o.size_m[2],
                                         ));
                                     });
                                 }
@@ -1440,6 +1986,75 @@ impl eframe::App for RailTuner2DApp {
                     } else {
                         ui.colored_label(Color32::RED, "No Track Detected");
                     }
+                });
+
+                left.add_space(4.0);
+                left.group(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.heading("⏱️ Latency & Performance");
+                        let tot_ema = self.profiling.ema_total_ms;
+                        let fps_approx = if tot_ema > 0.0 { 1000.0 / tot_ema } else { 0.0 };
+                        let badge_color = if tot_ema <= 0.0 {
+                            Color32::GRAY
+                        } else if tot_ema < 30.0 {
+                            Color32::from_rgb(80, 220, 100)
+                        } else if tot_ema < 60.0 {
+                            Color32::from_rgb(255, 190, 50)
+                        } else {
+                            Color32::from_rgb(255, 90, 70)
+                        };
+                        ui.colored_label(badge_color, format!("~{:.0} FPS cap", fps_approx));
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label("Total End-to-End:");
+                        ui.monospace(format!("{:.2} ms", self.profiling.total_pipeline_ms));
+                        ui.colored_label(Color32::LIGHT_GRAY, format!("(avg: {:.2} ms)", self.profiling.ema_total_ms));
+                    });
+
+                    ui.separator();
+
+                    // Stage breakdown grid
+                    egui::Grid::new("perf_grid").num_columns(3).spacing([8.0, 3.0]).show(ui, |ui| {
+                        let tot = self.profiling.total_pipeline_ms.max(0.001);
+
+                        ui.colored_label(Color32::from_rgb(0, 215, 255), "🛤️ Rail Detection");
+                        ui.monospace(format!("{:>5.2} ms", self.profiling.rail_detect_ms));
+                        ui.label(format!("{:>3.0}%", (self.profiling.rail_detect_ms / tot * 100.0).clamp(0.0, 100.0)));
+                        ui.end_row();
+
+                        ui.colored_label(Color32::from_rgb(255, 170, 0), "🚨 Obstacles & Clearance");
+                        ui.monospace(format!("{:>5.2} ms", self.profiling.obstacle_detect_ms));
+                        ui.label(format!("{:>3.0}%", (self.profiling.obstacle_detect_ms / tot * 100.0).clamp(0.0, 100.0)));
+                        ui.end_row();
+
+                        ui.colored_label(Color32::from_rgb(180, 180, 255), "🌀 Curvature Warp");
+                        ui.monospace(format!("{:>5.2} ms", self.profiling.warp_ms));
+                        ui.label(format!("{:>3.0}%", (self.profiling.warp_ms / tot * 100.0).clamp(0.0, 100.0)));
+                        ui.end_row();
+
+                        ui.colored_label(Color32::from_rgb(160, 220, 160), "📐 3D Restore Coords");
+                        ui.monospace(format!("{:>5.2} ms", self.profiling.restore_coords_ms));
+                        ui.label(format!("{:>3.0}%", (self.profiling.restore_coords_ms / tot * 100.0).clamp(0.0, 100.0)));
+                        ui.end_row();
+
+                        if self.stream_to_rerun {
+                            ui.colored_label(Color32::from_rgb(220, 140, 240), "📡 Rerun 3D/2D Stream");
+                            ui.monospace(format!("{:>5.2} ms", self.profiling.rerun_stream_ms));
+                            ui.label(format!("{:>3.0}%", (self.profiling.rerun_stream_ms / tot * 100.0).clamp(0.0, 100.0)));
+                            ui.end_row();
+                        }
+
+                        ui.colored_label(Color32::from_rgb(255, 230, 120), "🎨 2D Egui Paint");
+                        ui.monospace(format!("{:>5.2} ms", self.profiling.egui_paint_ms));
+                        ui.label(format!("{:>3.0}%", (self.profiling.egui_paint_ms / tot * 100.0).clamp(0.0, 100.0)));
+                        ui.end_row();
+
+                        ui.colored_label(Color32::from_rgb(140, 200, 255), "🖼️ GPU Texture Upload");
+                        ui.monospace(format!("{:>5.2} ms", self.profiling.texture_upload_ms));
+                        ui.label(format!("{:>3.0}%", (self.profiling.texture_upload_ms / tot * 100.0).clamp(0.0, 100.0)));
+                        ui.end_row();
+                    });
                 });
 
                 // ─── RIGHT COLUMN: 2D Range View Preview ───
@@ -1520,23 +2135,7 @@ impl eframe::App for RailTuner2DApp {
                     });
 
                     if layer_changed {
-                        let lock = self.dataset.frames.read().unwrap();
-                        if self.current_frame_idx < lock.len() {
-                            let f = &lock[self.current_frame_idx];
-                            let active_ri = self.active_range_image.as_ref().unwrap_or(&f.range_image);
-                            let color_img = self.painter.paint(
-                                active_ri,
-                                self.last_bent_res.as_ref(),
-                                &self.detector.geometry,
-                                self.clearance_width,
-                                &self.layer_cfg,
-                            );
-                            self.texture = Some(ui.ctx().load_texture(
-                                "range_view",
-                                color_img,
-                                TextureOptions::LINEAR,
-                            ));
-                        }
+                        self.update_preview_texture(ui.ctx());
                     }
 
                     if let Some(ref tex) = self.texture {
@@ -1575,27 +2174,29 @@ impl eframe::App for RailTuner2DApp {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
-    let target = args.get(1).map(|s| s.as_str()).unwrap_or("frames");
+    let cli_arg = args.get(1).map(|s| s.as_str());
 
     println!("============================================================");
     println!("🛤️  RAIL TUNER 2D — Starting Range Image Rail Detector GUI");
-    println!("Target path: {}", target);
     println!("============================================================");
 
-    let path = PathBuf::from(target);
-    let npy_dir = if path.exists() && path.is_dir() {
-        path
-    } else if PathBuf::from("frames").exists() {
-        PathBuf::from("frames")
-    } else if PathBuf::from("../frames").exists() {
-        PathBuf::from("../frames")
-    } else {
-        PathBuf::from("dev_pyrails/frames")
-    };
-    println!("Loading .npy frames from: {:?}", npy_dir);
-    let npy_files = scan_npy_frames(&npy_dir);
-    println!("Found {} frames", npy_files.len());
-    let dataset = FrameDataset::from_npy_paths(npy_files);
+    let mut available_tracks = discover_available_tracks(cli_arg);
+    if available_tracks.is_empty() {
+        println!("[!] No tracks found in standard paths, defaulting to 'frames'");
+        available_tracks.push(TrackSource::NpyDir(PathBuf::from("frames")));
+    }
+
+    println!("Found {} available tracks:", available_tracks.len());
+    for (i, t) in available_tracks.iter().enumerate() {
+        println!("  [{}] {}", i, t.label());
+    }
+
+    let initial_track_idx = 0;
+    println!(
+        "Loading initial track: {}",
+        available_tracks[initial_track_idx].label()
+    );
+    let dataset = FrameDataset::from_source(available_tracks[initial_track_idx].clone());
 
     // Подключение к Rerun (или запуск viewer)
     println!("[*] Connecting / Spawning Rerun viewer...");
@@ -1604,7 +2205,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .or_else(|_| RecordingStreamBuilder::new("rail_tuner_2d").connect_grpc())
         .ok();
 
-    let app = RailTuner2DApp::new(dataset, rec);
+    let app = RailTuner2DApp::new(available_tracks, initial_track_idx, dataset, rec);
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1200.0, 800.0])

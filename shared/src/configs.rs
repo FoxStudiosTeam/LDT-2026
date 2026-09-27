@@ -38,10 +38,9 @@ impl Into<RailTrackDetector> for DetectionPreset {
                 detector.obstacle_config.depth_diff_thresh = 0.25;
                 detector.obstacle_config.upward_curvature = 0.00200;
                 detector.obstacle_config.cluster_depth_thresh = 1.20;
+                detector.obstacle_config.clearance_narrowing_width = 0.003;
+                detector.obstacle_config.clearance_narrowing_height = 0.003;
                 detector
-            }
-            _ => {
-                unimplemented!()
             }
         }
     }

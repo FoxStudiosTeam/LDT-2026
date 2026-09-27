@@ -112,7 +112,7 @@ impl Pandar128VerticalGeometry {
 
     #[inline(always)]
     pub fn pitch(&self, row: usize) -> f32 {
-        self.pitch_rad[row]
+        self.pitch_rad[row.min(self.pitch_rad.len().saturating_sub(1))]
     }
 
     #[inline(always)]
@@ -139,10 +139,8 @@ fn horizontal_resolution_deg(channel: usize) -> f32 {
         // Ch 26..89 = 0.1°
         26..=89 => PANDAR128_HORIZONTAL_RES_HR_DEG,
 
-        // Ch 1..25 и Ch 90..128 = 0.2°
-        1..=25 | 90..=128 => PANDAR128_HORIZONTAL_RES_STANDARD_DEG,
-
-        _ => unreachable!(),
+        // Ch 1..25, Ch 90..128, и безопасный fallback для любых граничных значений = 0.2°
+        _ => PANDAR128_HORIZONTAL_RES_STANDARD_DEG,
     }
 }
 
@@ -158,13 +156,14 @@ fn vertical_resolution_deg(channel: usize) -> f32 {
         // Ch26 -> Ch90
         26..=89 => 0.125,
 
-        // Ch90 -> Ch127
+        // Ch90 -> Ch126
         90..=126 => 0.5,
 
-        // Ch127 -> Ch128
-        127 => 1.0,
+        // Ch127 -> Ch128, Ch128
+        127..=128 => 1.0,
 
-        _ => unreachable!(),
+        // Безопасный fallback для любых граничных значений (не паниковать!)
+        _ => 1.0,
     }
 }
 
@@ -364,6 +363,197 @@ impl RangeImage {
         image.fill_single_pixel_holes();
 
         image
+    }
+
+    /// Быстрое формирование Range Image напрямую из PointCloud2 сообщения (Pandar128).
+    /// Автоматически извлекает смещения x, y, z, intensity и ring (или вычисляет ring по геометрии).
+    /// При указании crop_fov_deg (например Some(40.0)) обрезает изображение до заданного курсового сектора.
+    pub fn from_pandar128_point_cloud2(
+        cloud: &crate::transport::PointCloud2,
+        crop_fov_deg: Option<f32>,
+    ) -> Option<Self> {
+        let point_step = cloud.point_step as usize;
+        if point_step == 0 || cloud.data.is_empty() {
+            return None;
+        }
+
+        let mut x_offset = 0;
+        let mut y_offset = 4;
+        let mut z_offset = 8;
+        let mut int_offset = None;
+        let mut int_is_u8 = false;
+        let mut ring_offset = None;
+
+        for f in &cloud.fields {
+            match f.name.as_str() {
+                "x" => x_offset = f.offset as usize,
+                "y" => y_offset = f.offset as usize,
+                "z" => z_offset = f.offset as usize,
+                "intensity" => {
+                    int_offset = Some(f.offset as usize);
+                    int_is_u8 = f.datatype == 2; // UINT8
+                }
+                "ring" | "channel" | "laser_id" | "beam_id" | "line" => {
+                    ring_offset = Some(f.offset as usize);
+                }
+                _ => {}
+            }
+        }
+
+        const CHANNELS: usize = 128;
+        const BASE_WIDTH: usize = 3600;
+
+        let width = BASE_WIDTH;
+        let height = (VERTICAL_FOV_DEG / PANDAR128_VERTICAL_STEP_HIGH_RES_DEG) as usize + 1;
+
+        let mut image = Self::new(width, height);
+        let geometry = Pandar128VerticalGeometry::new();
+
+        let pi = std::f32::consts::PI;
+        let inv_two_pi = 0.5 * std::f32::consts::FRAC_1_PI;
+        let width_f = width as f32;
+        let is_bigendian = cloud.is_bigendian;
+        let horizontal_step_deg = 360.0 / width as f32;
+
+        for (_point_idx, chunk) in cloud.data.chunks_exact(point_step).enumerate() {
+            if chunk.len() < x_offset + 4
+                || chunk.len() < y_offset + 4
+                || chunk.len() < z_offset + 4
+            {
+                continue;
+            }
+
+            let (x, y, z) = if is_bigendian {
+                (
+                    f32::from_be_bytes(chunk[x_offset..x_offset + 4].try_into().unwrap()),
+                    f32::from_be_bytes(chunk[y_offset..y_offset + 4].try_into().unwrap()),
+                    f32::from_be_bytes(chunk[z_offset..z_offset + 4].try_into().unwrap()),
+                )
+            } else {
+                (
+                    f32::from_le_bytes(chunk[x_offset..x_offset + 4].try_into().unwrap()),
+                    f32::from_le_bytes(chunk[y_offset..y_offset + 4].try_into().unwrap()),
+                    f32::from_le_bytes(chunk[z_offset..z_offset + 4].try_into().unwrap()),
+                )
+            };
+
+            if !x.is_finite() || !y.is_finite() || !z.is_finite() {
+                continue;
+            }
+
+            if (y.abs() < 1e-4 && z.abs() < 1e-4) || (x == 0.0 && y == 0.0 && z == 0.0) {
+                continue;
+            }
+
+            let r2 = x * x + y * y + z * z;
+            if r2 < 0.04 {
+                continue;
+            }
+
+            let intensity = if let Some(io) = int_offset {
+                if io < chunk.len() {
+                    if int_is_u8 {
+                        chunk[io] as f32
+                    } else if io + 4 <= chunk.len() {
+                        if is_bigendian {
+                            f32::from_be_bytes(chunk[io..io + 4].try_into().unwrap_or([0; 4]))
+                        } else {
+                            f32::from_le_bytes(chunk[io..io + 4].try_into().unwrap_or([0; 4]))
+                        }
+                    } else {
+                        0.0
+                    }
+                } else {
+                    0.0
+                }
+            } else {
+                0.0
+            };
+
+            let range = r2.sqrt();
+
+            let ring = if let Some(ro) = ring_offset {
+                if ro + 2 <= chunk.len() {
+                    if is_bigendian {
+                        u16::from_be_bytes(chunk[ro..ro + 2].try_into().unwrap_or([0; 2])) as usize
+                    } else {
+                        u16::from_le_bytes(chunk[ro..ro + 2].try_into().unwrap_or([0; 2])) as usize
+                    }
+                } else if ro < chunk.len() {
+                    chunk[ro] as usize
+                } else {
+                    let pitch = (z / range).clamp(-1.0, 1.0).asin();
+                    geometry.nearest_channel(pitch)
+                }
+            } else {
+                let pitch = (z / range).clamp(-1.0, 1.0).asin();
+                geometry.nearest_channel(pitch)
+            };
+
+            if ring >= CHANNELS {
+                continue;
+            }
+
+            let yaw = fast_atan2(-x, -y);
+            let norm = (-yaw + pi) * inv_two_pi;
+            let col = ((norm * width_f) as usize).min(width - 1);
+
+            let pitch_rad = geometry.pitch(ring);
+            let row = ((PANDAR128_FOV_UP_DEG.to_radians() - pitch_rad)
+                / PANDAR128_VERTICAL_STEP_HIGH_RES_DEG.to_radians())
+            .round() as usize;
+
+            if row >= height {
+                continue;
+            }
+
+            let center_row = row as isize;
+            let center_col = col as isize;
+
+            let row_radius = (vertical_resolution_deg(ring + 1)
+                / PANDAR128_VERTICAL_STEP_HIGH_RES_DEG)
+                .round() as isize
+                - 1;
+
+            let col_radius =
+                (horizontal_resolution_deg(ring + 1) / horizontal_step_deg).round() as isize - 1;
+
+            for dr in -row_radius..=row_radius {
+                for dc in -col_radius..=col_radius {
+                    let distance2 = dr * dr + dc * dc;
+                    if distance2 > row_radius * row_radius {
+                        continue;
+                    }
+
+                    let target_row = center_row + dr;
+                    let target_col = center_col + dc;
+
+                    if target_row < 0
+                        || target_row >= height as isize
+                        || target_col < 0
+                        || target_col >= width as isize
+                    {
+                        continue;
+                    }
+
+                    let idx = (target_row as usize) * width + (target_col as usize);
+                    let current = image.data[idx];
+
+                    if current == 0.0 || range < current {
+                        image.data[idx] = range;
+                        image.intensity[idx] = intensity;
+                    }
+                }
+            }
+        }
+
+        image.fill_single_pixel_holes();
+
+        if let Some(fov) = crop_fov_deg {
+            Some(image.crop_fov(fov))
+        } else {
+            Some(image)
+        }
     }
 
     /// Заполнение одиночных 1- и 2-пиксельных пропусков по горизонтали для устранения шума и артефактов
@@ -986,5 +1176,15 @@ mod tests {
         assert!((ch90 - ch89 + 0.125).abs() < 1e-5);
 
         assert!((ch128 + 25.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_resolution_functions_no_panic() {
+        for ch in 0..=256 {
+            let v_res = vertical_resolution_deg(ch);
+            let h_res = horizontal_resolution_deg(ch);
+            assert!(v_res > 0.0);
+            assert!(h_res > 0.0);
+        }
     }
 }

@@ -19,6 +19,10 @@ path = "src/bin/rail_tuner.rs"
 name = "rail_tuner_2d"
 path = "src/bin/rail_tuner_2d.rs"
 
+[[bin]]
+name = "inject_db3_rings"
+path = "src/bin/inject_db3_rings.rs"
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
