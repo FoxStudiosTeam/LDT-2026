@@ -23,6 +23,10 @@ path = "src/bin/rail_tuner_2d.rs"
 name = "inject_db3_rings"
 path = "src/bin/inject_db3_rings.rs"
 
+[[bin]]
+name = "test_error_listener"
+path = "src/bin/test_error_listener.rs"
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
@@ -34,6 +38,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 cdr = "0.2"
 byteorder = "1.5"
+serde_json = "1.0"
 
 cuda-pipeline.workspace = true
 ros2_data_extraction.workspace = true

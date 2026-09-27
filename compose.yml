@@ -1,6 +1,5 @@
 services:
-  # 1. Сервис плеера — остаётся на ROS2
-  # 1. Сервис плеера через Docker-том (если нужно проигрывать из bag_data)
+  # 1. Сервис плеера датасета через ROS2 (проигрывает баг в цикле)
   ros2_dataset_player:
     build:
       context: .
@@ -14,7 +13,6 @@ services:
         soft: 1024
         hard: 65535
     environment:
-      - ROS_DOMAIN_ID=42
       - ROS_LOCALHOST_ONLY=1
     env_file:
       - .env
@@ -26,53 +24,7 @@ services:
         ros2 bag play /app/dataset/cloud_with_fake_obj --loop --read-ahead-queue-size 30
       "
 
-  # 0. Утилита для быстрой конвертации багов из .db3 (sqlite3) в .mcap
-  # Запуск для всех: docker compose run --rm ros2_converter
-  # Запуск для одного: docker compose run --rm ros2_converter python3 /app/dataset/convert_to_mcap.py doubleT_obstacle
-  ros2_converter:
-    build:
-      context: .
-      dockerfile: ./dataset/Dockerfile
-    container_name: ros2_converter
-    volumes:
-      - ./dataset:/app/dataset
-    command: ["python3", "/app/dataset/convert_to_mcap.py"]
-
-  # 1. Быстрый RAM-плеер (оригинальный)
-  ros2_fast_player:
-    build:
-      context: .
-      dockerfile: ./bag_player/Dockerfile
-    container_name: ros2_fast_player
-    network_mode: "host"
-    ipc: "host"
-    environment:
-      - ROS_DOMAIN_ID=42
-      - ROS_LOCALHOST_ONLY=1
-    env_file:
-      - .env
-    volumes:
-      - ./dataset:/app/dataset:ro
-      - ./frames:/frames:ro
-    command: ["/app/dataset/squareT_platform_squareT_switch"]
-
-  # 2. Стрим-ресивер из Windows (для огромных датасетов без копирования)
-  # Ждёт запуск в PowerShell: python win_streamer.py <путь_к_багу>
-  ros2_stream_player:
-    build:
-      context: .
-      dockerfile: ./bag_player/Dockerfile
-    container_name: ros2_stream_player
-    network_mode: "host"
-    ipc: "host"
-    environment:
-      - ROS_DOMAIN_ID=42
-      - ROS_LOCALHOST_ONLY=1
-    env_file:
-      - .env
-    command: ["--server"]
-    
-  # 2. Rust-приложение — без ROS2, чистый ros2-client/rustdds
+  # 2. Rust-приложение детекции рельсов и препятствий + Rerun + публикация в /rail/error
   rust_viewer:
     build:
       context: .
@@ -84,7 +36,7 @@ services:
     ipc: "host"
     shm_size: '2gb'
     env_file:
-      - .env # ⚠️⚠️⚠️ ДОКЕР У МЕНЯ ПОЧЕМУ - ТО ДОСТУЧАТЬСЯ ТОЛЬКО ПО СЕТИ РОУТЕРА
+      - .env
     cap_add:
       - NET_ADMIN
     volumes:
@@ -94,10 +46,9 @@ services:
         soft: 1024
         hard: 65535
     environment:
-      - ROS_DOMAIN_ID=42
       - ROS_LOCALHOST_ONLY=1
-    # depends_on:
-    #   - ros2_fast_player
+      - ROS_ERROR_TOPIC=/rail/error
+      - RERUN_URL=rerun+http://host.docker.internal:9876/proxy
     deploy:
       resources:
         reservations:
@@ -105,7 +56,37 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
- 
+
+  # 3. Python ROS2 сервис-слушатель топика /rail/error (диагностика и валидация)
+  # Запуск: docker compose run --rm error_listener
+  error_listener:
+    build:
+      context: .
+      dockerfile: ./dataset/Dockerfile
+    container_name: error_listener
+    network_mode: "host"
+    ipc: "host"
+    environment:
+      - ROS_LOCALHOST_ONLY=1
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: ["python3", "test_error_listener.py"]
+
+  # 4. Альтернативный Rust подписчик на /rail/error (работает без Python)
+  # Запуск: docker compose run --rm rust_error_listener
+  rust_error_listener:
+    build:
+      context: .
+      dockerfile: ./rust_listener/Dockerfile
+    container_name: rust_error_listener
+    network_mode: "host"
+    ipc: "host"
+    environment:
+      - ROS_LOCALHOST_ONLY=1
+    entrypoint: ["/app/test_error_listener"]
+
 volumes:
   bag_data:
     external: true

@@ -13,7 +13,8 @@ mod discovery;
 mod parser;
 mod ros;
 
-// lib.rs
+pub use ros2_client;
+pub use rustdds;
 
 pub struct PointCloudStream {
     ros2: ros::Ros,
@@ -21,9 +22,22 @@ pub struct PointCloudStream {
     cached_cloud: Arc<RwLock<AppPointCloud>>,
     frame_num: u64,
     layout: Option<PointLayout>,
+    pub error_publisher: Arc<ros2_client::Publisher<shared::transport::StringMsg>>,
 }
 
 impl PointCloudStream {
+    pub fn error_publisher(&self) -> Arc<ros2_client::Publisher<shared::transport::StringMsg>> {
+        Arc::clone(&self.error_publisher)
+    }
+
+    pub fn publish_error(&self, message: impl Into<String>) {
+        let pub_clone = Arc::clone(&self.error_publisher);
+        let msg = shared::transport::StringMsg::new(message);
+        tokio::spawn(async move {
+            let _ = pub_clone.async_publish(msg).await;
+        });
+    }
+
     pub async fn next(&mut self) -> Result<Option<u64>, AppError> {
         self.frame_num += 1;
 
@@ -40,26 +54,6 @@ impl PointCloudStream {
 
         let (point_cloud, _msg) = result.app_error()?;
 
-        // tracing::debug!(
-        //     width = point_cloud.width,
-        //     height = point_cloud.height,
-        //     fields = point_cloud.fields.len(),
-        //     point_step = point_cloud.point_step,
-        //     row_step = point_cloud.row_step,
-        //     data_len = point_cloud.data.len(),
-        //     "Received PointCloud2"
-        // );
-
-        // for field in &point_cloud.fields {
-        //     tracing::info!(
-        //         name = %field.name,
-        //         offset = field.offset,
-        //         datatype = field.datatype,
-        //         count = field.count,
-        //         "PointCloud2 field"
-        //     );
-        // }
-
         let layout = 'a: {
             let Some(l) = self.layout else {
                 let l = extract_and_validate_layout(&point_cloud)?;
@@ -68,8 +62,6 @@ impl PointCloudStream {
             };
             l
         };
-
-        // let layout = extract_and_validate_layout(&point_cloud)?;
 
         parse_coords(&point_cloud, Arc::clone(&self.cached_cloud), &layout)?;
 
@@ -81,21 +73,19 @@ pub async fn init_sub(
     domain_id: u16,
     cloud: Arc<RwLock<AppPointCloud>>,
 ) -> Result<PointCloudStream, AppError> {
+    init_sub_with_error_topic(domain_id, cloud, "/rail/error").await
+}
+
+pub async fn init_sub_with_error_topic(
+    domain_id: u16,
+    cloud: Arc<RwLock<AppPointCloud>>,
+    error_topic: &str,
+) -> Result<PointCloudStream, AppError> {
     let mut ros2 = ros::Ros::new(domain_id)?;
     let participant = ros2.domain_participant();
 
     info!("[ROS2] Поиск топика PointCloud2 в DDS сети...");
 
-    // ВАЖНО: не ждём событие WriterDetected через `node.status_receiver()`.
-    // Оно edge-triggered и теряется (иногда -> вечное зависание после
-    // "Spinner initialized"), потому что:
-    //   1. Spinner стартует в отдельной tokio-задаче и начинает раздавать
-    //      события ДО того, как мы успеваем вызвать `status_receiver()`;
-    //      события без подписчиков молча выбрасываются.
-    //   2. Канал у подписчика `bounded(8)`, а `try_send` при переполнении
-    //      тоже молча теряет событие (у бэга десятки топиков -> пачка событий).
-    // Поэтому опрашиваем снимок discovery-базы: результат не зависит от
-    // того, когда мы начали слушать. Аллокации только на этапе инициализации.
     const POLL_INTERVAL: Duration = Duration::from_millis(200);
     const REPORT_EVERY: Duration = Duration::from_secs(5);
 
@@ -129,11 +119,21 @@ pub async fn init_sub(
 
     info!("[SUBSCRIBE] Успешная подписка");
 
+    let error_publisher = Arc::new(ros::node::create_string_publisher(
+        ros2.mutable_node(),
+        error_topic,
+    )?);
+    info!(
+        "[PUBLISHER] Топик ошибок/препятствий готов: {}",
+        error_topic
+    );
+
     Ok(PointCloudStream {
         ros2,
         subscription,
         cached_cloud: cloud,
         frame_num: 0,
         layout: None,
+        error_publisher,
     })
 }

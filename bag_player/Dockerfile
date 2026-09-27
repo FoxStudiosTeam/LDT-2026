@@ -1,7 +1,6 @@
 FROM ros:humble
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV ROS_DOMAIN_ID=42
 ENV PYTHONUNBUFFERED=1
 ENV DATASET_DIR=/app/dataset
 

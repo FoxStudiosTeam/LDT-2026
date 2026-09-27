@@ -10,7 +10,7 @@ use rust_listener::debug::{self, rerun::init_rerun};
 use rust_listener::engine::engine_entry::entry;
 use rust_listener::engine::types::{pin_ptr, pin_u16_ptr};
 use rust_listener::{ENV, Env};
-use shared::error::{AppError, ErrCtx, ErrorType};
+use shared::error::AppError;
 use shared::types::{AppPointCloud, SIZE};
 use tracing::*;
 use tracing_subscriber::EnvFilter;
@@ -59,8 +59,12 @@ async fn main() -> Result<(), AppError> {
         return Ok(());
     }
 
-    let point_cloud_stream =
-        ros2_data_extraction::init_sub(ENV.ROS_DOMAIN_ID, Arc::clone(&cloud)).await?;
+    let point_cloud_stream = ros2_data_extraction::init_sub_with_error_topic(
+        ENV.ROS_DOMAIN_ID,
+        Arc::clone(&cloud),
+        &ENV.ROS_ERROR_TOPIC,
+    )
+    .await?;
 
     let _ = entry(point_cloud_stream, rerun, Arc::clone(&cloud)).await?;
 

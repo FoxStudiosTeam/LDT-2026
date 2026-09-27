@@ -1,20 +1,18 @@
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::Instant;
 
-use rerun::RecordingStream;
+use rerun::{Color, Points3D, Radius, RecordingStream, TimeCell};
 use ros2_data_extraction::PointCloudStream;
+use serde_json::json;
 use shared::configs::DetectionPreset;
-use shared::rail_detection::RailTrackDetector;
-use shared::types::AppPointCloud;
-use shared::{
-    error::{AppError, ErrCtx},
-    types::ProcessingQueue,
-};
+use shared::error::AppError;
+use shared::rail_detection::{LidarGeometry, RailTrackDetector};
+use shared::range_image::{RangeImage, turbo_rgb};
+use shared::types::{AppPointCloud, ProcessingQueue};
 use tracing::*;
 
-use crate::{
-    ENV,
-    debug::{self, helper::DebugStream},
-};
+use crate::ENV;
+use crate::debug::helper::DebugStream;
 
 pub async fn entry(
     mut point_cloud_stream: PointCloudStream,
@@ -22,13 +20,18 @@ pub async fn entry(
     point_cloud: Arc<RwLock<AppPointCloud>>,
 ) -> Result<(), AppError> {
     let recording_stream = Arc::new(recording_stream);
+    let error_publisher = point_cloud_stream.error_publisher();
 
     let initial_detector: RailTrackDetector = DetectionPreset::current().into();
-
-    let rail_detector = Arc::new(std::sync::Mutex::new(initial_detector));
+    let rail_detector = Arc::new(Mutex::new(initial_detector));
 
     let mut processed_frames: u64 = 0;
     let mut begin_lock = ENV.BEGIN_TIMESTAMP > 0;
+
+    info!(
+        "[ENGINE] Инициализация пайплайна (аналог rail_tuner_2d): FOV={}°, Rerun=ON, ErrorTopic={}",
+        ENV.PREVIEW_FOV_X_DEG, ENV.ROS_ERROR_TOPIC
+    );
 
     while let Some(frame) = point_cloud_stream.next().await? {
         if begin_lock {
@@ -37,7 +40,7 @@ pub async fn entry(
                 pc.timestamp[ProcessingQueue::NEXT]
             };
             if timestamp_ns != ENV.BEGIN_TIMESTAMP {
-                tracing::info!(
+                info!(
                     "[SKIP] Кадр {frame}: timestamp {timestamp_ns} < BEGIN_TIMESTAMP {} (осталось {} мс)",
                     ENV.BEGIN_TIMESTAMP,
                     (ENV.BEGIN_TIMESTAMP - timestamp_ns) / 1_000_000
@@ -49,110 +52,39 @@ pub async fn entry(
         }
 
         processed_frames += 1;
-
-        tracing::info!("Frame {processed_frames}");
         if processed_frames >= ENV.TOTAL_FRAMES {
+            info!("[ENGINE] Достигнут лимит кадров ({})", ENV.TOTAL_FRAMES);
             return Ok(());
         }
 
         let frame_id = processed_frames;
-
         let point_cloud_lock = point_cloud.clone();
-        let recording_stream: Arc<RecordingStream> = recording_stream.clone();
+        let recording_stream = recording_stream.clone();
         let rail_detector_lock = rail_detector.clone();
 
-        tokio::task::spawn_blocking(move || {
-            let frame_start = std::time::Instant::now();
-            // 1. Ожидание лочки и переключение очередей (TripleBuffer swap)
-            let swap_start = std::time::Instant::now();
+        let err_payload = tokio::task::spawn_blocking(move || -> Option<String> {
+            let frame_start = Instant::now();
+
+            // 1. TripleBuffer swap: переключение очередей NEXT -> READ
+            let swap_start = Instant::now();
             {
-                let mut point_cloud_write = point_cloud_lock.write().expect(&format!(
-                    "⚠️ Мутекс отравился ☠️ {} {}",
-                    file!(),
-                    line!()
-                ));
-                let next_pts = point_cloud_write.len(ProcessingQueue::NEXT);
-                let read_pts_old = point_cloud_write.len(ProcessingQueue::READ);
+                let mut point_cloud_write = point_cloud_lock.write().expect("Mutex poisoned");
                 point_cloud_write.change_state(ProcessingQueue::NEXT, ProcessingQueue::READ);
-                let read_pts_new = point_cloud_write.len(ProcessingQueue::READ);
-
-                debug!(
-                    "[FRAME {frame_id}] Swapped queues in {:?}: NEXT had {next_pts} pts -> READ now has {read_pts_new} pts (was {read_pts_old})",
-                    swap_start.elapsed()
-                );
             }
+            let swap_dur = swap_start.elapsed();
 
-            // 2. Вычисляем статистику, строим RangeImage и извлекаем точки ПОД READ-ЛОКОМ,
-            //    после чего НЕМЕДЛЕННО освобождаем лок, чтобы не задерживать ROS2 парсер.
-            let compute_start = std::time::Instant::now();
-            let (timestamp_ns, stats, rerun_points, _rerun_intensities, rerun_colors, range_image) = {
-                let point_cloud = point_cloud_lock.read().expect(&format!(
-                    "⚠️ Мутекс отравился ☠️ {} {}",
-                    file!(),
-                    line!()
-                ));
+            // 2. Извлечение RangeImage под READ-локом с немедленным освобождением
+            let (timestamp_ns, range_image) = {
+                let pc = point_cloud_lock.read().expect("Mutex poisoned");
+                let queue = ProcessingQueue::READ;
+                let ts = pc.timestamp[queue];
+                let ri = RangeImage::from_pandar128_organized(&pc, queue, 1);
+                (ts, ri)
+            };
 
-                let number = ProcessingQueue::READ;
-                let timestamp_ns: i64 = point_cloud.timestamp[number];
-
-                // rerun log text
-                recording_stream.log("logs/text", &rerun::TextLog::new(format!("{timestamp_ns}"))).app_error().ok();
-
-                let stats = point_cloud.compute_stats(number);
-                let cap = point_cloud.len(number);
-                let mut rerun_points: Vec<[f32; 3]> = Vec::with_capacity(cap);
-                let mut rerun_intensities: Vec<f32> = Vec::with_capacity(cap);
-                let mut rerun_colors: Vec<rerun::Color> = Vec::with_capacity(cap);
-
-                for (&x, &y, &z, &intensity, _) in point_cloud.iter(number) {
-                    if shared::types::is_zero_point(x, y, z) {
-                        continue;
-                    }
-                    rerun_points.push([x, y, z]);
-                    rerun_intensities.push(intensity);
-                    rerun_colors.push(crate::engine::rail_curve::intensity_to_turbo_color(intensity));
-                }
-
-                let range_image = shared::range_image::RangeImage::from_pandar128_organized(
-                    &point_cloud,
-                    number,
-                    1,
-                );
-
-                (timestamp_ns, stats, rerun_points, rerun_intensities, rerun_colors, range_image)
-            }; // <--- read-lock освобожден!
-            let compute_dur = compute_start.elapsed();
-
-            debug!(
-                "[FRAME {frame_id}] Data extracted & stats & RangeImage computed in {:?}: n_points={}, centroid=({:.2}, {:.2}, {:.2})",
-                compute_dur,
-                stats.n_points,
-                stats.centroid_x, stats.centroid_y, stats.centroid_z
-            );
-
-            debug::std::print_frame_info(frame_id, timestamp_ns, &stats);
-            recording_stream.set_time(
-                "ros_time",
-                rerun::TimeCell::from_duration_nanos(timestamp_ns),
-            );
-            recording_stream.set_time_sequence("frame", frame_id as i64);
-
-            // 3. Отправка 3D облака (раскрашенного по intensity) и оверлеев в Rerun (БЕЗ удержания лока point_cloud!)
-            let rerun_cloud_start = std::time::Instant::now();
-            if let Err(e) = recording_stream.log_points_with_colors(&rerun_points, &rerun_colors) {
-                error!("Ошибка логирования облака точек в rerun: {e:?}");
-            }
-            if let Err(e) = recording_stream.log_debug_centroid(&stats) {
-                error!("Ошибка логирования оверлеев в rerun: {e:?}");
-            }
-            debug!(
-                "[FRAME {frame_id}] Rerun 3D points & overlays send duration: {:?}",
-                rerun_cloud_start.elapsed()
-            );
-
-            // 3.1. Подготовка 2D карты глубины (Range Image) и геометрии лидара
+            // 3. Подготовка 2D карты глубины (Range Image) и геометрии лидара
             let crop_raw = range_image.crop_fov(ENV.PREVIEW_FOV_X_DEG);
-            let geo = shared::rail_detection::LidarGeometry::new(
+            let geo = LidarGeometry::new(
                 crop_raw.height,
                 crop_raw.width,
                 15.0,
@@ -160,144 +92,219 @@ pub async fn entry(
                 ENV.PREVIEW_FOV_X_DEG,
             );
 
-            // Искривление всех точек тоннеля и карты глубины/интенсивности по Z_bent = Z + c_z * X^2
+            // 4. Искривление всех точек тоннеля и карты глубины: Z_bent = Z + c_z * X^2
             let c_z = {
-                let detector = rail_detector_lock.lock().unwrap();
-                detector.obstacle_config.upward_curvature
+                let det = rail_detector_lock.lock().unwrap();
+                det.obstacle_config.upward_curvature
             };
-            let crop_active = if c_z.abs() > 1e-7 {
+            let t_warp = Instant::now();
+            let active_ri = if c_z.abs() > 1e-7 {
                 crop_raw.warp_curvature(&geo, c_z)
             } else {
                 crop_raw.clone()
             };
+            let warp_dur = t_warp.elapsed();
 
-            // 3.2. Поиск рельсов по перепадам дальности, валидация колеи и полиномиальная экстраполяция (dev_pyrails_rust)
-            let rail_fit_start = std::time::Instant::now();
+            // 5. Детекция путей на искривленном представлении и препятствий
+            let t_detect = Instant::now();
             let bent_result = {
-                let mut detector = rail_detector_lock.lock().unwrap();
-                if detector.geometry.height != crop_active.height || detector.geometry.width != crop_active.width {
-                    detector.geometry = geo.clone();
+                let mut det = rail_detector_lock.lock().unwrap();
+                if det.geometry.height != active_ri.height || det.geometry.width != active_ri.width {
+                    det.geometry = geo.clone();
                 }
-                detector.detect_with_raw(&crop_active, Some(&crop_raw), frame_id as usize)
+                det.detect_with_raw(&active_ri, Some(&crop_raw), frame_id as usize)
             };
-            let rail_calc_dur = rail_fit_start.elapsed();
+            let _detect_dur = t_detect.elapsed();
 
-            // Восстановление истинных координат для 3D сцены: Z_real = Z_bent - c_z * X^2
+            // 6. Восстановление истинных координат для Rerun и 3D сцены: Z_real = Z_bent - c_z * X^2
+            let t_restore = Instant::now();
             let mut real_result = bent_result.clone();
             if let Some(ref mut r) = real_result {
                 r.restore_real_coordinates();
             }
+            let restore_dur = t_restore.elapsed();
 
-            info!(
-                "[FRAME {frame_id}] ⏱️ Расчет кривой рельсов (2D Range Image) занял: {:.2} мс ({:?})",
-                rail_calc_dur.as_secs_f64() * 1000.0,
-                rail_calc_dur
+            // 7. Отправка в Rerun (точно так же, как в rail_tuner_2d)
+            let t_rerun = Instant::now();
+            recording_stream.set_time("ros_time", TimeCell::from_duration_nanos(timestamp_ns));
+            recording_stream.set_time_sequence("frame", frame_id as i64);
+
+            // ─── ОКНО 1: 3D сцена ───
+            let total = geo.height * geo.width;
+            let mut pts_real = Vec::with_capacity(total);
+            let mut pts_bent = Vec::with_capacity(total);
+            let mut colors = Vec::with_capacity(total);
+
+            for row in 0..geo.height {
+                let r_off = row * geo.width;
+                for col in 0..geo.width {
+                    let r = crop_raw.data[r_off + col];
+                    if r > 0.5 && r < 200.0 {
+                        let (x, y, z) = geo.row_col_range_to_xyz(row, col, r);
+                        pts_real.push([x, y, z]);
+                        let z_bent = z + c_z * x * x;
+                        pts_bent.push([x, y, z_bent]);
+
+                        let norm = (r / 200.0).clamp(0.0, 1.0);
+                        let c = turbo_rgb(norm);
+                        colors.push(Color::from_rgb(c[0], c[1], c[2]));
+                    }
+                }
+            }
+
+            // Истинные физические точки лидара в реальном мире:
+            let _ = recording_stream.log(
+                "lidar/point_cloud",
+                &Points3D::new(&pts_real)
+                    .with_colors(colors.clone())
+                    .with_radii([Radius::new_ui_points(1.2)]),
             );
 
-            match &real_result {
-                Some(r) => {
-                    let radius_str = if r.turn_radius.is_infinite() || r.turn_radius > 9999.0 {
-                        "∞ (прямая)".to_string()
-                    } else {
-                        format!("{:.1}m ({})", r.turn_radius, r.turn_direction)
-                    };
-                    let intensity_str = if r.has_intensity {
-                        format!(
-                            ", intensity_L={:.1}, intensity_R={:.1}",
-                            r.avg_intensity_left, r.avg_intensity_right
-                        )
-                    } else {
-                        String::new()
-                    };
-                    let num_crit = r.obstacles.iter().filter(|o| o.is_critical).count();
-                    let num_warn = r.obstacles.len() - num_crit;
-                    let obs_str = if num_crit > 0 {
-                        let closest = r
-                            .obstacles
-                            .iter()
-                            .filter(|o| o.is_critical)
-                            .map(|o| o.distance_along_track)
-                            .fold(f32::INFINITY, f32::min);
-                        format!(
-                            " | 🛑 CRITICAL ON TRACK: {} obj (closest {:.1}m)!",
-                            num_crit, closest
-                        )
-                    } else if num_warn > 0 {
-                        let closest = r
-                            .obstacles
-                            .iter()
-                            .map(|o| o.distance_along_track)
-                            .fold(f32::INFINITY, f32::min);
-                        format!(
-                            " | ⚠️ CLEARANCE INTRUSION: {} obj (closest {:.1}m)",
-                            num_warn, closest
-                        )
-                    } else {
-                        " | 🟢 CLEAR TRACK".to_string()
-                    };
-                    info!(
-                        "[FRAME {frame_id}] 🛤️ Rail track detected: gauge={:.3}m, radius={}, conf={:.1}%, points={}{}{}",
-                        r.gauge,
-                        radius_str,
-                        r.confidence * 100.0,
-                        r.points.len(),
-                        intensity_str,
-                        obs_str
-                    );
-                }
-                None => {
-                    info!("[FRAME {frame_id}] Rail track not found");
-                }
-            }
-
-            // 4. Отправка результатов детекции в Rerun:
-            //    Окно 1: 3D сцена с облаком точек, 3D кривыми путей и 3D экстраполяцией в РЕАЛЬНЫХ координатах
-            if let Err(e) = recording_stream.log_rail_detection(real_result.as_ref()) {
-                error!("Ошибка логирования 3D кривой рельсов в rerun: {e:?}");
-            }
-
-            //    Искривленные точки тоннеля в Rerun
+            // Искривленные точки тоннеля:
             if c_z.abs() > 1e-7 {
-                let mut bent_pts = rerun_points.clone();
-                for p in &mut bent_pts {
-                    p[2] += c_z * p[0] * p[0];
-                }
                 let _ = recording_stream.log(
                     "lidar/point_cloud_bent",
-                    &rerun::Points3D::new(&bent_pts)
-                        .with_colors(rerun_colors.clone())
-                        .with_radii([rerun::Radius::new_ui_points(1.2)]),
+                    &Points3D::new(&pts_bent)
+                        .with_colors(colors)
+                        .with_radii([Radius::new_ui_points(1.2)]),
                 );
             }
 
-            //    Окно 2: 2D карта глубины и интенсивности с наложенными 2D путями и экстраполяцией
-            let rerun_depth_start = std::time::Instant::now();
-            if let Err(e) = recording_stream.log_rail_detection_2d(&crop_active, &geo, bent_result.as_ref()) {
-                error!("Ошибка логирования 2D карты глубины в rerun: {e:?}");
-            }
-            debug!(
-                "[FRAME {frame_id}] Rerun 2D depth map send duration: {:?}",
-                rerun_depth_start.elapsed()
-            );
+            // 3D рельсы с ВОССТАНОВЛЕННЫМ реальным положением:
+            let _ = recording_stream.log_rail_detection(real_result.as_ref());
 
-            // 5. Сохранение сырых кадров без интерполяции для прототипирования на Python
+            // ─── ОКНО 2: 2D Карта глубины, интенсивности, путей и Shapecast ───
+            let _ = recording_stream.log_rail_detection_2d(&active_ri, &geo, bent_result.as_ref());
+            let rerun_dur = t_rerun.elapsed();
+
+            // 8. Сохранение сырых кадров без интерполяции для прототипирования на Python
             if !ENV.RENDER_PATH.is_empty() {
                 let _ = std::fs::create_dir_all(&ENV.RENDER_PATH);
                 let file_path = format!("{}/frame_{frame_id:06}.npy", ENV.RENDER_PATH);
-                if let Err(e) = crop_raw.save_npy(&file_path) {
-                    error!("Ошибка сохранения кадра {file_path}: {e}");
-                } else {
-                    debug!("[FRAME {frame_id}] Saved raw frame to {file_path}");
-                }
+                let _ = crop_raw.save_npy(&file_path);
             }
 
-            debug!(
-                "[FRAME {frame_id}] >>> TOTAL frame processing latency: {:?}",
-                frame_start.elapsed()
+            // 9. Формирование логов профилирования и статуса в консоль
+            let rail_ms = real_result.as_ref().map(|r| r.timing_rail_ms).unwrap_or(0.0);
+            let obs_ms = real_result.as_ref().map(|r| r.timing_obstacles_ms).unwrap_or(0.0);
+            let total_dur = frame_start.elapsed();
+
+            let (obs_str, error_msg_json) = match &real_result {
+                Some(r) => {
+                    let num_crit = r.obstacles.iter().filter(|o| o.is_critical).count();
+                    let num_warn = r.obstacles.len() - num_crit;
+
+                    let (desc, err_json) = if num_crit > 0 || num_warn > 0 {
+                        let closest = r
+                            .obstacles
+                            .iter()
+                            .map(|o| o.distance_along_track)
+                            .fold(f32::INFINITY, f32::min);
+
+                        let (status_str, log_prefix) = if num_crit > 0 {
+                            (
+                                "CRITICAL_OBSTACLE",
+                                format!(
+                                    " | 🛑 CRITICAL ON TRACK: {} obj (closest {:.1}m)!",
+                                    num_crit, closest
+                                ),
+                            )
+                        } else {
+                            (
+                                "CLEARANCE_INTRUSION",
+                                format!(
+                                    " | ⚠️ CLEARANCE INTRUSION: {} obj (closest {:.1}m)",
+                                    num_warn, closest
+                                ),
+                            )
+                        };
+
+                        let payload = json!({
+                            "status": status_str,
+                            "frame_id": frame_id,
+                            "timestamp_ns": timestamp_ns,
+                            "critical_count": num_crit,
+                            "warning_count": num_warn,
+                            "total_obstacles": r.obstacles.len(),
+                            "closest_distance_m": closest,
+                            "gauge": r.gauge,
+                            "turn_radius": r.turn_radius,
+                            "turn_direction": r.turn_direction,
+                            "message": if num_crit > 0 {
+                                format!("CRITICAL: {} obstacle(s) detected directly in gauge! Closest at {:.2}m", num_crit, closest)
+                            } else {
+                                format!("WARNING: {} obstacle(s) inside clearance envelope! Closest at {:.2}m", num_warn, closest)
+                            },
+                            "obstacles": r.obstacles.iter().map(|o| json!({
+                                "distance_along_track": o.distance_along_track,
+                                "lateral_offset": o.lateral_offset,
+                                "height_above_rail": o.height_above_rail,
+                                "is_critical": o.is_critical,
+                                "points_count": o.points_count,
+                                "bbox_2d": o.bbox_2d,
+                                "bbox_3d_min": o.bbox_3d_min,
+                                "bbox_3d_max": o.bbox_3d_max,
+                                "size_m": o.size_m,
+                            })).collect::<Vec<_>>()
+                        });
+
+                        (log_prefix, Some(payload.to_string()))
+                    } else {
+                        (" | 🟢 CLEAR TRACK".to_string(), None)
+                    };
+
+                    (desc, err_json)
+                }
+                None => {
+                    let payload = json!({
+                        "status": "TRACK_LOST",
+                        "frame_id": frame_id,
+                        "timestamp_ns": timestamp_ns,
+                        "message": format!("ERROR: Rail track not detected on frame {}", frame_id)
+                    });
+                    (" | ❌ TRACK NOT FOUND".to_string(), Some(payload.to_string()))
+                }
+            };
+
+            let radius_str = match &real_result {
+                Some(r) if r.turn_radius.is_infinite() || r.turn_radius > 9999.0 => {
+                    "∞ (прямая)".to_string()
+                }
+                Some(r) => format!("{:.1}m ({})", r.turn_radius, r.turn_direction),
+                None => "-".to_string(),
+            };
+
+            info!(
+                "[FRAME {frame_id}] ⏱️ Pipeline: {:.2}ms (swap: {:.2}ms, warp: {:.2}ms, rail: {:.2}ms, obs: {:.2}ms, restore: {:.2}ms, rerun: {:.2}ms) | gauge: {:.3}m, radius: {}, conf: {:.1}%{}",
+                total_dur.as_secs_f64() * 1000.0,
+                swap_dur.as_secs_f64() * 1000.0,
+                warp_dur.as_secs_f64() * 1000.0,
+                rail_ms,
+                obs_ms,
+                restore_dur.as_secs_f64() * 1000.0,
+                rerun_dur.as_secs_f64() * 1000.0,
+                real_result.as_ref().map(|r| r.gauge).unwrap_or(0.0),
+                radius_str,
+                real_result.as_ref().map(|r| r.confidence * 100.0).unwrap_or(0.0),
+                obs_str
             );
+
+            error_msg_json
         })
         .await
         .unwrap();
+
+        // 10. Асинхронная публикация в топик ROS2 об ошибках/препятствиях
+        if let Some(payload_str) = err_payload {
+            let msg = shared::transport::StringMsg::new(payload_str);
+            if let Err(e) = error_publisher.async_publish(msg).await {
+                error!(
+                    "[ROS2] Ошибка публикации в топик {}: {:?}",
+                    ENV.ROS_ERROR_TOPIC, e
+                );
+            }
+        }
     }
+
     Ok(())
 }

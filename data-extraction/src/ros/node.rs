@@ -1,7 +1,10 @@
 use crate::discovery::DiscoveredTopic;
 use ros2_client::{Context, Name, Node, NodeName, NodeOptions, Subscription};
 use rustdds::qos::HasQoSPolicy;
-use shared::{error::{AppError, ErrCtx, ErrorType}, transport::PointCloud2};
+use shared::{
+    error::{AppError, ErrCtx, ErrorType},
+    transport::PointCloud2,
+};
 use tracing::*;
 
 pub fn create_node(context: &Context) -> Result<Node, AppError> {
@@ -40,4 +43,23 @@ pub fn subscribe(
         .app_error()?;
 
     Ok(subscription)
+}
+
+pub fn create_string_publisher(
+    node: &mut Node,
+    topic_name: &str,
+) -> Result<ros2_client::Publisher<shared::transport::StringMsg>, AppError> {
+    let topic = node
+        .create_topic(
+            &Name::parse(topic_name).map_err(|_| ErrorType::InvalidName("Invalid topic name"))?,
+            ros2_client::MessageTypeName::new("std_msgs", "String"),
+            &rustdds::QosPolicyBuilder::new().build(),
+        )
+        .app_error()?;
+
+    let publisher = node
+        .create_publisher::<shared::transport::StringMsg>(&topic, None)
+        .app_error()?;
+
+    Ok(publisher)
 }

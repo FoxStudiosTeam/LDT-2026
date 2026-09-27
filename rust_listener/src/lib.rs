@@ -5,7 +5,8 @@ use kaiv_utils::env_config;
 env_config! {
     ".env" => pub ENV = pub Env {
         RERUN_URL : String = "rerun+http://host.docker.internal:9876/proxy".to_string(),
-        ROS_DOMAIN_ID : u16 = 42,
+        ROS_DOMAIN_ID : u16 = 0,
+        ROS_ERROR_TOPIC : String = "/rail/error".to_string(),
         PROCESS_START_TIMESTAMP : u64 = 0,
         TOTAL_FRAMES : u64 = u64::MAX,
         TEST_RERUN : bool = false,

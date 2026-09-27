@@ -11,6 +11,9 @@ RUN apt-get update && apt-get install -y \
     libclang-dev \
     cmake \
     curl \
+    libssl-dev \
+    libxkbcommon-dev \
+    libgl1-mesa-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Установка Rust
@@ -39,10 +42,13 @@ RUN mkdir -p \
     && echo "fn main() {}" > rust_listener/src/bin/rail_detector.rs \
     && echo "fn main() {}" > rust_listener/src/bin/rail_tuner.rs \
     && echo "fn main() {}" > rust_listener/src/bin/rail_tuner_2d.rs \
+    && echo "fn main() {}" > rust_listener/src/bin/inject_db3_rings.rs \
+    && echo "fn main() {}" > rust_listener/src/bin/test_error_listener.rs \
     && touch \
         cuda-pipeline/src/lib.rs \
         shared/src/lib.rs \
-        data-extraction/src/lib.rs
+        data-extraction/src/lib.rs \
+        rust_listener/src/lib.rs
 
 # ⚡ Оптимизируем Cargo прямо на лету во время кэширования сборки
 ENV CARGO_PROFILE_RELEASE_LTO=true
@@ -50,7 +56,7 @@ ENV CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
 ENV CARGO_PROFILE_RELEASE_STRIP=true
 ENV CARGO_PROFILE_RELEASE_OPT_LEVEL=3
 
-RUN cargo build --release
+RUN cargo build --release --bin ros2_debug_viewer --bin test_error_listener
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 📦 РЕАЛЬНЫЙ ИСХОДНЫЙ КОД
@@ -75,20 +81,24 @@ RUN rm -rf \
 
 # ⚡ Переменные для принудительного статического связывания CUDA-компонентов в Rust
 ENV CUDA_STATIC=true
-RUN cargo build --release
+RUN cargo build --release --bin ros2_debug_viewer --bin test_error_listener
 
-# Дополнительно вычищаем остаточные отладочные символы из готового бинарника
-RUN strip /app/target/release/ros2_debug_viewer
+# Дополнительно вычищаем остаточные отладочные символы из готовых бинарников
+RUN strip /app/target/release/ros2_debug_viewer /app/target/release/test_error_listener
 
 # ==============================================================================
-# 🏁 СТЕЙДЖ 2: МИНИМАЛЬНЫЙ RUNTIME (Образ похудеет на ~1.5 ГБ)
+# 🏁 СТЕЙДЖ 2: МИНИМАЛЬНЫЙ RUNTIME
 # ==============================================================================
-FROM nvidia/cuda:12.2.2-base-ubuntu22.04
+FROM nvidia/cuda:12.2.2-runtime-ubuntu22.04
 
 WORKDIR /app
 
-# Копируем только ОДИН бинарник. Никаких лишних тяжелых .so
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /app/target/release/ros2_debug_viewer /app/ros2_debug_viewer
+COPY --from=builder /app/target/release/test_error_listener /app/test_error_listener
 
 # Оставляем системные пути для работы NVidia контейнера через драйвер хоста
 ENV LD_LIBRARY_PATH="/usr/local/cuda-12.2/lib64:${LD_LIBRARY_PATH}"

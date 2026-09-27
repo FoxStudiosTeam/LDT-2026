@@ -45,3 +45,16 @@ impl PointField {
 }
 
 impl ros2_client::Message for PointCloud2 {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StringMsg {
+    pub data: String,
+}
+
+impl StringMsg {
+    pub fn new(data: impl Into<String>) -> Self {
+        Self { data: data.into() }
+    }
+}
+
+impl ros2_client::Message for StringMsg {}

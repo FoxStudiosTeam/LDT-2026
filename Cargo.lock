@@ -10049,6 +10049,7 @@ dependencies = [
  "ros2-interfaces-jazzy-serde",
  "ros2_data_extraction",
  "rusqlite",
+ "serde_json",
  "shared",
  "tokio",
  "tracing",
