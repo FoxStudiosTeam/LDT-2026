@@ -1,4 +1,5 @@
 pub mod boxcast;
+pub mod configs;
 pub mod debug_boxcast;
 pub mod error;
 pub mod rail_detection;

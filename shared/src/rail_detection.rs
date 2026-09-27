@@ -21,6 +21,12 @@ pub struct LidarGeometry {
     pub dir_z: Vec<f32>,
 }
 
+impl Default for LidarGeometry {
+    fn default() -> Self {
+        Self::new(128, 140, 15.0, -25.0, 40.0)
+    }
+}
+
 impl LidarGeometry {
     pub fn new(
         height: usize,

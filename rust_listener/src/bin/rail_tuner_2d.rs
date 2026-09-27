@@ -29,6 +29,7 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, Color32, ColorImage, Key, TextureHandle, TextureOptions};
 use rerun::{Color, Points3D, Radius, RecordingStream, RecordingStreamBuilder};
 use rust_listener::debug::helper::DebugStream;
+use shared::configs::DetectionPreset;
 use shared::rail_detection::{
     DetectionResult, LidarGeometry, ObstacleDetectionMode, RailTrackDetector,
 };
@@ -639,36 +640,7 @@ pub struct RailTuner2DApp {
 
 impl RailTuner2DApp {
     pub fn new(dataset: FrameDataset, rec_stream: Option<RecordingStream>) -> Self {
-        let mut detector = RailTrackDetector::new(shared::rail_detection::LidarGeometry::new(
-            128, 140, 15.0, -25.0, 40.0,
-        ));
-        // Tuned RailTrackDetector Config
-        detector.depth_step_thresh = 0.100;
-        detector.max_depth_step_thresh = 1.100;
-        detector.nominal_gauge = 1.580;
-        detector.min_gauge = 1.515;
-        detector.max_gauge = 1.560;
-        detector.row_start_pct = 0.880;
-        detector.row_end_pct = -0.100;
-        detector.max_lateral_jump = 0.300;
-        detector.max_lateral_rail_jump = 0.100;
-        detector.extrapolate_m = 24.0;
-        detector.smooth_n = 3;
-        detector.contrast_depth = 195.0;
-        detector.contrast_intensity = 5.0;
-        detector.blend = 1.00;
-        detector.obstacle_config.enabled = true;
-        detector.obstacle_config.mode = shared::rail_detection::ObstacleDetectionMode::Boxcast3D;
-        detector.obstacle_config.clearance_width = 2.50;
-        detector.obstacle_config.min_height_above_rail = 0.15;
-        detector.obstacle_config.max_height_above_rail = 3.20;
-        detector.obstacle_config.min_points = 8;
-        detector.obstacle_config.max_distance_m = 100.0;
-        detector.obstacle_config.depth_diff_thresh = 0.25;
-        detector.obstacle_config.upward_curvature = 0.00200;
-        detector.obstacle_config.clearance_narrowing_width = 0.0050;
-        detector.obstacle_config.clearance_narrowing_height = 0.0050;
-        detector.obstacle_config.cluster_depth_thresh = 1.20;
+        let detector: RailTrackDetector = DetectionPreset::current().into();
 
         Self {
             dataset,
