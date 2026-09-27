@@ -73,50 +73,81 @@ pub async fn entry(
             }
             let swap_dur = swap_start.elapsed();
 
-            // 2. Извлечение RangeImage под READ-локом с немедленным освобождением
-            let (timestamp_ns, range_image) = {
-                let pc = point_cloud_lock.read().expect("Mutex poisoned");
-                let queue = ProcessingQueue::READ;
-                let ts = pc.timestamp[queue];
-                let ri = RangeImage::from_pandar128_organized(&pc, queue, 1);
-                (ts, ri)
-            };
+            // 2. строим RangeImage и производим детекцию рельсов с прямым доступом
+            //    к облаку точек (zero-copy) ПОД READ-ЛОКОМ, после чего НЕМЕДЛЕННО освобождаем лок.
+            let compute_start = std::time::Instant::now();
+            let (
+                timestamp_ns,
+                ri,
+                crop_raw,
+                active_ri,
+                geo,
+                c_z,
+                bent_result,
+                warp_dur,
+                detect_dur,
+            ) = {
+                let point_cloud = point_cloud_lock.read().expect("Mutex poisoned");
+                let number = ProcessingQueue::READ;
+                let timestamp_ns: i64 = point_cloud.timestamp[number];
+                let ri = RangeImage::from_pandar128_organized(
+                    &point_cloud,
+                    number,
+                    1,
+                );
 
-            // 3. Подготовка 2D карты глубины (Range Image) и геометрии лидара
-            let crop_raw = range_image.crop_fov(ENV.PREVIEW_FOV_X_DEG);
-            let geo = LidarGeometry::new(
-                crop_raw.height,
-                crop_raw.width,
-                15.0,
-                -25.0,
-                ENV.PREVIEW_FOV_X_DEG,
-            );
+                // Подготовка 2D карты глубины (Range Image) и геометрии лидара
+                let crop_raw = ri.crop_fov(ENV.PREVIEW_FOV_X_DEG);
+                let geo = LidarGeometry::new(
+                    crop_raw.height,
+                    crop_raw.width,
+                    15.0,
+                    -25.0,
+                    ENV.PREVIEW_FOV_X_DEG,
+                );
 
-            // 4. Искривление всех точек тоннеля и карты глубины: Z_bent = Z + c_z * X^2
-            let c_z = {
-                let det = rail_detector_lock.lock().unwrap();
-                det.obstacle_config.upward_curvature
-            };
-            let t_warp = Instant::now();
-            let active_ri = if c_z.abs() > 1e-7 {
-                crop_raw.warp_curvature(&geo, c_z)
-            } else {
-                crop_raw.clone()
-            };
-            let warp_dur = t_warp.elapsed();
+                // Искривление всех точек тоннеля и карты глубины: Z_bent = Z + c_z * X^2
+                let c_z = {
+                    let detector = rail_detector_lock.lock().unwrap();
+                    detector.obstacle_config.upward_curvature
+                };
+                let t_warp = Instant::now();
+                let active_ri = if c_z.abs() > 1e-7 {
+                    crop_raw.warp_curvature(&geo, c_z)
+                } else {
+                    crop_raw.clone()
+                };
+                let warp_dur = t_warp.elapsed();
 
-            // 5. Детекция путей на искривленном представлении и препятствий
-            let t_detect = Instant::now();
-            let bent_result = {
-                let mut det = rail_detector_lock.lock().unwrap();
-                if det.geometry.height != active_ri.height || det.geometry.width != active_ri.width {
-                    det.geometry = geo.clone();
-                }
-                det.detect_with_raw(&active_ri, Some(&crop_raw), frame_id as usize)
-            };
-            let _detect_dur = t_detect.elapsed();
+                // Детекция путей на искривленном представлении и препятствий
+                let t_detect = Instant::now();
+                let bent_result = {
+                    let mut detector = rail_detector_lock.lock().unwrap();
+                    if detector.geometry.height != active_ri.height || detector.geometry.width != active_ri.width {
+                        detector.geometry = geo.clone();
+                    }
+                    detector.detect_with_raw(
+                        &active_ri,
+                        Some(&crop_raw),
+                        Some((&point_cloud, number)),
+                        frame_id as usize,
+                    )
+                };
+                let detect_dur = t_detect.elapsed();
+                (
+                    timestamp_ns,
+                    ri,
+                    crop_raw,
+                    active_ri,
+                    geo,
+                    c_z,
+                    bent_result,
+                    warp_dur,
+                    detect_dur
+                )
+            }; // <--- read-lock освобожден!
 
-            // 6. Восстановление истинных координат для Rerun и 3D сцены: Z_real = Z_bent - c_z * X^2
+            // 3. Восстановление истинных координат для Rerun и 3D сцены: Z_real = Z_bent - c_z * X^2
             let t_restore = Instant::now();
             let mut real_result = bent_result.clone();
             if let Some(ref mut r) = real_result {
@@ -124,7 +155,7 @@ pub async fn entry(
             }
             let restore_dur = t_restore.elapsed();
 
-            // 7. Отправка в Rerun (точно так же, как в rail_tuner_2d)
+            // 4. Отправка в Rerun
             let t_rerun = Instant::now();
             recording_stream.set_time("ros_time", TimeCell::from_duration_nanos(timestamp_ns));
             recording_stream.set_time_sequence("frame", frame_id as i64);
@@ -160,16 +191,6 @@ pub async fn entry(
                     .with_radii([Radius::new_ui_points(1.2)]),
             );
 
-            // Искривленные точки тоннеля:
-            if c_z.abs() > 1e-7 {
-                let _ = recording_stream.log(
-                    "lidar/point_cloud_bent",
-                    &Points3D::new(&pts_bent)
-                        .with_colors(colors)
-                        .with_radii([Radius::new_ui_points(1.2)]),
-                );
-            }
-
             // 3D рельсы с ВОССТАНОВЛЕННЫМ реальным положением:
             let _ = recording_stream.log_rail_detection(real_result.as_ref());
 
@@ -177,14 +198,14 @@ pub async fn entry(
             let _ = recording_stream.log_rail_detection_2d(&active_ri, &geo, bent_result.as_ref());
             let rerun_dur = t_rerun.elapsed();
 
-            // 8. Сохранение сырых кадров без интерполяции для прототипирования на Python
+            // 5. Сохранение сырых кадров без интерполяции для прототипирования на Python
             if !ENV.RENDER_PATH.is_empty() {
                 let _ = std::fs::create_dir_all(&ENV.RENDER_PATH);
                 let file_path = format!("{}/frame_{frame_id:06}.npy", ENV.RENDER_PATH);
                 let _ = crop_raw.save_npy(&file_path);
             }
 
-            // 9. Формирование логов профилирования и статуса в консоль
+            // 6. Формирование логов профилирования и статуса в консоль
             let rail_ms = real_result.as_ref().map(|r| r.timing_rail_ms).unwrap_or(0.0);
             let obs_ms = real_result.as_ref().map(|r| r.timing_obstacles_ms).unwrap_or(0.0);
             let total_dur = frame_start.elapsed();
@@ -253,6 +274,7 @@ pub async fn entry(
                         (" | 🟢 CLEAR TRACK".to_string(), None)
                     };
 
+
                     (desc, err_json)
                 }
                 None => {
@@ -275,10 +297,11 @@ pub async fn entry(
             };
 
             info!(
-                "[FRAME {frame_id}] ⏱️ Pipeline: {:.2}ms (swap: {:.2}ms, warp: {:.2}ms, rail: {:.2}ms, obs: {:.2}ms, restore: {:.2}ms, rerun: {:.2}ms) | gauge: {:.3}m, radius: {}, conf: {:.1}%{}",
+                "[FRAME {frame_id}] ⏱️ Pipeline: {:.2}ms (swap: {:.2}ms, warp: {:.2}ms, detect: {:.2}ms, rail: {:.2}ms, obs: {:.2}ms, restore: {:.2}ms, rerun: {:.2}ms) | gauge: {:.3}m, radius: {}, conf: {:.1}%{}",
                 total_dur.as_secs_f64() * 1000.0,
                 swap_dur.as_secs_f64() * 1000.0,
                 warp_dur.as_secs_f64() * 1000.0,
+                detect_dur.as_secs_f64() * 1000.0,
                 rail_ms,
                 obs_ms,
                 restore_dur.as_secs_f64() * 1000.0,
@@ -310,6 +333,5 @@ pub async fn entry(
             }
         }
     }
-
     Ok(())
 }

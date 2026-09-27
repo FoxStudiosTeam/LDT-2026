@@ -165,7 +165,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let t_load = t0.elapsed();
 
         let t_det_start = Instant::now();
-        let res = detector.detect(&frame, idx);
+        let res = detector.detect(&frame, None, idx);
         let t_det = t_det_start.elapsed();
 
         // 1. Time indexing in Rerun

@@ -276,6 +276,29 @@ impl<const SIZE: usize> PointCloud<SIZE> {
         self.x[queue].length
     }
 
+    #[inline(always)]
+    pub fn get_point(&self, queue: ProcessingQueue, index: usize) -> Option<(f32, f32, f32)> {
+        if index < self.len(queue) {
+            Some((self.x[queue][index], self.y[queue][index], self.z[queue][index]))
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn get_point_with_intensity(&self, queue: ProcessingQueue, index: usize) -> Option<(f32, f32, f32, f32)> {
+        if index < self.len(queue) {
+            Some((
+                self.x[queue][index],
+                self.y[queue][index],
+                self.z[queue][index],
+                self.intensity[queue][index],
+            ))
+        } else {
+            None
+        }
+    }
+
     pub fn compute_stats(&self, queue: ProcessingQueue) -> CloudStats {
         let mut cloud_stats = CloudStats::new();
         let current_len = self.len(queue);
