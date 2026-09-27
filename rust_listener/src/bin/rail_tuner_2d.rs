@@ -1258,6 +1258,12 @@ impl RailTuner2DApp {
         let bent_res = self
             .detector
             .detect_with_raw(&active_ri, Some(raw_ri), frame.idx);
+        if let Some(r) = &bent_res {
+            println!("Radius: {}", r.turn_radius);
+            // 400 - max
+            // self.detector.obstacle_config.clearance_narrowing_width = r.turn_radius;
+        }
+
         let detect_dur = t_detect.elapsed();
         self.last_calc_dur = detect_dur;
         self.profiling.detector_total_ms = detect_dur.as_secs_f32() * 1000.0;
@@ -1715,9 +1721,13 @@ impl eframe::App for RailTuner2DApp {
                             ui.label("Far Row End % (top):");
                             param_changed |= ui
                                 .add(
-                                    egui::Slider::new(&mut self.row_end_pct, -0.1..=0.60)
-                                        .step_by(0.01),
+                                    egui::Slider::new(&mut self.row_end_pct, 0.00..=0.60)
+                                        .step_by(0.005)
+                                        .custom_formatter(|val, _| {
+                                            format!("{:.3} (row ~{:.0})", val, val * 321.0)
+                                        }),
                                 )
+                                .on_hover_text("Row percentage limit towards image top (0.0 = top of image / furthest ahead into tunnel, 0.25 = high horizon, 0.45 = standard)")
                                 .changed();
                         });
 

@@ -586,6 +586,15 @@ impl RailTrackDetector {
         let frame = active_frame;
         let h = frame.height;
         let w = frame.width;
+        if self.geometry.height != h || self.geometry.width != w {
+            self.geometry = LidarGeometry::new(
+                h,
+                w,
+                self.geometry.fov_up_rad.to_degrees(),
+                self.geometry.fov_down_rad.to_degrees(),
+                self.geometry.fov_h_rad.to_degrees(),
+            );
+        }
         let (x_arr, y_arr, z_arr) = self.geometry.range_image_to_xyz(frame);
 
         let mut candidates: Vec<RailPoint> = Vec::new();
@@ -593,9 +602,10 @@ impl RailTrackDetector {
         let mut prev_y_right: Option<f32> = None;
         let mut prev_y_left: Option<f32> = None;
         let mut prev_x_center: Option<f32> = None;
+        let mut last_detected_row: Option<usize> = None;
 
         let row_start = (h as f32 * self.row_start_pct) as usize;
-        let row_end = (h as f32 * self.row_end_pct) as usize;
+        let row_end = (h as f32 * self.row_end_pct.max(0.0)) as usize;
 
         let has_intensity = !frame.intensity.is_empty();
         let b = if has_intensity {
@@ -605,7 +615,7 @@ impl RailTrackDetector {
         };
         let inv_b = 1.0 - b;
 
-        // Scan rows from near (row_start) to far (row_end) with step -2
+        // Scan rows from near (row_start) to far (row_end) with step 1
         let mut row = row_start;
         while row > row_end {
             let row_offset = row * w;
@@ -615,14 +625,30 @@ impl RailTrackDetector {
             let mut neg_steps = Vec::new();
 
             if b <= 0.0 {
-                // Pure depth step detection (exact match to baseline)
+                // Pure depth step detection (void-aware)
                 for c in 0..w - 1 {
-                    let diff_r = r_row[c + 1] - r_row[c];
-                    if diff_r > self.depth_step_thresh && diff_r <= self.max_depth_step_thresh {
-                        pos_steps.push(c);
+                    let d0 = r_row[c];
+                    let d1 = r_row[c + 1];
+                    if d0 <= 0.1 && d1 <= 0.1 {
+                        continue;
                     }
-                    if diff_r < -self.depth_step_thresh && diff_r >= -self.max_depth_step_thresh {
-                        neg_steps.push(c);
+                    if d0 <= 0.1 && d1 > 0.1 {
+                        if d1 > self.depth_step_thresh {
+                            pos_steps.push(c + 1);
+                        }
+                    } else if d0 > 0.1 && d1 <= 0.1 {
+                        if d0 > self.depth_step_thresh {
+                            neg_steps.push(c);
+                        }
+                    } else {
+                        let diff_r = d1 - d0;
+                        if diff_r > self.depth_step_thresh && diff_r <= self.max_depth_step_thresh {
+                            pos_steps.push(c);
+                        }
+                        if diff_r < -self.depth_step_thresh && diff_r >= -self.max_depth_step_thresh
+                        {
+                            neg_steps.push(c);
+                        }
                     }
                 }
             } else {
@@ -642,27 +668,44 @@ impl RailTrackDetector {
                 for c in 0..w - 1 {
                     let d0 = r_row[c];
                     let d1 = r_row[c + 1];
-                    if d0 <= 0.1 || d1 <= 0.1 {
+                    if d0 <= 0.1 && d1 <= 0.1 {
                         continue;
                     }
 
-                    let td0 = (d0 / cd).clamp(0.0, 1.0);
-                    let td1 = (d1 / cd).clamp(0.0, 1.0);
+                    // Void-aware edge detection (handles far-field ground dropouts where reflective rails are flanked by void)
+                    if d0 <= 0.1 && d1 > 0.1 {
+                        let td1 = (d1 / cd).clamp(0.0, 1.0);
+                        let ti1 = (frame.intensity[row_offset + c + 1] / ci).clamp(0.0, 1.0);
+                        let step_mag = inv_b * td1 + b * ti1;
+                        if step_mag >= min_thresh.min(0.06) {
+                            pos_steps.push(c + 1);
+                        }
+                    } else if d0 > 0.1 && d1 <= 0.1 {
+                        let td0 = (d0 / cd).clamp(0.0, 1.0);
+                        let ti0 = (frame.intensity[row_offset + c] / ci).clamp(0.0, 1.0);
+                        let step_mag = inv_b * td0 + b * ti0;
+                        if step_mag >= min_thresh.min(0.06) {
+                            neg_steps.push(c);
+                        }
+                    } else {
+                        let td0 = (d0 / cd).clamp(0.0, 1.0);
+                        let td1 = (d1 / cd).clamp(0.0, 1.0);
 
-                    let i0 = frame.intensity[row_offset + c];
-                    let i1 = frame.intensity[row_offset + c + 1];
-                    let ti0 = (i0 / ci).clamp(0.0, 1.0);
-                    let ti1 = (i1 / ci).clamp(0.0, 1.0);
+                        let i0 = frame.intensity[row_offset + c];
+                        let i1 = frame.intensity[row_offset + c + 1];
+                        let ti0 = (i0 / ci).clamp(0.0, 1.0);
+                        let ti1 = (i1 / ci).clamp(0.0, 1.0);
 
-                    let t0 = inv_b * td0 + b * ti0;
-                    let t1 = inv_b * td1 + b * ti1;
-                    let diff_t = t1 - t0;
+                        let t0 = inv_b * td0 + b * ti0;
+                        let t1 = inv_b * td1 + b * ti1;
+                        let diff_t = t1 - t0;
 
-                    if diff_t > min_thresh && diff_t <= max_thresh {
-                        pos_steps.push(c);
-                    }
-                    if diff_t < -min_thresh && diff_t >= -max_thresh {
-                        neg_steps.push(c);
+                        if diff_t > min_thresh && diff_t <= max_thresh {
+                            pos_steps.push(c);
+                        }
+                        if diff_t < -min_thresh && diff_t >= -max_thresh {
+                            neg_steps.push(c);
+                        }
                     }
                 }
             }
@@ -700,28 +743,29 @@ impl RailTrackDetector {
                         let zm = 0.5 * (zl + zr);
                         let zm_real = zm - cz * xm * xm;
 
-                        // Исключаем точки выше уровня земли (провода контактной сети и т.п.)
-                        // Проверяем в реальных физических координатах (zm_real), чтобы upward_curvature не отсекала точки на глубине!
-                        if zm_real > -0.3 {
+                        // Исключаем точки выше уровня рельсов (провода контактной сети и т.п.)
+                        // При подъеме пути в гору или тоннель zm_real поднимается, поэтому допускаем реальную высоту рельсов до +2.5 м
+                        if zm_real > 2.5 {
                             continue;
                         }
 
                         // Адаптивные к дальности допуски: с ростом глубины (xm > 15m) шаг лучей лидара
                         // в метрах увеличивается, а кривизна пути создает естественный сдвиг по X между рельсами.
                         let tol_gauge =
-                            (0.04 + 0.0018 * xm.min(15.0) + 0.003 * (xm - 15.0).max(0.0)).min(0.18);
+                            (0.04 + 0.0018 * xm.min(15.0) + 0.0035 * (xm - 15.0).max(0.0))
+                                .min(0.28);
                         let min_g =
                             (self.min_gauge - tol_gauge).min(self.nominal_gauge - tol_gauge);
                         let max_g =
                             (self.max_gauge + tol_gauge).max(self.nominal_gauge + tol_gauge);
                         let h_tol =
-                            (0.05 + 0.0025 * xm.min(15.0) + 0.004 * (xm - 15.0).max(0.0)).min(0.30);
+                            (0.05 + 0.0025 * xm.min(15.0) + 0.005 * (xm - 15.0).max(0.0)).min(0.45);
                         let x_tol =
-                            (0.35 + 0.035 * xm.min(15.0) + 0.04 * (xm - 15.0).max(0.0)).min(3.0);
+                            (0.35 + 0.035 * xm.min(15.0) + 0.05 * (xm - 15.0).max(0.0)).min(4.5);
 
                         if gauge >= min_g && gauge <= max_g && h_diff < h_tol && x_diff < x_tol {
                             if let Some(pxc) = prev_x_center {
-                                if xm < pxc - 0.5 {
+                                if xm < pxc - 2.5 {
                                     continue;
                                 }
                             }
@@ -755,10 +799,10 @@ impl RailTrackDetector {
             }
 
             if pairs.is_empty() {
-                if row < 2 {
+                if row == 0 {
                     break;
                 }
-                row -= 2;
+                row -= 1;
                 continue;
             }
 
@@ -841,21 +885,28 @@ impl RailTrackDetector {
 
             let best = &pairs[0];
 
+            let row_gap = if let Some(lr) = last_detected_row {
+                (lr - row) as f32
+            } else {
+                1.0
+            };
+            let gap_scale = 1.0 + 0.15 * (row_gap - 1.0);
+            let max_lat = ((self.max_lateral_jump + 0.012 * best.x_center) * gap_scale).min(1.20);
+            let max_lat_rail =
+                ((self.max_lateral_rail_jump + 0.008 * best.x_center) * gap_scale).min(0.80);
+
             let lateral_jump = if let Some(pyc) = prev_y_center {
                 (best.y_center - pyc).abs()
             } else {
                 best.y_center.abs()
             };
 
-            let max_lat = (self.max_lateral_jump + 0.008 * best.x_center).min(0.80);
-            let max_lat_rail = (self.max_lateral_rail_jump + 0.006 * best.x_center).min(0.50);
-
             // Reject sudden lateral discontinuity of center
             if prev_y_center.is_some() && lateral_jump > max_lat {
-                if row < 2 {
+                if row == 0 {
                     break;
                 }
-                row -= 2;
+                row -= 1;
                 continue;
             }
 
@@ -863,10 +914,10 @@ impl RailTrackDetector {
             if let Some(pyl) = prev_y_left {
                 let left_lateral_jump = (best.y_left - pyl).abs();
                 if left_lateral_jump > max_lat_rail {
-                    if row < 2 {
+                    if row == 0 {
                         break;
                     }
-                    row -= 2;
+                    row -= 1;
                     continue;
                 }
             }
@@ -875,10 +926,10 @@ impl RailTrackDetector {
             if let Some(pyr) = prev_y_right {
                 let right_lateral_jump = (best.y_right - pyr).abs();
                 if right_lateral_jump > max_lat_rail {
-                    if row < 2 {
+                    if row == 0 {
                         break;
                     }
-                    row -= 2;
+                    row -= 1;
                     continue;
                 }
             }
@@ -887,13 +938,14 @@ impl RailTrackDetector {
             prev_y_center = Some(best.y_center);
             prev_y_left = Some(best.y_left);
             prev_y_right = Some(best.y_right);
+            last_detected_row = Some(row);
 
             candidates.push(best.clone());
 
-            if row < 2 {
+            if row == 0 {
                 break;
             }
-            row -= 2;
+            row -= 1;
         }
 
         // Require a minimum number of valid scanlines

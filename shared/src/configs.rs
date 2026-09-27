@@ -19,7 +19,7 @@ impl Into<RailTrackDetector> for DetectionPreset {
                 detector.min_gauge = 1.515;
                 detector.max_gauge = 1.560;
                 detector.row_start_pct = 0.880;
-                detector.row_end_pct = -0.100;
+                detector.row_end_pct = 0.050;
                 detector.max_lateral_jump = 0.300;
                 detector.max_lateral_rail_jump = 0.100;
                 detector.extrapolate_m = 24.0;

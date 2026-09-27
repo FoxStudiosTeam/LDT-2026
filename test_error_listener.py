@@ -29,17 +29,25 @@ except ImportError:
 
 
 class RailErrorListener(Node):
-    def __init__(self, topic_name: str = "/rail/error"):
+    def __init__(self, topic_name: str = None):
         super().__init__("rail_error_test_service")
-        self.topic_name = topic_name
+        self.topic_name = topic_name or os.environ.get("ROS_ERROR_TOPIC", "/rail/error")
         self.msg_count = 0
         self.last_error = None
+
+        from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
+        qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=50
+        )
 
         self.subscription = self.create_subscription(
             String,
             self.topic_name,
             self.error_callback,
-            10
+            qos
         )
         self.get_logger().info(
             f"🚀 [SERVICE STARTED] Subscribed to topic '{self.topic_name}' "

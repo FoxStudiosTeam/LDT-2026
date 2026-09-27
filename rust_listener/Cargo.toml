@@ -27,6 +27,10 @@ path = "src/bin/inject_db3_rings.rs"
 name = "test_error_listener"
 path = "src/bin/test_error_listener.rs"
 
+[[bin]]
+name = "diagnose_detector"
+path = "src/bin/diagnose_detector.rs"
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"

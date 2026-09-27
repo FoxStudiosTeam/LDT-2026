@@ -302,6 +302,11 @@ pub async fn entry(
                     "[ROS2] Ошибка публикации в топик {}: {:?}",
                     ENV.ROS_ERROR_TOPIC, e
                 );
+            } else {
+                info!(
+                    "📢 [ROS2 ALERT] Опубликовано в топик {} (кадр {})",
+                    ENV.ROS_ERROR_TOPIC, frame_id
+                );
             }
         }
     }
