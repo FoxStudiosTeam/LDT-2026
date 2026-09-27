@@ -1017,10 +1017,11 @@ impl RailTrackDetector {
             if let Some(anchor) = self.last_far_anchor {
                 if anchor[0] > 15.0 {
                     // Inject anchor point with moderate weight (3 sample points) into least-squares fit
+                    let z_lin = anchor[2] - cz * anchor[0] * anchor[0];
                     for _ in 0..3 {
                         xm.push(anchor[0]);
                         ym.push(anchor[1]);
-                        zm_real.push(anchor[2]);
+                        zm_real.push(z_lin);
                     }
                     far_anchor_active = true;
                 }
@@ -1032,7 +1033,10 @@ impl RailTrackDetector {
         // Fit elevation profile in REAL coordinates (linear slope): Z_real(X) = d*X + e
         let raw_poly_z = polyfit1(&xm, &zm_real)?;
         let raw_gauge = median_gauge;
-        let raw_x_det_max = xm.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        let raw_x_det_max = candidates
+            .iter()
+            .map(|pt| pt.x_center)
+            .fold(f32::NEG_INFINITY, f32::max);
 
         // Reset history on non-consecutive jumps (gap > 2)
         if let Some(last_idx) = self.last_frame_idx {
@@ -1056,18 +1060,16 @@ impl RailTrackDetector {
 
         if self.temporal_jump_reject_enabled {
             if let Some(prev_poly_y) = self.last_valid_poly_y {
-                // Check lateral deviation at multiple distances along track
-                let test_xs = [
-                    5.0_f32,
-                    15.0_f32,
-                    30.0_f32,
-                    raw_x_det_max.min(60.0).max(10.0),
-                ];
+                // Check lateral deviation at multiple distances along track, extending up to the extrapolated tip
+                let x_ext_end = (raw_x_det_max + self.extrapolate_m).max(raw_x_det_max);
+                let test_xs = [5.0_f32, 15.0_f32, 30.0_f32, raw_x_det_max, x_ext_end];
                 let mut max_dev = 0.0_f32;
                 for &tx in &test_xs {
                     let y_raw = raw_poly_y[0] * tx * tx + raw_poly_y[1] * tx + raw_poly_y[2];
                     let y_prev = prev_poly_y[0] * tx * tx + prev_poly_y[1] * tx + prev_poly_y[2];
-                    max_dev = max_dev.max((y_raw - y_prev).abs());
+                    let dist_scale = 1.0 + 0.015 * (tx - 10.0).max(0.0);
+                    let normalized_dev = (y_raw - y_prev).abs() / dist_scale;
+                    max_dev = max_dev.max(normalized_dev);
                 }
 
                 if max_dev > self.max_interframe_jump_m {
@@ -1092,6 +1094,7 @@ impl RailTrackDetector {
                         self.last_valid_poly_z = Some(raw_poly_z);
                         self.last_valid_gauge = Some(raw_gauge);
                         self.last_valid_x_max = Some(raw_x_det_max);
+                        self.last_far_anchor = None;
                     }
                 } else {
                     // Valid continuous trajectory
@@ -1128,15 +1131,17 @@ impl RailTrackDetector {
                 x_det_max: accepted_x_max,
             });
 
-            // Update far anchor from furthest candidate point on valid frame
+            // Update far anchor at the tip of the extrapolated corridor on valid frame
             if self.far_anchor_enabled {
-                if let Some(furthest) = candidates.iter().max_by(|a, b| {
-                    a.x_center
-                        .partial_cmp(&b.x_center)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                }) {
-                    self.last_far_anchor =
-                        Some([furthest.x_center, furthest.y_center, furthest.z_center]);
+                let x_anchor = (accepted_x_max + self.extrapolate_m).max(accepted_x_max);
+                if x_anchor > 10.0 {
+                    let y_anchor = accepted_poly_y[0] * x_anchor * x_anchor
+                        + accepted_poly_y[1] * x_anchor
+                        + accepted_poly_y[2];
+                    let z_anchor = accepted_poly_z[0] * x_anchor
+                        + accepted_poly_z[1]
+                        + cz * x_anchor * x_anchor;
+                    self.last_far_anchor = Some([x_anchor, y_anchor, z_anchor]);
                 }
             }
         }
