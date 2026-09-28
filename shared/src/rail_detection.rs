@@ -258,6 +258,8 @@ pub struct DetectionResult {
     pub clearance_narrowing_width: f32,
     /// Коэффициент снижения высотного габарита с расстоянием (м/м)
     pub clearance_narrowing_height: f32,
+    /// Вертикальный сдвиг конечной точки искривления габарита по высоте на дальней дистанции (м)
+    pub clearance_height_end_shift: f32,
     pub obstacle_enabled: bool,
     /// Флаг истинных (восстановленных) координат в реальном физическом пространстве
     pub is_real_coordinates: bool,
@@ -364,10 +366,13 @@ impl DetectionResult {
             let dx = (x - x_min).max(0.0);
             let cur_w = (self.clearance_width - self.clearance_narrowing_width * dx).max(min_w);
             let cur_h = (nom_h - self.clearance_narrowing_height * dx).max(min_h_thickness);
+            let range_x = (x_max - x_min).max(1.0);
+            let t_norm = (dx / range_x).min(2.0);
+            let h_shift = self.clearance_height_end_shift * t_norm * t_norm;
             let half_w = cur_w * 0.5;
             let half_h = cur_h * 0.5;
-            let cur_min_h = center_h - half_h;
-            let cur_max_h = center_h + half_h;
+            let cur_min_h = center_h + h_shift - half_h;
+            let cur_max_h = center_h + h_shift + half_h;
 
             let y_c = self.poly_y[0] * x * x + self.poly_y[1] * x + self.poly_y[2];
             let z_surf = if self.is_real_coordinates {
@@ -494,6 +499,9 @@ pub struct ObstacleConfig {
     /// Коэффициент линейного снижения высотного габарита приближения с расстоянием (м/м)
     /// Например 0.010 означает снижение потолка коридора на 1.0м каждые 100м дистанции (-0.5м на 50м)
     pub clearance_narrowing_height: f32,
+    /// Вертикальный сдвиг конечной точки искривления габарита по высоте на дальней дистанции (м)
+    /// Смещает центр габарита по высоте на дистанции max_distance_m (+ вверх, - вниз)
+    pub clearance_height_end_shift: f32,
     /// Максимальный разрыв по дальности (м) между соседними точками для объединения в один кластер, default: 1.20 м
     /// Предотвращает склейку разноудаленных объектов на одной линии визирования
     pub cluster_depth_thresh: f32,
@@ -523,6 +531,7 @@ impl Default for ObstacleConfig {
             upward_curvature: 0.0004,
             clearance_narrowing_width: 0.0,
             clearance_narrowing_height: 0.0,
+            clearance_height_end_shift: 0.0,
             cluster_depth_thresh: 1.20,
             temporal_tracking_enabled: true,
             min_hits_for_critical: 2,
@@ -1486,6 +1495,7 @@ impl RailTrackDetector {
             clearance_width: self.obstacle_config.clearance_width,
             clearance_narrowing_width: self.obstacle_config.clearance_narrowing_width,
             clearance_narrowing_height: self.obstacle_config.clearance_narrowing_height,
+            clearance_height_end_shift: self.obstacle_config.clearance_height_end_shift,
             min_height_above_rail: self.obstacle_config.min_height_above_rail,
             max_height_above_rail: self.obstacle_config.max_height_above_rail,
             max_distance_m: self.obstacle_config.max_distance_m,
@@ -1584,9 +1594,12 @@ impl RailTrackDetector {
                             * 0.5;
                         let cur_h =
                             (nom_h - config.clearance_narrowing_height * dx).max(min_h_thickness);
+                        let range_x = (x_max - x_min).max(1.0);
+                        let t_norm = (dx / range_x).min(2.0);
+                        let h_shift = config.clearance_height_end_shift * t_norm * t_norm;
                         let cur_half_h = cur_h * 0.5;
-                        let cur_min_h = center_h - cur_half_h;
-                        let cur_max_h = center_h + cur_half_h;
+                        let cur_min_h = center_h + h_shift - cur_half_h;
+                        let cur_max_h = center_h + h_shift + cur_half_h;
                         let dz = z_real - z_surf_real;
 
                         if d_lat.abs() <= cur_half_w && dz >= cur_min_h && dz <= cur_max_h {
@@ -1619,9 +1632,12 @@ impl RailTrackDetector {
                             * 0.5;
                         let cur_h =
                             (nom_h - config.clearance_narrowing_height * dx).max(min_h_thickness);
+                        let range_x = (x_max - x_min).max(1.0);
+                        let t_norm = (dx / range_x).min(2.0);
+                        let h_shift = config.clearance_height_end_shift * t_norm * t_norm;
                         let cur_half_h = cur_h * 0.5;
-                        let cur_min_h = center_h - cur_half_h;
-                        let cur_max_h = center_h + cur_half_h;
+                        let cur_min_h = center_h + h_shift - cur_half_h;
+                        let cur_max_h = center_h + h_shift + cur_half_h;
                         if d_lat.abs() > cur_half_w {
                             continue;
                         }
@@ -1676,9 +1692,12 @@ impl RailTrackDetector {
                             * 0.5;
                         let cur_h =
                             (nom_h - config.clearance_narrowing_height * dx).max(min_h_thickness);
+                        let range_x = (x_max - x_min).max(1.0);
+                        let t_norm = (dx / range_x).min(2.0);
+                        let h_shift = config.clearance_height_end_shift * t_norm * t_norm;
                         let cur_half_h = cur_h * 0.5;
-                        let cur_min_h = center_h - cur_half_h;
-                        let cur_max_h = center_h + cur_half_h;
+                        let cur_min_h = center_h + h_shift - cur_half_h;
+                        let cur_max_h = center_h + h_shift + cur_half_h;
                         let dz = z_real - z_surf_real;
 
                         if d_lat.abs() <= cur_half_w && dz >= cur_min_h && dz <= cur_max_h {
@@ -2097,4 +2116,104 @@ pub fn polyfit1(x: &[f32], z: &[f32]) -> Option<[f32; 2]> {
     let e = (sum_x2 * sum_z - sum_x * sum_xz) / det;
 
     Some([d as f32, e as f32])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clearance_height_end_shift() {
+        let poly_y = [0.0_f32, 0.0_f32, 0.0_f32];
+        let poly_z = [0.0_f32, -1.0_f32]; // Flat track at z = -1.0
+
+        let res = DetectionResult {
+            frame_idx: 0,
+            points: Vec::new(),
+            gauge: 1.52,
+            curvature_a: 0.0,
+            heading_b: 0.0,
+            offset_c: 0.0,
+            turn_radius: 99999.0,
+            turn_direction: "STRAIGHT".to_string(),
+            lateral_shift_15m: 0.0,
+            poly_y,
+            poly_z,
+            x_curve: Vec::new(),
+            y_center: Vec::new(),
+            z_center: Vec::new(),
+            x_left: Vec::new(),
+            y_left: Vec::new(),
+            x_right: Vec::new(),
+            y_right: Vec::new(),
+            confidence: 1.0,
+            extrapolate_m: 0.0,
+            smooth_n: 1,
+            x_ext: Vec::new(),
+            y_ext: Vec::new(),
+            z_ext: Vec::new(),
+            x_ext_l: Vec::new(),
+            y_ext_l: Vec::new(),
+            x_ext_r: Vec::new(),
+            y_ext_r: Vec::new(),
+            has_intensity: false,
+            avg_intensity_left: 0.0,
+            avg_intensity_right: 0.0,
+            obstacles: Vec::new(),
+            clearance_width: 2.50,
+            clearance_narrowing_width: 0.0,
+            clearance_narrowing_height: 0.0,
+            clearance_height_end_shift: 0.50, // +0.50m shift at far station
+            min_height_above_rail: 0.15,
+            max_height_above_rail: 3.05,
+            max_distance_m: 52.0,
+            upward_curvature: 0.0,
+            obstacle_enabled: true,
+            is_real_coordinates: true,
+            is_coasting: false,
+            outlier_streak: 0,
+            far_anchor_active: false,
+            timing_rail_ms: 0.0,
+            timing_obstacles_ms: 0.0,
+            timing_total_ms: 0.0,
+        };
+
+        let strips = res.shapecast_wireframe_3d();
+        assert!(!strips.is_empty());
+
+        let line_bl = &strips[0];
+        let line_tl = &strips[2];
+
+        // Near station (x = 2.0m, t = 0.0)
+        let pt_near_bl = line_bl.first().unwrap();
+        let pt_near_tl = line_tl.first().unwrap();
+        // Near bottom: z_surf (-1.0) + min_h (0.15) = -0.85
+        assert!(
+            (pt_near_bl[2] - (-0.85)).abs() < 1e-3,
+            "Near bottom should be -0.85, got {}",
+            pt_near_bl[2]
+        );
+        // Near top: z_surf (-1.0) + max_h (3.05) = +2.05
+        assert!(
+            (pt_near_tl[2] - 2.05).abs() < 1e-3,
+            "Near top should be 2.05, got {}",
+            pt_near_tl[2]
+        );
+
+        // Far station (x = 52.0m, t = 1.0)
+        let pt_far_bl = line_bl.last().unwrap();
+        let pt_far_tl = line_tl.last().unwrap();
+        // Far bottom: -0.85 + 0.50 = -0.35
+        assert!(
+            (pt_far_bl[2] - (-0.35)).abs() < 1e-3,
+            "Far bottom should be lifted by 0.50m to -0.35, got {}",
+            pt_far_bl[2]
+        );
+        // Far top: 2.05 + 0.50 = 2.55
+        assert!(
+            (pt_far_tl[2] - 2.55).abs() < 1e-3,
+            "Far top should be lifted by 0.50m to 2.55, got {}",
+            pt_far_tl[2]
+        );
+    }
 }

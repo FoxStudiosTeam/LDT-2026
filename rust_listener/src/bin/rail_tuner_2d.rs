@@ -1018,6 +1018,7 @@ pub struct RailTuner2DApp {
     clearance_width: f32,
     clearance_narrowing_width: f32,
     clearance_narrowing_height: f32,
+    clearance_height_end_shift: f32,
     min_height_above_rail: f32,
     max_height_above_rail: f32,
     min_points: usize,
@@ -1090,6 +1091,7 @@ impl RailTuner2DApp {
             clearance_width: detector.obstacle_config.clearance_width,
             clearance_narrowing_width: detector.obstacle_config.clearance_narrowing_width,
             clearance_narrowing_height: detector.obstacle_config.clearance_narrowing_height,
+            clearance_height_end_shift: detector.obstacle_config.clearance_height_end_shift,
             min_height_above_rail: detector.obstacle_config.min_height_above_rail,
             max_height_above_rail: detector.obstacle_config.max_height_above_rail,
             min_points: detector.obstacle_config.min_points,
@@ -1184,6 +1186,7 @@ impl RailTuner2DApp {
         self.detector.obstacle_config.upward_curvature = self.upward_curvature;
         self.detector.obstacle_config.clearance_narrowing_width = self.clearance_narrowing_width;
         self.detector.obstacle_config.clearance_narrowing_height = self.clearance_narrowing_height;
+        self.detector.obstacle_config.clearance_height_end_shift = self.clearance_height_end_shift;
         self.detector.obstacle_config.cluster_depth_thresh = self.cluster_depth_thresh;
         self.detector.obstacle_config.temporal_tracking_enabled = self.temporal_tracking_enabled;
         self.detector.obstacle_config.min_hits_for_critical = self.min_hits_for_critical;
@@ -1515,6 +1518,7 @@ impl eframe::App for RailTuner2DApp {
                              detector.obstacle_config.upward_curvature = {:.5};\n\
                              detector.obstacle_config.clearance_narrowing_width = {:.4};\n\
                              detector.obstacle_config.clearance_narrowing_height = {:.4};\n\
+                             detector.obstacle_config.clearance_height_end_shift = {:.3};\n\
                              detector.obstacle_config.cluster_depth_thresh = {:.2};\n\
                              detector.obstacle_config.temporal_tracking_enabled = {};\n\
                              detector.obstacle_config.min_hits_for_critical = {};\n\
@@ -1550,6 +1554,7 @@ impl eframe::App for RailTuner2DApp {
                             self.upward_curvature,
                             self.clearance_narrowing_width,
                             self.clearance_narrowing_height,
+                            self.clearance_height_end_shift,
                             self.cluster_depth_thresh,
                             self.temporal_tracking_enabled,
                             self.min_hits_for_critical,
@@ -1888,6 +1893,22 @@ impl eframe::App for RailTuner2DApp {
                                             format!("{:.3} (-{:.2}m @50m)", val, narr_50m)
                                         }),
                                 )
+                                .changed();
+
+                            ui.label("Narrowing Height End Shift (m):");
+                            param_changed |= ui
+                                .add(
+                                    egui::Slider::new(&mut self.clearance_height_end_shift, -2.0..=2.0)
+                                        .step_by(0.05)
+                                        .custom_formatter(|val, _| {
+                                            if val.abs() < 1e-4 {
+                                                "0.00 m (flat)".to_string()
+                                            } else {
+                                                format!("{:+0.2} m @{:.0}m", val, self.max_distance_m)
+                                            }
+                                        }),
+                                )
+                                .on_hover_text("Вертикальный сдвиг (Z) высотного габарита на дальней дистанции (+ вверх, - вниз)")
                                 .changed();
 
                             ui.label("Min Height Above Rail (m):");

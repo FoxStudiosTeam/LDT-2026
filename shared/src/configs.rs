@@ -164,8 +164,9 @@ impl Into<RailTrackDetector> for DetectionPreset {
                 detector.obstacle_config.max_distance_m = 50.0;
                 detector.obstacle_config.depth_diff_thresh = 0.25;
                 detector.obstacle_config.upward_curvature = 0.00200;
-                detector.obstacle_config.clearance_narrowing_width = 0.0020;
+                detector.obstacle_config.clearance_narrowing_width = 0.0060;
                 detector.obstacle_config.clearance_narrowing_height = 0.0090;
+                detector.obstacle_config.clearance_height_end_shift = -0.200;
                 detector.obstacle_config.cluster_depth_thresh = 0.20;
                 detector.obstacle_config.temporal_tracking_enabled = true;
                 detector.obstacle_config.min_hits_for_critical = 2;
