@@ -30,7 +30,7 @@ fn main() {
         "Starting detect_with_raw with row_end_pct = {}",
         detector.row_end_pct
     );
-    let res = detector.detect_with_raw(&active_ri, Some(&raw_ri), 0);
+    let res = detector.detect_with_raw(&active_ri, Some(&raw_ri),None, 0);
     match res {
         Some(r) => {
             println!(

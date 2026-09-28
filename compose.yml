@@ -1,29 +1,44 @@
 services:
   # 1. Сервис плеера датасета через ROS2 (проигрывает баг в цикле)
-  ros2_dataset_player:
+#  ros2_dataset_player:
+#    build:
+#      context: .
+#      dockerfile: ./dataset/Dockerfile
+#    container_name: ros2_dataset_player
+#    network_mode: "host"
+#    ipc: "host"
+#    shm_size: '2gb'
+#    ulimits:
+#      nofile:
+#        soft: 1024
+#        hard: 65535
+#    env_file:
+#      - .env
+#    environment:
+#      - ROS_DOMAIN_ID=42
+#      - ROS_LOCALHOST_ONLY=1
+#    volumes:
+#      - bag_data:/app/dataset:ro
+#    command: >
+#      bash -c "
+#        echo '► [DATASET] Поехали!' &&
+#        ros2 bag play /app/dataset/cloud_with_fake_obj --loop --read-ahead-queue-size 30
+#      "
+  ros2_stream_player:
     build:
       context: .
-      dockerfile: ./dataset/Dockerfile
-    container_name: ros2_dataset_player
+      dockerfile: ./bag_player/Dockerfile
+    container_name: ros2_stream_player
     network_mode: "host"
     ipc: "host"
-    shm_size: '2gb'
-    ulimits:
-      nofile:
-        soft: 1024
-        hard: 65535
-    env_file:
-      - .env
     environment:
       - ROS_DOMAIN_ID=42
       - ROS_LOCALHOST_ONLY=1
-    volumes:
-      - bag_data:/app/dataset:ro
-    command: >
-      bash -c "
-        echo '► [DATASET] Поехали!' &&
-        ros2 bag play /app/dataset/cloud_with_fake_obj --loop --read-ahead-queue-size 30
-      "
+    env_file:
+      - .env
+    command: [ "--server" ]
+    depends_on:
+      - rust_viewer
 
   # 2. Rust-приложение детекции рельсов и препятствий + Rerun + публикация в /rail/error
   rust_viewer:

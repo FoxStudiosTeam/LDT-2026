@@ -63,7 +63,7 @@ fn test_file(path_str: &str) {
                 } else {
                     ri.clone()
                 };
-                if let Some(res) = detector.detect_with_raw(&active_ri, Some(&ri), frame_idx) {
+                if let Some(res) = detector.detect_with_raw(&active_ri, Some(&ri), None, frame_idx) {
                     let crit = res.obstacles.iter().filter(|o| o.is_critical).count();
                     let warn = res.obstacles.len() - crit;
                     if crit > 0 || warn > 0 {
