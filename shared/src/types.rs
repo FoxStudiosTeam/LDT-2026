@@ -42,14 +42,13 @@ pub fn is_zero_point(x: f32, y: f32, z: f32) -> bool {
     x.abs() <= 0.005 && y.abs() <= 0.005 && z.abs() <= 0.005
 }
 
-
 #[repr(C)]
-pub struct CudaArray<const SIZE: usize, T : Copy> {
+pub struct CudaArray<const SIZE: usize, T: Copy> {
     pub ptr: *mut T,
     pub length: usize,
 }
 
-impl<const SIZE: usize, T : Copy> CudaArray<SIZE, T> {
+impl<const SIZE: usize, T: Copy> CudaArray<SIZE, T> {
     pub fn get(&self, index: usize) -> Option<T> {
         if index >= self.length || self.ptr.is_null() {
             return None;
@@ -92,10 +91,10 @@ impl<const SIZE: usize, T : Copy> CudaArray<SIZE, T> {
     }
 }
 
-unsafe impl<const SIZE: usize, T : Copy> Send for CudaArray<SIZE, T> {}
-unsafe impl<const SIZE: usize, T : Copy> Sync for CudaArray<SIZE, T> {}
+unsafe impl<const SIZE: usize, T: Copy> Send for CudaArray<SIZE, T> {}
+unsafe impl<const SIZE: usize, T: Copy> Sync for CudaArray<SIZE, T> {}
 
-impl<const SIZE: usize, T : Copy> Deref for CudaArray<SIZE, T> {
+impl<const SIZE: usize, T: Copy> Deref for CudaArray<SIZE, T> {
     type Target = [T];
 
     fn deref(&self) -> &Self::Target {
@@ -107,7 +106,7 @@ impl<const SIZE: usize, T : Copy> Deref for CudaArray<SIZE, T> {
     }
 }
 
-impl<const SIZE: usize, T : Copy> DerefMut for CudaArray<SIZE, T> {
+impl<const SIZE: usize, T: Copy> DerefMut for CudaArray<SIZE, T> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         if self.ptr.is_null() {
@@ -254,7 +253,10 @@ impl fmt::Display for ProcessingQueue {
 }
 
 impl<const SIZE: usize> PointCloud<SIZE> {
-    pub fn iter(&self, queue: ProcessingQueue) -> impl Iterator<Item = (&f32, &f32, &f32, &f32, &u16)> {
+    pub fn iter(
+        &self,
+        queue: ProcessingQueue,
+    ) -> impl Iterator<Item = (&f32, &f32, &f32, &f32, &u16)> {
         let len = self.len(queue);
         let x_iter = self.x[queue][..len].iter();
         let y_iter = self.y[queue][..len].iter();
@@ -279,14 +281,22 @@ impl<const SIZE: usize> PointCloud<SIZE> {
     #[inline(always)]
     pub fn get_point(&self, queue: ProcessingQueue, index: usize) -> Option<(f32, f32, f32)> {
         if index < self.len(queue) {
-            Some((self.x[queue][index], self.y[queue][index], self.z[queue][index]))
+            Some((
+                self.x[queue][index],
+                self.y[queue][index],
+                self.z[queue][index],
+            ))
         } else {
             None
         }
     }
 
     #[inline(always)]
-    pub fn get_point_with_intensity(&self, queue: ProcessingQueue, index: usize) -> Option<(f32, f32, f32, f32)> {
+    pub fn get_point_with_intensity(
+        &self,
+        queue: ProcessingQueue,
+        index: usize,
+    ) -> Option<(f32, f32, f32, f32)> {
         if index < self.len(queue) {
             Some((
                 self.x[queue][index],

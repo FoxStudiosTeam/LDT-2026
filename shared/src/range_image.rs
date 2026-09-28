@@ -653,65 +653,6 @@ impl RangeImage {
         }
     }
 
-    /// Построение карты глубины через сферическую проекцию (для произвольных / неорганизованных облаков).
-    /// Вычисляет сферическую проекцию на 2D сетку `[height, width]`.
-    /// При конфликтах нескольких точек в одном пикселе сохраняется минимальная глубина (ближайшая поверхность).
-    pub fn from_point_cloud(
-        cloud: &AppPointCloud,
-        queue: ProcessingQueue,
-        config: &RangeImageConfig,
-    ) -> Self {
-        let width = config.width;
-        let height = config.height;
-        let mut image = Self::new(width, height);
-
-        let total_fov_v = config.fov_up_rad - config.fov_down_rad;
-        if total_fov_v <= 0.0 || width == 0 || height == 0 {
-            return image;
-        }
-
-        let _fov_v_inv = 1.0 / total_fov_v;
-        let two_pi = 2.0 * std::f32::consts::PI;
-
-        for (i, (&x, &y, &z, &intensity, &r)) in cloud.iter(queue).enumerate() {
-            let r2 = x * x + y * y + z * z;
-            if r2 < config.min_range_m * config.min_range_m
-                || r2 > config.max_range_m * config.max_range_m
-            {
-                continue;
-            }
-
-            let range = r2.sqrt();
-            let _pitch = (z / range).clamp(-1.0, 1.0).asin();
-            let yaw = fast_atan2(y, x); // [-PI, PI], 0 = вперёд по оси X
-
-            // Проекция по вертикали: pitch -> [0..height-1]
-            // pitch = fov_up -> row 0 (верх), pitch = fov_down -> row height-1 (низ)
-            let _vertical_geometry = Pandar128VerticalGeometry::new();
-
-            let row = r as usize;
-
-            if row >= height {
-                continue;
-            }
-
-            // Проекция по горизонтали: yaw -> [0..width-1]
-            // yaw = 0 (вперёд) -> центр изображения (width / 2)
-            let h_norm = (yaw + std::f32::consts::PI) / two_pi;
-            let col = ((h_norm * (width as f32)).floor() as usize).min(width - 1);
-
-            let idx = row * width + col;
-            let current = image.data[idx];
-            if current == 0.0 || range < current {
-                image.data[idx] = range;
-                image.intensity[idx] = intensity;
-                image.point_indices[idx] = i as u32;
-            }
-        }
-
-        image
-    }
-
     /// Число валидных (ненулевых) пикселей глубины
     pub fn valid_pixels_count(&self) -> usize {
         self.data.iter().filter(|&&v| v > 0.0).count()

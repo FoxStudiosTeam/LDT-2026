@@ -78,7 +78,6 @@ pub async fn entry(
             let compute_start = std::time::Instant::now();
             let (
                 timestamp_ns,
-                ri,
                 crop_raw,
                 active_ri,
                 geo,
@@ -136,7 +135,6 @@ pub async fn entry(
                 let detect_dur = t_detect.elapsed();
                 (
                     timestamp_ns,
-                    ri,
                     crop_raw,
                     active_ri,
                     geo,
