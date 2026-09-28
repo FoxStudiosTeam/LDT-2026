@@ -874,7 +874,7 @@ impl DebugStream for RecordingStream {
                     .with_radii([Radius::new_ui_points(1.2)]),
             );
 
-            // 5. Детектированные точки
+            // 5. Детектированные точки (Центр, Левый и Правый рельс)
             let pts_c: Vec<[f32; 3]> = r
                 .points
                 .iter()
@@ -885,6 +885,30 @@ impl DebugStream for RecordingStream {
                 &Points3D::new(pts_c)
                     .with_colors([Color::from_rgb(255, 255, 50)])
                     .with_radii([Radius::new_ui_points(2.2)]),
+            );
+
+            let pts_l: Vec<[f32; 3]> = r
+                .points
+                .iter()
+                .map(|p| [p.x_left, p.y_left, p.z_left])
+                .collect();
+            let _ = self.log(
+                "tracks_ort/3d/points_left",
+                &Points3D::new(pts_l)
+                    .with_colors([Color::from_rgb(255, 170, 0)])
+                    .with_radii([Radius::new_ui_points(2.5)]),
+            );
+
+            let pts_r: Vec<[f32; 3]> = r
+                .points
+                .iter()
+                .map(|p| [p.x_right, p.y_right, p.z_right])
+                .collect();
+            let _ = self.log(
+                "tracks_ort/3d/points_right",
+                &Points3D::new(pts_r)
+                    .with_colors([Color::from_rgb(255, 90, 160)])
+                    .with_radii([Radius::new_ui_points(2.5)]),
             );
 
             // 6. Экстраполяция (фиолетовый)

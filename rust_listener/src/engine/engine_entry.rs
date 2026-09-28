@@ -93,6 +93,7 @@ pub async fn entry(
                 warp_dur,
                 detect_dur,
                 ort_dur,
+                t_rerun
             ) = {
                 let point_cloud = point_cloud_lock.read().expect("Mutex poisoned");
                 let number = ProcessingQueue::READ;
@@ -125,7 +126,7 @@ pub async fn entry(
                 // Параллельная детекция рельсов на двух потоках:
                 // Метод 1: Step-based детектор по Range Image
                 // Метод 2: Ортографический детектор по сырому облаку (AppPointCloud) и кольцам (RailOrt)
-                let ((bent_result, detect_dur), (ort_result, ort_dur)) = rayon::join(
+                let ((bent_result, detect_dur), (cropped_tunnel, ort_result, ort_dur)) = rayon::join(
                     || {
                         let t_detect = Instant::now();
                         let res = {
@@ -146,6 +147,19 @@ pub async fn entry(
                     },
                     || {
                         let t_ort = Instant::now();
+                        let mut cropped_tunnel = {
+                            let mut ort = ort_detector_lock.lock().unwrap();
+                            if ort.geometry.height != crop_raw.height
+                                || ort.geometry.width != crop_raw.width
+                            {
+                                ort.geometry = geo.clone();
+                            }
+                            // На вход принимаются PointCloud и ProcessingQueue (READ)
+                            ort.crop_tunnel_rings(
+                                &point_cloud,
+                                number
+                            )
+                        };
                         let res = {
                             let mut ort = ort_detector_lock.lock().unwrap();
                             if ort.geometry.height != crop_raw.height
@@ -154,14 +168,74 @@ pub async fn entry(
                                 ort.geometry = geo.clone();
                             }
                             // На вход принимаются PointCloud и ProcessingQueue (READ)
-                            ort.detect_from_cloud(
+                            ort.process_rings(
+                                cropped_tunnel.as_mut(),
                                 &point_cloud,
                                 number,
                                 frame_id as usize,
+                                Some(&crop_raw)
                             )
                         };
-                        (res, t_ort.elapsed())
+                        (cropped_tunnel, res, t_ort.elapsed())
                     },
+                );
+
+                // 4. Отправка в Rerun
+                let t_rerun = Instant::now();
+                recording_stream.set_time("ros_time", TimeCell::from_duration_nanos(timestamp_ns));
+                recording_stream.set_time_sequence("frame", frame_id as i64);
+
+                // ─── ОКНО 1: 3D сцена перспективного вида ───
+                let total = geo.height * geo.width;
+                let mut pts_real = Vec::with_capacity(total);
+                let mut pts_bent = Vec::with_capacity(total);
+                let mut colors = Vec::with_capacity(total);
+
+                for row in 0..geo.height {
+                    let r_off = row * geo.width;
+                    for col in 0..geo.width {
+                        let r = crop_raw.data[r_off + col];
+                        if r > 0.5 && r < 200.0 {
+                            let (x, y, z) = geo.get_point_xyz(&crop_raw, Some((&point_cloud, number)), row, col, 0.0);
+                            pts_real.push([x, y, z]);
+                            let z_bent = z + c_z * x * x;
+                            pts_bent.push([x, y, z_bent]);
+
+                            let norm = (r / 200.0).clamp(0.0, 1.0);
+                            let c = turbo_rgb(norm);
+                            colors.push(Color::from_rgb(c[0], c[1], c[2]));
+                        }
+                    }
+                }
+
+                // Истинные физические точки лидара в реальном мире:
+                let _ = recording_stream.log(
+                    "lidar/point_cloud",
+                    &Points3D::new(&pts_real)
+                        .with_colors(colors.clone())
+                        .with_radii([Radius::new_ui_points(1.2)]),
+                );
+
+                // ─── ОКНО 2: 3D сцена ортографического вида (Обрезанный тоннель) ───
+                let total_cropped: usize = cropped_tunnel.iter().map(|r| r.len()).sum();
+                let mut pts_tunnel = Vec::with_capacity(total_cropped);
+                let mut colors_tunnel = Vec::with_capacity(total_cropped);
+
+                for pt in cropped_tunnel.iter().flatten() {
+                    let (x, y, z, intensity) = pt.get_xyzi(&point_cloud, number);
+                    pts_tunnel.push([-y, x, z]);
+
+                    // Нормализация интенсивности (0..100 для диффузных поверхностей тоннеля)
+                    let norm = (intensity / 100.0).clamp(0.0, 1.0);
+                    let gray = (norm.sqrt() * 255.0) as u8;
+                    colors_tunnel.push(Color::from_rgb(gray, gray, gray));
+                }
+
+                let _ = recording_stream.log(
+                    "lidar/cropped_tunnel",
+                    &Points3D::new(&pts_tunnel)
+                        .with_colors(colors_tunnel)
+                        .with_radii([Radius::new_ui_points(1.2)]),
                 );
 
                 (
@@ -176,6 +250,7 @@ pub async fn entry(
                     warp_dur,
                     detect_dur,
                     ort_dur,
+                    t_rerun
                 )
             }; // <--- read-lock освобожден!
 
@@ -186,47 +261,11 @@ pub async fn entry(
                 r.restore_real_coordinates();
             }
 
-            // 4. Отправка в Rerun
-            let t_rerun = Instant::now();
-            recording_stream.set_time("ros_time", TimeCell::from_duration_nanos(timestamp_ns));
-            recording_stream.set_time_sequence("frame", frame_id as i64);
-
-            // ─── ОКНО 1: 3D сцена ───
-            let total = geo.height * geo.width;
-            let mut pts_real = Vec::with_capacity(total);
-            let mut pts_bent = Vec::with_capacity(total);
-            let mut colors = Vec::with_capacity(total);
-
-            for row in 0..geo.height {
-                let r_off = row * geo.width;
-                for col in 0..geo.width {
-                    let r = crop_raw.data[r_off + col];
-                    if r > 0.5 && r < 200.0 {
-                        let (x, y, z) = geo.row_col_range_to_xyz(row, col, r);
-                        pts_real.push([x, y, z]);
-                        let z_bent = z + c_z * x * x;
-                        pts_bent.push([x, y, z_bent]);
-
-                        let norm = (r / 200.0).clamp(0.0, 1.0);
-                        let c = turbo_rgb(norm);
-                        colors.push(Color::from_rgb(c[0], c[1], c[2]));
-                    }
-                }
-            }
-
-            // Истинные физические точки лидара в реальном мире:
-            let _ = recording_stream.log(
-                "lidar/point_cloud",
-                &Points3D::new(&pts_real)
-                    .with_colors(colors.clone())
-                    .with_radii([Radius::new_ui_points(1.2)]),
-            );
-
             // 3D рельсы МЕТОД 1: RangeImage (зеленый/бирюзовый/оранжевый)
             let _ = recording_stream.log_rail_detection(real_result.as_ref());
 
             // 3D рельсы МЕТОД 2: RailOrt (золотистый/янтарный/розовый)
-            recording_stream.log_ort_detection_3d(ort_result.as_ref());
+            let _ = recording_stream.log_ort_detection_3d(ort_res.as_ref());
 
             // ─── ОКНО 2: 2D Карта глубины, интенсивности, путей и Shapecast ───
             let _ = recording_stream.log_rail_detection_2d(&active_ri, &geo, bent_result.as_ref());
@@ -329,7 +368,7 @@ pub async fn entry(
                 None => "-".to_string(),
             };
 
-            let ort_str = match &ort_result {
+            let ort_str = match &ort_res {
                 Some(r) => format!(
                     "gauge: {:.3}m, R: {:.1}m ({})",
                     r.gauge, r.turn_radius, r.turn_direction
