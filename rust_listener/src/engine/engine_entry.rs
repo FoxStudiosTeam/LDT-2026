@@ -210,13 +210,15 @@ pub async fn entry(
 
             let (obs_str, error_msg_json) = match &real_result {
                 Some(r) => {
-                    let num_crit = r.obstacles.iter().filter(|o| o.is_critical).count();
-                    let num_warn = r.obstacles.len() - num_crit;
+                    let num_crit = r.obstacles.iter().filter(|o| o.status == shared::rail_detection::ObstacleStatus::Critical).count();
+                    let num_warn = r.obstacles.iter().filter(|o| o.status == shared::rail_detection::ObstacleStatus::ClearanceWarning).count();
+                    let num_unlikely = r.obstacles.iter().filter(|o| o.status == shared::rail_detection::ObstacleStatus::Unlikely).count();
 
                     let (desc, err_json) = if num_crit > 0 || num_warn > 0 {
                         let closest = r
                             .obstacles
                             .iter()
+                            .filter(|o| o.status != shared::rail_detection::ObstacleStatus::Unlikely)
                             .map(|o| o.distance_along_track)
                             .fold(f32::INFINITY, f32::min);
 
@@ -244,6 +246,7 @@ pub async fn entry(
                             "timestamp_ns": timestamp_ns,
                             "critical_count": num_crit,
                             "warning_count": num_warn,
+                            "unlikely_count": num_unlikely,
                             "total_obstacles": r.obstacles.len(),
                             "closest_distance_m": closest,
                             "gauge": r.gauge,
@@ -255,6 +258,9 @@ pub async fn entry(
                                 format!("WARNING: {} obstacle(s) inside clearance envelope! Closest at {:.2}m", num_warn, closest)
                             },
                             "obstacles": r.obstacles.iter().map(|o| json!({
+                                "id": o.id,
+                                "status": format!("{:?}", o.status),
+                                "hits": o.hits,
                                 "distance_along_track": o.distance_along_track,
                                 "lateral_offset": o.lateral_offset,
                                 "height_above_rail": o.height_above_rail,
@@ -268,6 +274,11 @@ pub async fn entry(
                         });
 
                         (log_prefix, Some(payload.to_string()))
+                    } else if num_unlikely > 0 {
+                        (
+                            format!(" | ℹ️ {} unconfirmed single obstacle hit(s)", num_unlikely),
+                            None,
+                        )
                     } else {
                         (" | 🟢 CLEAR TRACK".to_string(), None)
                     };

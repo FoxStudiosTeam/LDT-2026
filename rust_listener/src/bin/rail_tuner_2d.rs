@@ -713,12 +713,12 @@ impl EguiRangePainter {
                 }
             }
 
-            // 7. Detected obstacles 2D bounding boxes (Red = Critical on-track, Amber = Clearance intrusion)
+            // 7. Detected obstacles 2D bounding boxes (Red = Critical on-track, Amber = Clearance intrusion, Gray = Unlikely single hit)
             for o in &r.obstacles {
-                let col = if o.is_critical {
-                    [255, 30, 30] // Red: in-gauge threat
-                } else {
-                    [255, 170, 0] // Amber: clearance envelope intrusion
+                let col = match o.status {
+                    shared::rail_detection::ObstacleStatus::Critical => [255, 30, 30], // Red: confirmed in-gauge threat
+                    shared::rail_detection::ObstacleStatus::ClearanceWarning => [255, 170, 0], // Amber: clearance envelope intrusion
+                    shared::rail_detection::ObstacleStatus::Unlikely => [160, 160, 160], // Gray: single detection / unlikely
                 };
                 let x0 = (o.bbox_2d[0] * self.scale) as i32;
                 let y0 = (o.bbox_2d[1] * self.scale) as i32;
@@ -727,7 +727,11 @@ impl EguiRangePainter {
 
                 draw_rect_rgb(&mut rgb, out_w, out_h, x0, y0, x1, y1, col, 2);
 
-                // Corner bracket accents (White) for high visibility against turbo background
+                // Corner bracket accents: White for Critical/Clearance, Muted Gray for Unlikely
+                let accent_col = match o.status {
+                    shared::rail_detection::ObstacleStatus::Unlikely => [180, 180, 180],
+                    _ => [255, 255, 255],
+                };
                 let c_len = (6 * self.scale as i32 / 3)
                     .max(4)
                     .min((x1 - x0).abs() / 2)
@@ -739,7 +743,7 @@ impl EguiRangePainter {
                         out_w,
                         out_h,
                         &[(x0, y0), (x0 + c_len, y0)],
-                        [255, 255, 255],
+                        accent_col,
                         2,
                     );
                     draw_line_rgb(
@@ -747,7 +751,7 @@ impl EguiRangePainter {
                         out_w,
                         out_h,
                         &[(x0, y0), (x0, y0 + c_len)],
-                        [255, 255, 255],
+                        accent_col,
                         2,
                     );
                     // Top-right
@@ -756,7 +760,7 @@ impl EguiRangePainter {
                         out_w,
                         out_h,
                         &[(x1, y0), (x1 - c_len, y0)],
-                        [255, 255, 255],
+                        accent_col,
                         2,
                     );
                     draw_line_rgb(
@@ -764,7 +768,7 @@ impl EguiRangePainter {
                         out_w,
                         out_h,
                         &[(x1, y0), (x1, y0 + c_len)],
-                        [255, 255, 255],
+                        accent_col,
                         2,
                     );
                     // Bottom-left
@@ -773,7 +777,7 @@ impl EguiRangePainter {
                         out_w,
                         out_h,
                         &[(x0, y1), (x0 + c_len, y1)],
-                        [255, 255, 255],
+                        accent_col,
                         2,
                     );
                     draw_line_rgb(
@@ -781,7 +785,7 @@ impl EguiRangePainter {
                         out_w,
                         out_h,
                         &[(x0, y1), (x0, y1 - c_len)],
-                        [255, 255, 255],
+                        accent_col,
                         2,
                     );
                     // Bottom-right
@@ -790,7 +794,7 @@ impl EguiRangePainter {
                         out_w,
                         out_h,
                         &[(x1, y1), (x1 - c_len, y1)],
-                        [255, 255, 255],
+                        accent_col,
                         2,
                     );
                     draw_line_rgb(
@@ -798,13 +802,13 @@ impl EguiRangePainter {
                         out_w,
                         out_h,
                         &[(x1, y1), (x1, y1 - c_len)],
-                        [255, 255, 255],
+                        accent_col,
                         2,
                     );
                 }
 
-                // If critical, fill top 3-pixel badge
-                if o.is_critical {
+                // If critical, fill top 3-pixel badge in Red
+                if o.status == shared::rail_detection::ObstacleStatus::Critical {
                     for ty in y0..=(y0 + 3).min(y1) {
                         for tx in x0..=x1 {
                             if tx >= 0 && (tx as usize) < out_w && ty >= 0 && (ty as usize) < out_h
@@ -1021,6 +1025,11 @@ pub struct RailTuner2DApp {
     max_distance_m: f32,
     depth_diff_thresh: f32,
     upward_curvature: f32,
+    temporal_tracking_enabled: bool,
+    min_hits_for_critical: usize,
+    max_missed_frames: usize,
+    track_match_dist_m: f32,
+    track_match_lateral_m: f32,
 
     // Rerun
     rec_stream: Option<RecordingStream>,
@@ -1088,6 +1097,11 @@ impl RailTuner2DApp {
             max_distance_m: detector.obstacle_config.max_distance_m,
             depth_diff_thresh: detector.obstacle_config.depth_diff_thresh,
             upward_curvature: detector.obstacle_config.upward_curvature,
+            temporal_tracking_enabled: detector.obstacle_config.temporal_tracking_enabled,
+            min_hits_for_critical: detector.obstacle_config.min_hits_for_critical,
+            max_missed_frames: detector.obstacle_config.max_missed_frames,
+            track_match_dist_m: detector.obstacle_config.track_match_dist_m,
+            track_match_lateral_m: detector.obstacle_config.track_match_lateral_m,
 
             rec_stream,
             stream_to_rerun: true,
@@ -1171,6 +1185,11 @@ impl RailTuner2DApp {
         self.detector.obstacle_config.clearance_narrowing_width = self.clearance_narrowing_width;
         self.detector.obstacle_config.clearance_narrowing_height = self.clearance_narrowing_height;
         self.detector.obstacle_config.cluster_depth_thresh = self.cluster_depth_thresh;
+        self.detector.obstacle_config.temporal_tracking_enabled = self.temporal_tracking_enabled;
+        self.detector.obstacle_config.min_hits_for_critical = self.min_hits_for_critical;
+        self.detector.obstacle_config.max_missed_frames = self.max_missed_frames;
+        self.detector.obstacle_config.track_match_dist_m = self.track_match_dist_m;
+        self.detector.obstacle_config.track_match_lateral_m = self.track_match_lateral_m;
     }
 
     fn process_current_frame(&mut self) {
@@ -1497,6 +1516,11 @@ impl eframe::App for RailTuner2DApp {
                              detector.obstacle_config.clearance_narrowing_width = {:.4};\n\
                              detector.obstacle_config.clearance_narrowing_height = {:.4};\n\
                              detector.obstacle_config.cluster_depth_thresh = {:.2};\n\
+                             detector.obstacle_config.temporal_tracking_enabled = {};\n\
+                             detector.obstacle_config.min_hits_for_critical = {};\n\
+                             detector.obstacle_config.max_missed_frames = {};\n\
+                             detector.obstacle_config.track_match_dist_m = {:.2};\n\
+                             detector.obstacle_config.track_match_lateral_m = {:.2};\n\
                              detector.temporal_jump_reject_enabled = {};\n\
                              detector.max_interframe_jump_m = {:.3};\n\
                              detector.max_outlier_frames = {};\n\
@@ -1527,6 +1551,11 @@ impl eframe::App for RailTuner2DApp {
                             self.clearance_narrowing_width,
                             self.clearance_narrowing_height,
                             self.cluster_depth_thresh,
+                            self.temporal_tracking_enabled,
+                            self.min_hits_for_critical,
+                            self.max_missed_frames,
+                            self.track_match_dist_m,
+                            self.track_match_lateral_m,
                             self.temporal_jump_reject_enabled,
                             self.max_interframe_jump_m,
                             self.max_outlier_frames,
@@ -1728,7 +1757,7 @@ impl eframe::App for RailTuner2DApp {
                             ui.label("Extrapolation distance (m):");
                             param_changed |= ui
                                 .add(
-                                    egui::Slider::new(&mut self.extrapolate_m, 0.0..=100.0)
+                                    egui::Slider::new(&mut self.extrapolate_m, -100.0..=100.0)
                                         .step_by(1.0),
                                 )
                                 .changed();
@@ -1914,6 +1943,40 @@ impl eframe::App for RailTuner2DApp {
                                     .add(egui::Slider::new(&mut self.depth_diff_thresh, 0.10..=1.00).step_by(0.05))
                                     .changed();
                             }
+
+                            ui.separator();
+                            ui.label(egui::RichText::new("🛡️ Smart Temporal Verification (Repetitions)").strong());
+
+                            param_changed |= ui
+                                .checkbox(&mut self.temporal_tracking_enabled, "Enable Temporal Tracking")
+                                .on_hover_text("Требует повторных детекций объекта перед присвоением статуса Critical, отсекает единичные шумы")
+                                .changed();
+
+                            if self.temporal_tracking_enabled {
+                                ui.label("Min Hits for Critical:");
+                                param_changed |= ui
+                                    .add(egui::Slider::new(&mut self.min_hits_for_critical, 1..=6))
+                                    .on_hover_text("Количество повторов (1 = одиночные сразу, 2 = подряд или через одно)")
+                                    .changed();
+
+                                ui.label("Max Missed Frames Gap:");
+                                param_changed |= ui
+                                    .add(egui::Slider::new(&mut self.max_missed_frames, 0..=3))
+                                    .on_hover_text("Допустимый пропуск кадров (1 = допускает 'через одно', 0 = строго подряд)")
+                                    .changed();
+
+                                ui.label("Track Match Dist Shift (m):");
+                                param_changed |= ui
+                                    .add(egui::Slider::new(&mut self.track_match_dist_m, 0.5..=6.0).step_by(0.1))
+                                    .on_hover_text("Максимальный допустимый сдвиг по дистанции между кадрами для одного объекта")
+                                    .changed();
+
+                                ui.label("Track Match Lateral Shift (m):");
+                                param_changed |= ui
+                                    .add(egui::Slider::new(&mut self.track_match_lateral_m, 0.2..=2.0).step_by(0.05))
+                                    .on_hover_text("Максимальный допустимый боковой сдвиг между кадрами для одного объекта")
+                                    .changed();
+                            }
                         });
                 });
 
@@ -1970,14 +2033,15 @@ impl eframe::App for RailTuner2DApp {
                         ui.separator();
                         ui.heading("🚨 Obstacle Status");
 
-                        let num_crit = r.obstacles.iter().filter(|o| o.is_critical).count();
-                        let num_warn = r.obstacles.len() - num_crit;
+                        let num_crit = r.obstacles.iter().filter(|o| o.status == shared::rail_detection::ObstacleStatus::Critical).count();
+                        let num_warn = r.obstacles.iter().filter(|o| o.status == shared::rail_detection::ObstacleStatus::ClearanceWarning).count();
+                        let num_unlikely = r.obstacles.iter().filter(|o| o.status == shared::rail_detection::ObstacleStatus::Unlikely).count();
 
                         if num_crit > 0 {
                             let closest = r
                                 .obstacles
                                 .iter()
-                                .filter(|o| o.is_critical)
+                                .filter(|o| o.status == shared::rail_detection::ObstacleStatus::Critical)
                                 .map(|o| o.distance_along_track)
                                 .fold(f32::INFINITY, f32::min);
                             ui.colored_label(
@@ -1988,11 +2052,17 @@ impl eframe::App for RailTuner2DApp {
                             let closest = r
                                 .obstacles
                                 .iter()
+                                .filter(|o| o.status == shared::rail_detection::ObstacleStatus::ClearanceWarning)
                                 .map(|o| o.distance_along_track)
                                 .fold(f32::INFINITY, f32::min);
                             ui.colored_label(
                                 Color32::from_rgb(255, 170, 0),
                                 format!("⚠️ WARNING: {} IN CLEARANCE ZONE! (Closest: {:.1}m)", num_warn, closest),
+                            );
+                        } else if num_unlikely > 0 {
+                            ui.colored_label(
+                                Color32::from_rgb(160, 160, 160),
+                                format!("ℹ️ UNLIKELY: {} single detection(s) (waiting for repetition)", num_unlikely),
                             );
                         } else {
                             ui.colored_label(
@@ -2004,12 +2074,11 @@ impl eframe::App for RailTuner2DApp {
                         if !r.obstacles.is_empty() {
                             egui::ScrollArea::vertical().max_height(120.0).show(ui, |ui| {
                                 for o in &r.obstacles {
-                                    let badge_color = if o.is_critical {
-                                        Color32::RED
-                                    } else {
-                                        Color32::from_rgb(255, 170, 0)
+                                    let (badge_color, status_str) = match o.status {
+                                        shared::rail_detection::ObstacleStatus::Critical => (Color32::RED, format!("CRITICAL ({}x)", o.hits)),
+                                        shared::rail_detection::ObstacleStatus::ClearanceWarning => (Color32::from_rgb(255, 170, 0), format!("CLEARANCE ({}x)", o.hits)),
+                                        shared::rail_detection::ObstacleStatus::Unlikely => (Color32::from_rgb(160, 160, 160), "UNLIKELY (1x)".to_string()),
                                     };
-                                    let status_str = if o.is_critical { "CRITICAL" } else { "CLEARANCE" };
                                     ui.horizontal(|ui| {
                                         ui.colored_label(badge_color, format!("#{} [{}]", o.id, status_str));
                                         ui.label(format!(

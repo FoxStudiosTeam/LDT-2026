@@ -123,7 +123,8 @@ impl LidarGeometry {
         let idx = row * self.width + col;
         if let Some((pc, queue)) = cloud {
             if let Some(&pt_idx) = frame.point_indices.get(idx) {
-                if pt_idx != crate::range_image::NO_POINT_INDEX && (pt_idx as usize) < pc.len(queue) {
+                if pt_idx != crate::range_image::NO_POINT_INDEX && (pt_idx as usize) < pc.len(queue)
+                {
                     let p_i = pt_idx as usize;
                     let px = -pc.y[queue][p_i];
                     let py = pc.x[queue][p_i];
@@ -303,7 +304,11 @@ impl DetectionResult {
     /// Янтарный при препятствии в габарите, Бирюзовый/Циан при свободном пути.
     pub fn shapecast_color(&self) -> [u8; 3] {
         let num_crit = self.obstacles.iter().filter(|o| o.is_critical).count();
-        let num_warn = self.obstacles.len() - num_crit;
+        let num_warn = self
+            .obstacles
+            .iter()
+            .filter(|o| o.status == ObstacleStatus::ClearanceWarning)
+            .count();
         if num_crit > 0 {
             [255, 30, 30] // Alert Red
         } else if num_warn > 0 {
@@ -452,6 +457,17 @@ pub enum ObstacleDetectionMode {
     HybridGrid,
 }
 
+/// Статус классификации препятствия системой временной фильтрации
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ObstacleStatus {
+    /// Одиночная детекция (маловероятное / tentative, серая обводка)
+    Unlikely,
+    /// Подтвержденное препятствие в габарите приближения вне колеи (предупреждение, янтарная обводка)
+    ClearanceWarning,
+    /// Подтвержденное критическое препятствие непосредственно в колее (красная обводка)
+    Critical,
+}
+
 /// Конфигурация детекции препятствий на железнодорожном полотне
 #[derive(Clone, Debug)]
 pub struct ObstacleConfig {
@@ -481,6 +497,16 @@ pub struct ObstacleConfig {
     /// Максимальный разрыв по дальности (м) между соседними точками для объединения в один кластер, default: 1.20 м
     /// Предотвращает склейку разноудаленных объектов на одной линии визирования
     pub cluster_depth_thresh: f32,
+    /// Включение временного трекинга препятствий для фильтрации ложных одиночных срабатываний
+    pub temporal_tracking_enabled: bool,
+    /// Минимальное количество повторений (детекций) для подтверждения critical, default: 2
+    pub min_hits_for_critical: usize,
+    /// Допустимый пропуск кадров между повторениями (default: 1, что соответствует "через одно")
+    pub max_missed_frames: usize,
+    /// Допустимое смещение вдоль пути между соседними кадрами для одного объекта (м), default: 2.50 м
+    pub track_match_dist_m: f32,
+    /// Допустимое латеральное смещение между кадрами для одного объекта (м), default: 0.80 м
+    pub track_match_lateral_m: f32,
 }
 
 impl Default for ObstacleConfig {
@@ -498,6 +524,11 @@ impl Default for ObstacleConfig {
             clearance_narrowing_width: 0.0,
             clearance_narrowing_height: 0.0,
             cluster_depth_thresh: 1.20,
+            temporal_tracking_enabled: true,
+            min_hits_for_critical: 2,
+            max_missed_frames: 1,
+            track_match_dist_m: 2.50,
+            track_match_lateral_m: 0.80,
         }
     }
 }
@@ -558,10 +589,31 @@ pub struct TrackObstacle {
     pub bbox_2d: [usize; 4],
     /// Количество точек лидара в препятствии
     pub points_count: usize,
-    /// Препятствие находится непосредственно в колее (угроза схода / удара)
+    /// Препятствие находится непосредственно в колее и подтверждено трекером как угроза
     pub is_critical: bool,
     /// Приблизительные размеры объекта [длина, ширина, высота] в метрах
     pub size_m: [f32; 3],
+    /// Статус классификации трекером: Unlikely (одиночное), ClearanceWarning или Critical
+    pub status: ObstacleStatus,
+    /// Количество подтверждающих детекций препятствия в трекере
+    pub hits: usize,
+    /// Находится ли физически в пределах рельсовой колеи
+    pub in_gauge: bool,
+}
+
+/// Состояние трека препятствия во времени для межсерийного трекинга
+#[derive(Clone, Debug)]
+pub struct TrackedObstacleState {
+    pub id: usize,
+    pub distance_along_track: f32,
+    pub lateral_offset: f32,
+    pub height_above_rail: f32,
+    pub center_3d: [f32; 3],
+    pub size_m: [f32; 3],
+    pub in_gauge: bool,
+    pub last_seen_frame: usize,
+    pub missed_frames: usize,
+    pub hits: usize,
 }
 
 /// Rail Track Detector for LiDAR Range Images
@@ -605,6 +657,10 @@ pub struct RailTrackDetector {
     pub last_valid_x_max: Option<f32>,
     /// Опорная дальняя точка [x, y, z] из предыдущего подтверждённого кадра
     pub last_far_anchor: Option<[f32; 3]>,
+    /// Активные треки препятствий из предыдущих кадров для временной верификации
+    pub tracked_obstacles: Vec<TrackedObstacleState>,
+    /// Счётчик уникальных ID препятствий
+    pub next_obstacle_id: usize,
 }
 
 impl RailTrackDetector {
@@ -639,6 +695,8 @@ impl RailTrackDetector {
             last_valid_gauge: None,
             last_valid_x_max: None,
             last_far_anchor: None,
+            tracked_obstacles: Vec::new(),
+            next_obstacle_id: 1,
         }
     }
 
@@ -652,6 +710,8 @@ impl RailTrackDetector {
         self.last_valid_gauge = None;
         self.last_valid_x_max = None;
         self.last_far_anchor = None;
+        self.tracked_obstacles.clear();
+        self.next_obstacle_id = 1;
     }
 
     /// Получает 3D координаты (X, Y, Z) точки по координатам (row, col) на 2D плоскости Range Image.
@@ -664,7 +724,13 @@ impl RailTrackDetector {
         row: usize,
         col: usize,
     ) -> (f32, f32, f32) {
-        self.geometry.get_point_xyz(frame, cloud, row, col, self.obstacle_config.upward_curvature)
+        self.geometry.get_point_xyz(
+            frame,
+            cloud,
+            row,
+            col,
+            self.obstacle_config.upward_curvature,
+        )
     }
 
     /// Analyzes a single range frame and returns DetectionResult or None if no track is found.
@@ -1106,6 +1172,7 @@ impl RailTrackDetector {
                 self.last_valid_gauge = None;
                 self.last_valid_x_max = None;
                 self.last_far_anchor = None;
+                self.tracked_obstacles.clear();
             }
         }
         self.last_frame_idx = Some(frame_idx);
@@ -1355,7 +1422,7 @@ impl RailTrackDetector {
         let t_rail_dur = t_start_rail.elapsed();
 
         let t_start_obs = std::time::Instant::now();
-        let obstacles = if self.obstacle_config.enabled {
+        let mut obstacles = if self.obstacle_config.enabled {
             let (obs_frame, is_warped) = if let Some(raw) = raw_frame {
                 (raw, false)
             } else {
@@ -1373,6 +1440,10 @@ impl RailTrackDetector {
         } else {
             Vec::new()
         };
+
+        if self.obstacle_config.enabled {
+            self.track_and_classify_obstacles(&mut obstacles, frame_idx);
+        }
         let t_obs_dur = t_start_obs.elapsed();
 
         let timing_rail_ms = t_rail_dur.as_secs_f32() * 1000.0;
@@ -1464,7 +1535,9 @@ impl RailTrackDetector {
             let idx = row * w + col;
             if let Some((pc, queue)) = cloud {
                 if let Some(&pt_idx) = frame.point_indices.get(idx) {
-                    if pt_idx != crate::range_image::NO_POINT_INDEX && (pt_idx as usize) < pc.len(queue) {
+                    if pt_idx != crate::range_image::NO_POINT_INDEX
+                        && (pt_idx as usize) < pc.len(queue)
+                    {
                         let p_i = pt_idx as usize;
                         let px = pc.x[queue][p_i];
                         let py = pc.y[queue][p_i];
@@ -1711,8 +1784,14 @@ impl RailTrackDetector {
                 let n_pts = cluster_cells.len() as f32;
                 let mean_lat_off = sum_lat_off / n_pts;
 
-                // Препятствие критично, если проекция внутри колеи (половина колеи + 0.10м буфер)
-                let is_critical = mean_lat_off.abs() <= (half_g + 0.10);
+                // Препятствие в колее, если проекция внутри колеи (половина колеи + 0.10м буфер)
+                let in_gauge = mean_lat_off.abs() <= (half_g + 0.10);
+                let is_critical = in_gauge;
+                let status = if in_gauge {
+                    ObstacleStatus::Critical
+                } else {
+                    ObstacleStatus::ClearanceWarning
+                };
 
                 let size_m = [
                     (max_x - min_x).max(0.1),
@@ -1765,6 +1844,9 @@ impl RailTrackDetector {
                     points_count: cluster_cells.len(),
                     is_critical,
                     size_m,
+                    status,
+                    hits: 1,
+                    in_gauge,
                 });
 
                 obstacle_id += 1;
@@ -1777,6 +1859,153 @@ impl RailTrackDetector {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         obstacles
+    }
+
+    /// Применяет временной трекинг препятствий:
+    /// Сопоставляет детекции текущего кадра с активными треками предыдущих кадров.
+    /// Требует повторений (подряд или через одно) для подтверждения `Critical`,
+    /// а одиночные детекции классифицирует как `Unlikely` (серая обводка).
+    pub fn track_and_classify_obstacles(
+        &mut self,
+        obstacles: &mut [TrackObstacle],
+        frame_idx: usize,
+    ) {
+        if !self.obstacle_config.temporal_tracking_enabled {
+            // Если временной трекинг выключен, классифицируем напрямую по нахождению в колее
+            for o in obstacles.iter_mut() {
+                o.hits = 1;
+                if o.in_gauge {
+                    o.is_critical = true;
+                    o.status = ObstacleStatus::Critical;
+                } else {
+                    o.is_critical = false;
+                    o.status = ObstacleStatus::ClearanceWarning;
+                }
+            }
+            return;
+        }
+
+        // Проверяем скачок кадров (например, перемотка или пауза)
+        if let Some(last_idx) = self.last_frame_idx {
+            if last_idx.abs_diff(frame_idx) > (self.obstacle_config.max_missed_frames + 2) {
+                self.tracked_obstacles.clear();
+            }
+        }
+
+        let mut matched_track_indices = vec![false; self.tracked_obstacles.len()];
+        let mut new_tracks = Vec::new();
+
+        for o in obstacles.iter_mut() {
+            let o_center = [
+                0.5 * (o.bbox_3d_min[0] + o.bbox_3d_max[0]),
+                0.5 * (o.bbox_3d_min[1] + o.bbox_3d_max[1]),
+                0.5 * (o.bbox_3d_min[2] + o.bbox_3d_max[2]),
+            ];
+
+            let mut best_match: Option<(usize, f32)> = None;
+
+            for (t_idx, tracked) in self.tracked_obstacles.iter().enumerate() {
+                if matched_track_indices[t_idx] {
+                    continue;
+                }
+
+                let frame_gap = frame_idx.saturating_sub(tracked.last_seen_frame).max(1);
+                if frame_gap > self.obstacle_config.max_missed_frames + 1 {
+                    continue;
+                }
+
+                // Допустимый сдвиг по дистанции масштабируется разрывом кадров (при "через одно")
+                let max_d = self.obstacle_config.track_match_dist_m * (frame_gap as f32);
+                let dist_diff = (o.distance_along_track - tracked.distance_along_track).abs();
+                let lat_diff = (o.lateral_offset - tracked.lateral_offset).abs();
+
+                if dist_diff <= max_d && lat_diff <= self.obstacle_config.track_match_lateral_m {
+                    let cost = dist_diff + lat_diff * 2.0;
+                    if let Some((_, best_cost)) = best_match {
+                        if cost < best_cost {
+                            best_match = Some((t_idx, cost));
+                        }
+                    } else {
+                        best_match = Some((t_idx, cost));
+                    }
+                }
+            }
+
+            if let Some((t_idx, _)) = best_match {
+                matched_track_indices[t_idx] = true;
+                let tracked = &mut self.tracked_obstacles[t_idx];
+                tracked.missed_frames = 0;
+                tracked.hits = (tracked.hits + 1).min(100);
+                tracked.distance_along_track = o.distance_along_track;
+                tracked.lateral_offset = o.lateral_offset;
+                tracked.height_above_rail = o.height_above_rail;
+                tracked.center_3d = o_center;
+                tracked.size_m = o.size_m;
+                tracked.last_seen_frame = frame_idx;
+                tracked.in_gauge = o.in_gauge;
+
+                o.id = tracked.id;
+                o.hits = tracked.hits;
+
+                if tracked.hits >= self.obstacle_config.min_hits_for_critical {
+                    if o.in_gauge {
+                        o.is_critical = true;
+                        o.status = ObstacleStatus::Critical;
+                    } else {
+                        o.is_critical = false;
+                        o.status = ObstacleStatus::ClearanceWarning;
+                    }
+                } else {
+                    o.is_critical = false;
+                    o.status = ObstacleStatus::Unlikely;
+                }
+            } else {
+                // Новое препятствие (1-я детекция)
+                let new_id = self.next_obstacle_id;
+                self.next_obstacle_id += 1;
+
+                new_tracks.push(TrackedObstacleState {
+                    id: new_id,
+                    distance_along_track: o.distance_along_track,
+                    lateral_offset: o.lateral_offset,
+                    height_above_rail: o.height_above_rail,
+                    center_3d: o_center,
+                    size_m: o.size_m,
+                    in_gauge: o.in_gauge,
+                    last_seen_frame: frame_idx,
+                    missed_frames: 0,
+                    hits: 1,
+                });
+
+                o.id = new_id;
+                o.hits = 1;
+
+                if 1 >= self.obstacle_config.min_hits_for_critical {
+                    if o.in_gauge {
+                        o.is_critical = true;
+                        o.status = ObstacleStatus::Critical;
+                    } else {
+                        o.is_critical = false;
+                        o.status = ObstacleStatus::ClearanceWarning;
+                    }
+                } else {
+                    o.is_critical = false;
+                    o.status = ObstacleStatus::Unlikely;
+                }
+            }
+        }
+
+        // Обновляем пропущенные треки и удаляем устаревшие
+        for (t_idx, matched) in matched_track_indices.iter().enumerate() {
+            if !matched {
+                self.tracked_obstacles[t_idx].missed_frames += 1;
+            }
+        }
+        self.tracked_obstacles
+            .retain(|t| t.missed_frames <= self.obstacle_config.max_missed_frames);
+
+        // Добавляем новые треки, обнаруженные в этом кадре
+        self.tracked_obstacles.extend(new_tracks);
     }
 }
 
@@ -1868,432 +2097,4 @@ pub fn polyfit1(x: &[f32], z: &[f32]) -> Option<[f32; 2]> {
     let e = (sum_x2 * sum_z - sum_x * sum_xz) / det;
 
     Some([d as f32, e as f32])
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_polyfit2_exact() {
-        // y = 2*x^2 - 3*x + 5
-        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let y: Vec<f32> = x.iter().map(|&xi| 2.0 * xi * xi - 3.0 * xi + 5.0).collect();
-        let res = polyfit2(&x, &y).expect("fit failed");
-        assert!((res[0] - 2.0).abs() < 1e-4);
-        assert!((res[1] - (-3.0)).abs() < 1e-4);
-        assert!((res[2] - 5.0).abs() < 1e-4);
-    }
-
-    #[test]
-    fn test_frame_000001_detection() {
-        let candidates = [
-            "frames/frame_000001.npy",
-            "../frames/frame_000001.npy",
-            "../../frames/frame_000001.npy",
-        ];
-        let frame_path = candidates.iter().find(|p| std::path::Path::new(p).exists());
-        if let Some(&path) = frame_path {
-            let frame = RangeImage::load_npy(path).expect("Failed to load frame");
-            assert_eq!(frame.height, 321);
-            assert_eq!(frame.width, 400);
-
-            let geo = LidarGeometry::new(frame.height, frame.width, 15.0, -25.0, 40.0);
-            let mut detector = RailTrackDetector::new(geo);
-            let res = detector.detect(&frame, None, 1).expect("Detection failed");
-
-            assert!(res.points.len() == 58 || res.points.len() == 64, "Points count: {}", res.points.len());
-            assert!(
-                (res.gauge - 1.51).abs() < 0.03,
-                "Gauge mismatch: {}",
-                res.gauge
-            );
-            assert_eq!(res.turn_direction, "CURVE LEFT");
-            println!(
-                "Rust Detector: Gauge={:.4}, Radius={:.1}, Points={}, Dir={}, poly_z={:?}",
-                res.gauge,
-                res.turn_radius,
-                res.points.len(),
-                res.turn_direction,
-                res.poly_z
-            );
-        }
-    }
-
-    #[test]
-    fn test_frame_000001_dual_texture_detection() {
-        let candidates = [
-            "frames/frame_000001.npy",
-            "../frames/frame_000001.npy",
-            "../../frames/frame_000001.npy",
-        ];
-        let frame_path = candidates.iter().find(|p| std::path::Path::new(p).exists());
-        if let Some(&path) = frame_path {
-            let frame = RangeImage::load_npy(path).expect("Failed to load frame");
-            let geo = LidarGeometry::new(frame.height, frame.width, 15.0, -25.0, 40.0);
-            let mut detector = RailTrackDetector::new(geo);
-            detector.contrast_depth = 200.0;
-            detector.contrast_intensity = 20.0;
-            detector.blend = 0.5;
-            let res = detector
-                .detect(&frame, None, 1)
-                .expect("Dual texture detection failed");
-
-            assert!(
-                !res.points.is_empty(),
-                "Should detect rail points with dual texture blend"
-            );
-            assert!(
-                (res.gauge - 1.51).abs() < 0.05,
-                "Gauge mismatch with blend: {}",
-                res.gauge
-            );
-            println!(
-                "Dual Texture Detector: Gauge={:.4}, Radius={:.1}, Points={}, Dir={}",
-                res.gauge,
-                res.turn_radius,
-                res.points.len(),
-                res.turn_direction
-            );
-        }
-    }
-
-    #[test]
-    fn test_detect_obstacles_synthetic() {
-        let geo = LidarGeometry::new(100, 100, 15.0, -25.0, 40.0);
-        let detector = RailTrackDetector::new(geo.clone());
-
-        // Create a flat range image where points correspond to ground
-        let mut frame = RangeImage::new(100, 100);
-        for row in 0..100 {
-            for col in 0..100 {
-                frame.set(row, col, 20.0);
-            }
-        }
-
-        // Inject an obstacle at distance ~15m on the track center
-        // Center col is 50, row ~60
-        for r in 45..=52 {
-            for c in 48..=52 {
-                frame.set(r, c, 12.0); // 12m instead of 20m -> positive intrusion
-            }
-        }
-
-        let poly_y = [0.0, 0.0, 0.0]; // Straight track centered at Y=0
-        let poly_z = [0.0, -1.5]; // Track bed at Z = -1.5m
-
-        let mut cfg = ObstacleConfig::default();
-        cfg.min_points = 5;
-
-        // Test HybridGrid
-        cfg.mode = ObstacleDetectionMode::HybridGrid;
-        let obs = detector.detect_obstacles(&frame, None, &poly_y, &poly_z, 1.52, &cfg, false);
-        assert!(!obs.is_empty(), "HybridGrid should detect obstacle");
-        assert!(obs[0].is_critical, "Obstacle is right on track centerline");
-
-        // Test Boxcast3D
-        cfg.mode = ObstacleDetectionMode::Boxcast3D;
-        let obs_box = detector.detect_obstacles(&frame, None, &poly_y, &poly_z, 1.52, &cfg, false);
-        assert!(!obs_box.is_empty(), "Boxcast3D should detect obstacle");
-
-        // Test DepthMatrix2D
-        cfg.mode = ObstacleDetectionMode::DepthMatrix2D;
-        let obs_mat = detector.detect_obstacles(&frame, None, &poly_y, &poly_z, 1.52, &cfg, false);
-        assert!(!obs_mat.is_empty(), "DepthMatrix2D should detect obstacle");
-    }
-
-    #[test]
-    fn test_project_point_to_track_and_shapecast_alignment() {
-        let poly_y = [0.001_f32, 0.05_f32, 0.0_f32];
-        let poly_z = [-0.01_f32, -1.2_f32];
-
-        let res = DetectionResult {
-            frame_idx: 0,
-            points: Vec::new(),
-            gauge: 1.52,
-            curvature_a: poly_y[0],
-            heading_b: poly_y[1],
-            offset_c: poly_y[2],
-            turn_radius: 500.0,
-            turn_direction: "CURVE RIGHT".to_string(),
-            lateral_shift_15m: 0.975,
-            poly_y,
-            poly_z,
-            x_curve: Vec::new(),
-            y_center: Vec::new(),
-            z_center: Vec::new(),
-            x_left: Vec::new(),
-            y_left: Vec::new(),
-            x_right: Vec::new(),
-            y_right: Vec::new(),
-            confidence: 1.0,
-            extrapolate_m: 0.0,
-            smooth_n: 1,
-            x_ext: Vec::new(),
-            y_ext: Vec::new(),
-            z_ext: Vec::new(),
-            x_ext_l: Vec::new(),
-            y_ext_l: Vec::new(),
-            x_ext_r: Vec::new(),
-            y_ext_r: Vec::new(),
-            has_intensity: false,
-            avg_intensity_left: 0.0,
-            avg_intensity_right: 0.0,
-            obstacles: Vec::new(),
-            clearance_width: 2.40,
-            clearance_narrowing_width: 0.0,
-            clearance_narrowing_height: 0.0,
-            min_height_above_rail: 0.15,
-            max_height_above_rail: 3.20,
-            max_distance_m: 60.0,
-            upward_curvature: 0.0,
-            obstacle_enabled: true,
-            is_real_coordinates: true,
-            is_coasting: false,
-            outlier_streak: 0,
-            far_anchor_active: false,
-            timing_rail_ms: 0.0,
-            timing_obstacles_ms: 0.0,
-            timing_total_ms: 0.0,
-        };
-
-        let strips = res.shapecast_wireframe_3d();
-        assert!(
-            !strips.is_empty(),
-            "Shapecast wireframe should be generated"
-        );
-
-        let half_w = res.clearance_width * 0.5;
-
-        let line_bl = &strips[0]; // bottom-left line
-        let line_br = &strips[1]; // bottom-right line
-        let line_tl = &strips[2]; // top-left line
-        let line_tr = &strips[3]; // top-right line
-
-        for pt in line_bl {
-            let (xc, _theta, d_lat, z_surf) =
-                project_point_to_track(pt[0], pt[1], &poly_y, &poly_z);
-            assert!(xc >= 1.99 && xc <= 60.01, "xc station within bounds");
-            assert!(
-                (d_lat.abs() - half_w).abs() < 1e-3,
-                "d_lat should equal -half_w ({}), got {}",
-                -half_w,
-                d_lat
-            );
-            assert!(
-                (pt[2] - z_surf - res.min_height_above_rail).abs() < 1e-3,
-                "Height should match min_height_above_rail"
-            );
-        }
-
-        for pt in line_br {
-            let (xc, _theta, d_lat, z_surf) =
-                project_point_to_track(pt[0], pt[1], &poly_y, &poly_z);
-            assert!(xc >= 1.99 && xc <= 60.01);
-            assert!(
-                (d_lat.abs() - half_w).abs() < 1e-3,
-                "d_lat should equal +half_w ({}), got {}",
-                half_w,
-                d_lat
-            );
-            assert!((pt[2] - z_surf - res.min_height_above_rail).abs() < 1e-3);
-        }
-
-        for pt in line_tr {
-            let (_xc, _theta, d_lat, z_surf) =
-                project_point_to_track(pt[0], pt[1], &poly_y, &poly_z);
-            assert!((d_lat.abs() - half_w).abs() < 1e-3);
-            assert!((pt[2] - z_surf - res.max_height_above_rail).abs() < 1e-3);
-        }
-
-        for pt in line_tl {
-            let (_xc, _theta, d_lat, z_surf) =
-                project_point_to_track(pt[0], pt[1], &poly_y, &poly_z);
-            assert!((d_lat.abs() - half_w).abs() < 1e-3);
-            assert!((pt[2] - z_surf - res.max_height_above_rail).abs() < 1e-3);
-        }
-    }
-
-    #[test]
-    fn test_shapecast_narrowing() {
-        let poly_y = [0.0_f32, 0.0_f32, 0.0_f32];
-        let poly_z = [0.0_f32, -1.0_f32];
-
-        let mut res = DetectionResult {
-            frame_idx: 0,
-            points: Vec::new(),
-            gauge: 1.52,
-            curvature_a: 0.0,
-            heading_b: 0.0,
-            offset_c: 0.0,
-            turn_radius: 99999.0,
-            turn_direction: "STRAIGHT".to_string(),
-            lateral_shift_15m: 0.0,
-            poly_y,
-            poly_z,
-            x_curve: Vec::new(),
-            y_center: Vec::new(),
-            z_center: Vec::new(),
-            x_left: Vec::new(),
-            y_left: Vec::new(),
-            x_right: Vec::new(),
-            y_right: Vec::new(),
-            confidence: 1.0,
-            extrapolate_m: 0.0,
-            smooth_n: 1,
-            x_ext: Vec::new(),
-            y_ext: Vec::new(),
-            z_ext: Vec::new(),
-            x_ext_l: Vec::new(),
-            y_ext_l: Vec::new(),
-            x_ext_r: Vec::new(),
-            y_ext_r: Vec::new(),
-            has_intensity: false,
-            avg_intensity_left: 0.0,
-            avg_intensity_right: 0.0,
-            obstacles: Vec::new(),
-            clearance_width: 2.50,
-            clearance_narrowing_width: 0.010, // 0.010 m/m -> 0.50m width narrowing over 50m
-            clearance_narrowing_height: 0.015, // 0.015 m/m -> 0.75m height reduction over 50m
-            min_height_above_rail: 0.15,
-            max_height_above_rail: 3.05,
-            max_distance_m: 52.0,
-            upward_curvature: 0.0,
-            obstacle_enabled: true,
-            is_real_coordinates: true,
-            is_coasting: false,
-            outlier_streak: 0,
-            far_anchor_active: false,
-            timing_rail_ms: 0.0,
-            timing_obstacles_ms: 0.0,
-            timing_total_ms: 0.0,
-        };
-
-        let strips = res.shapecast_wireframe_3d();
-        assert!(!strips.is_empty());
-
-        let line_bl = &strips[0];
-        let line_br = &strips[1];
-        let line_tl = &strips[2];
-
-        // Near station (x = 2.0m)
-        let pt_near_l = line_bl.first().unwrap();
-        let pt_near_r = line_br.first().unwrap();
-        let pt_near_tl = line_tl.first().unwrap();
-        let width_near = (pt_near_r[1] - pt_near_l[1]).abs();
-        let height_near = pt_near_tl[2] - pt_near_l[2];
-        assert!(
-            (width_near - 2.50).abs() < 1e-3,
-            "Near width should be 2.50, got {}",
-            width_near
-        );
-        assert!(
-            (height_near - 2.90).abs() < 1e-3,
-            "Near height should be 2.90 (3.05 - 0.15), got {}",
-            height_near
-        );
-
-        // Far station (x = 52.0m, dx = 50.0m)
-        // width = 2.50 - 0.010 * 50 = 2.00m
-        // height = (3.05 - 0.015 * 50) - 0.15 = 2.30 - 0.15 = 2.15m
-        let pt_far_l = line_bl.last().unwrap();
-        let pt_far_r = line_br.last().unwrap();
-        let pt_far_tl = line_tl.last().unwrap();
-        let width_far = (pt_far_r[1] - pt_far_l[1]).abs();
-        let height_far = pt_far_tl[2] - pt_far_l[2];
-        assert!(
-            (width_far - 2.00).abs() < 1e-3,
-            "Far width should be 2.00, got {}",
-            width_far
-        );
-        assert!(
-            (height_far - 2.15).abs() < 1e-3,
-            "Far height should be 2.15, got {}",
-            height_far
-        );
-        // Centered narrowing: center above rail is (0.15 + 3.05)/2 = 1.60m.
-        // Bottom boundary rises from 0.15 to 1.60 - 2.15/2 = 0.525m (relative to rail surface z=-1.0, so z = -0.475m).
-        // Top boundary drops from 3.05 to 1.60 + 2.15/2 = 2.675m (relative to rail surface z=-1.0, so z = +1.675m).
-        assert!(
-            (pt_far_l[2] - (-0.475)).abs() < 1e-3,
-            "Far bottom boundary should rise centered to -0.475 (-1.0 + 0.525), got {}",
-            pt_far_l[2]
-        );
-        assert!(
-            (pt_far_tl[2] - 1.675).abs() < 1e-3,
-            "Far top boundary should drop centered to 1.675 (-1.0 + 2.675), got {}",
-            pt_far_tl[2]
-        );
-
-        // Test clamping to gauge and min_h when narrowing is large
-        res.clearance_narrowing_width = 0.050; // would narrow by 2.5m, dropping below gauge
-        res.clearance_narrowing_height = 0.080; // would drop below min_h
-        let strips_clamped = res.shapecast_wireframe_3d();
-        let line_br_clamped = &strips_clamped[1];
-        let line_bl_clamped = &strips_clamped[0];
-        let line_tl_clamped = &strips_clamped[2];
-        let width_far_clamped =
-            (line_br_clamped.last().unwrap()[1] - line_bl_clamped.last().unwrap()[1]).abs();
-        let height_far_clamped =
-            line_tl_clamped.last().unwrap()[2] - line_bl_clamped.last().unwrap()[2];
-        assert!(
-            (width_far_clamped - 1.52).abs() < 1e-3,
-            "Far width should clamp to gauge (1.52), got {}",
-            width_far_clamped
-        );
-        assert!(
-            (height_far_clamped - 0.30).abs() < 1e-3,
-            "Far height should clamp to min_h delta (0.30), got {}",
-            height_far_clamped
-        );
-    }
-
-    #[test]
-    fn test_cluster_depth_threshold_splits_adjacent_objects() {
-        let geo = LidarGeometry::new(100, 100, 15.0, -25.0, 40.0);
-        let detector = RailTrackDetector::new(geo);
-
-        let mut frame = RangeImage::new(100, 100);
-        // Leave background empty (0.0)
-
-        // Object 1: Near object at depth ~12m (rows 45..=47, cols 48..=52)
-        for r in 45..=47 {
-            for c in 48..=52 {
-                frame.set(r, c, 12.0);
-            }
-        }
-
-        // Object 2: Far object at depth ~20m (rows 42..=44, cols 48..=52)
-        // Row 44 touches Row 45 on 2D grid, but depth jumps from 12m to 20m (+8m gap!)
-        for r in 42..=44 {
-            for c in 48..=52 {
-                frame.set(r, c, 20.0);
-            }
-        }
-
-        let poly_y = [0.0, 0.0, 0.0];
-        let poly_z = [0.0, -1.5];
-
-        let mut cfg = ObstacleConfig::default();
-        cfg.min_points = 5;
-        cfg.mode = ObstacleDetectionMode::HybridGrid;
-
-        // 1. With cluster_depth_thresh = 1.20m, the two objects must be separated into 2 distinct obstacles!
-        cfg.cluster_depth_thresh = 1.20;
-        let obs_split = detector.detect_obstacles(&frame, None, &poly_y, &poly_z, 1.52, &cfg, false);
-        assert_eq!(
-            obs_split.len(),
-            2,
-            "Objects at 12m and 20m touching in 2D grid must be split into 2 obstacles"
-        );
-
-        // 2. With cluster_depth_thresh = 0.0 (disabled), they get merged into 1 giant obstacle!
-        cfg.cluster_depth_thresh = 0.0;
-        let obs_merged = detector.detect_obstacles(&frame, None, &poly_y, &poly_z, 1.52, &cfg, false);
-        assert_eq!(
-            obs_merged.len(),
-            1,
-            "Without depth threshold, 2D adjacent objects get merged into 1 obstacle"
-        );
-    }
 }

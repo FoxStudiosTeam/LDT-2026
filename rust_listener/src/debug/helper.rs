@@ -712,22 +712,30 @@ impl DebugStream for RecordingStream {
                 let colors: Vec<Color> = r
                     .obstacles
                     .iter()
-                    .map(|o| {
-                        if o.is_critical {
-                            Color::from_rgb(255, 30, 30) // Red
-                        } else {
-                            Color::from_rgb(255, 160, 0) // Amber
+                    .map(|o| match o.status {
+                        shared::rail_detection::ObstacleStatus::Critical => {
+                            Color::from_rgb(255, 30, 30)
+                        }
+                        shared::rail_detection::ObstacleStatus::ClearanceWarning => {
+                            Color::from_rgb(255, 160, 0)
+                        }
+                        shared::rail_detection::ObstacleStatus::Unlikely => {
+                            Color::from_rgb(160, 160, 160)
                         }
                     })
                     .collect();
                 let labels: Vec<String> = r
                     .obstacles
                     .iter()
-                    .map(|o| {
-                        if o.is_critical {
-                            format!("CRITICAL {:.1}m", o.distance_along_track)
-                        } else {
-                            format!("OBSTACLE {:.1}m", o.distance_along_track)
+                    .map(|o| match o.status {
+                        shared::rail_detection::ObstacleStatus::Critical => {
+                            format!("CRITICAL {:.1}m ({}x)", o.distance_along_track, o.hits)
+                        }
+                        shared::rail_detection::ObstacleStatus::ClearanceWarning => {
+                            format!("CLEARANCE {:.1}m ({}x)", o.distance_along_track, o.hits)
+                        }
+                        shared::rail_detection::ObstacleStatus::Unlikely => {
+                            format!("UNLIKELY {:.1}m", o.distance_along_track)
                         }
                     })
                     .collect();
@@ -1015,22 +1023,30 @@ impl DebugStream for RecordingStream {
                 let colors: Vec<Color> = r
                     .obstacles
                     .iter()
-                    .map(|o| {
-                        if o.is_critical {
-                            Color::from_rgb(255, 30, 30) // Red
-                        } else {
-                            Color::from_rgb(255, 170, 0) // Amber/Yellow
+                    .map(|o| match o.status {
+                        shared::rail_detection::ObstacleStatus::Critical => {
+                            Color::from_rgb(255, 30, 30)
+                        }
+                        shared::rail_detection::ObstacleStatus::ClearanceWarning => {
+                            Color::from_rgb(255, 170, 0)
+                        }
+                        shared::rail_detection::ObstacleStatus::Unlikely => {
+                            Color::from_rgb(160, 160, 160)
                         }
                     })
                     .collect();
                 let labels: Vec<String> = r
                     .obstacles
                     .iter()
-                    .map(|o| {
-                        if o.is_critical {
-                            format!("CRITICAL {:.1}m", o.distance_along_track)
-                        } else {
-                            format!("WARN {:.1}m", o.distance_along_track)
+                    .map(|o| match o.status {
+                        shared::rail_detection::ObstacleStatus::Critical => {
+                            format!("CRITICAL {:.1}m ({}x)", o.distance_along_track, o.hits)
+                        }
+                        shared::rail_detection::ObstacleStatus::ClearanceWarning => {
+                            format!("WARN {:.1}m ({}x)", o.distance_along_track, o.hits)
+                        }
+                        shared::rail_detection::ObstacleStatus::Unlikely => {
+                            format!("UNLIKELY {:.1}m", o.distance_along_track)
                         }
                     })
                     .collect();
