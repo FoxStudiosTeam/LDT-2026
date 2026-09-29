@@ -20,15 +20,28 @@ concurrency:
 
 jobs:
   build:
-    name: Build rail_tuner_2d (Linux x86_64)
-    runs-on: ubuntu-22.04
+    name: Build rail_tuner_2d (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            runner: ubuntu-22.04
+            artifact: rail_tuner_2d-linux-x86_64
+
+          - name: windows-x86_64
+            runner: windows-2022
+            artifact: rail_tuner_2d-windows-x86_64.exe
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── системные зависимости (egui требует X11 / GL headers для линковки) ──
-      - name: Install system dependencies
+      # ── Linux: системные зависимости (egui требует X11 / GL headers для линковки) ──
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -42,6 +55,15 @@ jobs:
             libxinerama-dev \
             libxrandr-dev
 
+      # ── Windows: Visual C++ Build Tools уже предустановлены на windows-2022 ──
+      # ── Дополнительно убеждаемся, что Strawberry Perl (openssl) и NASM на PATH ──
+      - name: Set up OpenSSL for Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          echo "OPENSSL_DIR=C:\Program Files\OpenSSL-Win64" >> $env:GITHUB_ENV
+          echo "OPENSSL_STATIC=1" >> $env:GITHUB_ENV
+
       # ── Rust toolchain (берёт версию из rust-toolchain.toml) ──
       - name: Set up Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -53,28 +75,33 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target/release/.fingerprint
-            target/release/deps
-            target/release/build
           key: ${{ runner.os }}-cargo-release-rail_tuner_2d-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-release-rail_tuner_2d-
             ${{ runner.os }}-cargo-release-
 
-      # ── собственно сборка ──
+      # ── сборка ──
       - name: Build rail_tuner_2d (release)
         run: cargo build --release -p rail_tuner_2d
 
-      # ── стрип и переименование в читаемое имя ──
-      - name: Prepare binary artifact
+      # ── подготовка артефакта: Linux ──
+      - name: Prepare binary (Linux)
+        if: runner.os == 'Linux'
         run: |
-          BINARY=target/release/rail_tuner_2d
-          strip "$BINARY"
-          cp "$BINARY" rail_tuner_2d-linux-x86_64
+          strip target/release/rail_tuner_2d
+          cp target/release/rail_tuner_2d ${{ matrix.artifact }}
 
-      # ── определяем тег: из push-события или из workflow_dispatch инпута ──
+      # ── подготовка артефакта: Windows ──
+      - name: Prepare binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Copy-Item target\release\rail_tuner_2d.exe ${{ matrix.artifact }}
+
+      # ── определяем тег ──
       - name: Resolve release tag
         id: tag
+        shell: bash
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
@@ -91,4 +118,4 @@ jobs:
           draft: false
           prerelease: ${{ contains(steps.tag.outputs.value, '-') }}   # v1.0.0-rc1 → prerelease
           generate_release_notes: true
-          files: rail_tuner_2d-linux-x86_64
+          files: ${{ matrix.artifact }}

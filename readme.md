@@ -1,5 +1,13 @@
 # LDT-2026: Автономная система детекции железнодорожного пути и препятствий в реальном времени
 
+[![Deploy GHCR](https://github.com/FoxStudiosTeam/LDT-2026/actions/workflows/deploy-ghcr.yml/badge.svg)](https://github.com/FoxStudiosTeam/LDT-2026/actions/workflows/deploy-ghcr.yml)
+[![Release Binary](https://github.com/FoxStudiosTeam/LDT-2026/actions/workflows/release-binary.yml/badge.svg)](https://github.com/FoxStudiosTeam/LDT-2026/actions/workflows/release-binary.yml)
+[![GitHub release](https://img.shields.io/github/v/release/FoxStudiosTeam/LDT-2026)](https://github.com/FoxStudiosTeam/LDT-2026/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Rust](https://img.shields.io/badge/Rust-2024-orange?logo=rust)
+![ROS2](https://img.shields.io/badge/ROS%202-Humble-22314E?logo=ros)
+![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey)
+
 Высокопроизводительный программный комплекс на базе **Rust** и **ROS 2 Humble** для миллисекундного обнаружения рельсовой колеи, аналитического моделирования геометрии пути и выявления критических препятствий по данным 128-лучевого лидара (**Hesai Pandar128**).
 
 ---
@@ -95,9 +103,6 @@ make play BAG=doubleT_obstacle RATE=2.0
 > **Рекомендация по плееру датасета:**
 > Рекомендуется использовать более производительный плеер датасета, чем стандартный `ros2 bag play` (если такой имеется), т.к. во время тестов была выявлена проблема: просадки и задержки в чтении датасета лежат только на ROS 2 стороне (само аналитическое ядро детекции на Rust работает со стабильным более чем двукратным запасом по производительности ~50 мс на кадр при частоте сенсора 10 Гц).
 
-> [!TIP]
-> Этот крейт
-
 #### Вариант Б: Интерактивная веб-панель (UI) — Рекомендуется для визуализации
 Запуск графического тюнера, который **автоматически находит абсолютно все датасеты** в `./dataset`:
 - **Универсальный селектор**: в выпадающем списке доступен выбор любого датасета из папки `./dataset` на лету без перезапуска контейнера.
@@ -112,7 +117,12 @@ make tuner
 ```
 **После откройте браузер по адресу:** **[http://localhost:6080](http://localhost:6080)** (или `http://<SERVER_IP>:6080` при удалённом запуске)
 
-2) Нативный - в артефактах лежит бинарь, сканит ```./dataset```
+2) Нативный — в [GitHub Releases](https://github.com/FoxStudiosTeam/LDT-2026/releases/latest) лежат готовые бинари для **Linux** и **Windows** (собираются автоматически через CI).
+Также можно собрать под вашу платформу из исходников:
+```bash
+cargo build --bin rail_tuner_2d --release
+```
+Артефакт будет в `target/<platform>/release/rail_tuner_2d` (на Windows — `rail_tuner_2d.exe`).
 
 ---
 
@@ -128,8 +138,9 @@ make down
 2. [Обоснование архитектурных решений](#обоснование-архитектурных-решений)
 3. [Архитектура решения](#архитектура-решения)
 4. [Описание алгоритма](#описание-алгоритма)
-6. [Эксперименты и метрики производительности](#эксперименты-и-метрики-производительности)
-7. [Формат выходных данных топика `/rail/error`](#формат-выходных-данных-топика-railerror)
+5. [Эксперименты и метрики производительности](#эксперименты-и-метрики-производительности)
+6. [Формат выходных данных топика `/rail/error`](#формат-выходных-данных-топика-railerror)
+7. [Скачать нативный бинарь `rail_tuner_2d`](#скачать-нативный-бинарь-rail_tuner_2d)
 8. [Инструкция по сборке Docker-образов (локально, без GHCR)](#инструкция-по-сборке-docker-образов-локально-без-ghcr)
 9. [Инструкция по запуску и обработке ROS 2 bag-файлов](#инструкция-по-запуску-и-обработке-ros-2-bag-файлов)
 10. [Конфигурация и параметры окружения (`.env`)](#конфигурация-и-параметры-окружения-env)
@@ -188,7 +199,7 @@ make down
 - *Самокритичное признание команды*: математик-теоретик на нашем месте, возможно, построил бы сложный сплайн переменного порядка на римановом многообразии тоннеля — однако наш инженерный подход решает поставленную задачу за фиксированные 50 мс на кадр с нулевым оверхедом и 100% стабильностью.
 
 > [!NOTE]
-> Детальная реализация описанных математических процедур находится в модулях проекта: [`shared/src/range_image.rs`](file:///D:/Projects/LDT-2026/shared/src/range_image.rs) и [`shared/src/rail_detection.rs`](file:///D:/Projects/LDT-2026/shared/src/rail_detection.rs).
+> Детальная реализация описанных математических процедур находится в модулях проекта: [`shared/src/range_image.rs`](shared/src/range_image.rs) и [`shared/src/rail_detection.rs`](shared/src/rail_detection.rs).
 
 ---
 
@@ -366,6 +377,31 @@ $$Z_{\text{real}} = Z_{\text{bent}} - c_z \cdot X^2$$
 
 ---
 
+## Скачать нативный бинарь `rail_tuner_2d`
+
+Интерактивный тюнер распространяется в виде **самодостаточного нативного бинаря** — без Docker, без ROS 2, без зависимостей. Читает датасеты напрямую из папки `./dataset`.
+
+| Платформа | Файл | Ссылка |
+| :--- | :--- | :--- |
+| 🐧 Linux x86_64 | `rail_tuner_2d-linux-x86_64` | [Releases →](https://github.com/FoxStudiosTeam/LDT-2026/releases/latest) |
+| 🪟 Windows x86_64 | `rail_tuner_2d-windows-x86_64.exe` | [Releases →](https://github.com/FoxStudiosTeam/LDT-2026/releases/latest) |
+
+```bash
+# Linux: скачать и запустить
+chmod +x rail_tuner_2d-linux-x86_64
+DATASET_PATH=./dataset ./rail_tuner_2d-linux-x86_64
+```
+
+```powershell
+# Windows: просто запустить из PowerShell или двойным кликом
+.\rail_tuner_2d-windows-x86_64.exe
+```
+
+> [!NOTE]
+> Бинари собираются автоматически через GitHub Actions при каждом пуше тега `v*` и прикрепляются к соответствующему GitHub Release. Сборка нативная — Linux на `ubuntu-22.04`, Windows на `windows-2022`.
+
+---
+
 ## Инструкция по сборке Docker-образов (локально, без GHCR)
 
 Все сервисы проекта могут быть собраны **напрямую из локальных исходников** без обращения к GitHub Container Registry (`ghcr.io`).
@@ -499,4 +535,4 @@ make play BAG=doubleT_obstacle LOOP="" # Однократный прогон (д
     - Кластеризация и фильтрация: порог евклидова разрыва `cluster_depth_thresh`, минимальное число точек `min_points`.
     - Временной гистерезис: `min_hits_for_critical`, допустимый пропуск `max_missed_frames`.
     - Поворотная компрессия шейпкаста: масштабирование длины габарита в зависимости от радиуса кривизны пути `turn_radius_min` / `turn_radius_max`.
-4. **Экспорт конфигурации в один клик**: кнопка в интерфейсе выводит готовый блок кода на Rust для моментальной вставки в [`shared/src/configs.rs`](file:///D:/Projects/LDT-2026/shared/src/configs.rs).
+4. **Экспорт конфигурации в один клик**: кнопка в интерфейсе выводит готовый блок кода на Rust для моментальной вставки в [`shared/src/configs.rs`](shared/src/configs.rs).
