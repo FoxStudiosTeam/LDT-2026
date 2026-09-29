@@ -24,7 +24,22 @@ services:
         echo '► [DATASET] Поехали!' &&
         ros2 bag play /app/dataset/cloud_with_fake_obj --loop --read-ahead-queue-size 30
       "
-
+  ros2_stream_player:
+    build:
+      context: .
+      dockerfile: ./bag_player/Dockerfile
+    container_name: ros2_stream_player
+    network_mode: "host"
+    ipc: "host"
+    environment:
+      - ROS_DOMAIN_ID=42
+      - ROS_LOCALHOST_ONLY=1
+    env_file:
+      - .env
+    command: [ "--server" ]
+    depends_on:
+      - rust_viewer
+    
   # 2. Rust-приложение детекции рельсов и препятствий + Rerun + публикация в /rail/error
   rust_viewer:
     build:

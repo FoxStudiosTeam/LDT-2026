@@ -6,3 +6,4 @@ pub mod rail_detection;
 pub mod range_image;
 pub mod transport;
 pub mod types;
+pub mod utils;

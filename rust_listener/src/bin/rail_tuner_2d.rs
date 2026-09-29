@@ -1630,6 +1630,13 @@ pub struct RailTuner2DApp {
     track_match_dist_m: f32,
     track_match_lateral_m: f32,
 
+    // Сжатие шейпкаста в повороте
+    turn_compression_enabled: bool,
+    turn_radius_min: f32,
+    turn_radius_max: f32,
+    turn_compression_min_scale: f32,
+    turn_compression_max_scale: f32,
+
     // Rerun
     rec_stream: Option<RecordingStream>,
     stream_to_rerun: bool,
@@ -1704,6 +1711,11 @@ impl RailTuner2DApp {
             max_missed_frames: detector.obstacle_config.max_missed_frames,
             track_match_dist_m: detector.obstacle_config.track_match_dist_m,
             track_match_lateral_m: detector.obstacle_config.track_match_lateral_m,
+            turn_compression_enabled: detector.obstacle_config.turn_compression_enabled,
+            turn_radius_min: detector.obstacle_config.turn_radius_min,
+            turn_radius_max: detector.obstacle_config.turn_radius_max,
+            turn_compression_min_scale: detector.obstacle_config.turn_compression_min_scale,
+            turn_compression_max_scale: detector.obstacle_config.turn_compression_max_scale,
 
             rec_stream,
             stream_to_rerun: true,
@@ -1804,6 +1816,11 @@ impl RailTuner2DApp {
         self.detector.obstacle_config.max_missed_frames = self.max_missed_frames;
         self.detector.obstacle_config.track_match_dist_m = self.track_match_dist_m;
         self.detector.obstacle_config.track_match_lateral_m = self.track_match_lateral_m;
+        self.detector.obstacle_config.turn_compression_enabled = self.turn_compression_enabled;
+        self.detector.obstacle_config.turn_radius_min = self.turn_radius_min;
+        self.detector.obstacle_config.turn_radius_max = self.turn_radius_max;
+        self.detector.obstacle_config.turn_compression_min_scale = self.turn_compression_min_scale;
+        self.detector.obstacle_config.turn_compression_max_scale = self.turn_compression_max_scale;
     }
 
     fn process_current_frame(&mut self) {
@@ -1847,10 +1864,13 @@ impl RailTuner2DApp {
         let bent_res = self
             .detector
             .detect_with_raw(&active_ri, Some(raw_ri), None, frame.idx);
-        if let Some(_r) = &bent_res {
-            // println!("Radius: {}", r.turn_radius);
-            // 400 - max
-            // self.detector.obstacle_config.clearance_narrowing_width = r.turn_radius;
+        if let Some(r) = &bent_res {
+            if self.turn_compression_enabled {
+                let _scale = self
+                    .detector
+                    .obstacle_config
+                    .compute_turn_compression_scale(r.turn_radius);
+            }
         }
 
         let detect_dur = t_detect.elapsed();
@@ -2148,6 +2168,11 @@ impl eframe::App for RailTuner2DApp {
                              detector.obstacle_config.max_missed_frames = {};\n\
                              detector.obstacle_config.track_match_dist_m = {:.2};\n\
                              detector.obstacle_config.track_match_lateral_m = {:.2};\n\
+                             detector.obstacle_config.turn_compression_enabled = {};\n\
+                             detector.obstacle_config.turn_radius_min = {:.1};\n\
+                             detector.obstacle_config.turn_radius_max = {:.1};\n\
+                             detector.obstacle_config.turn_compression_min_scale = {:.2};\n\
+                             detector.obstacle_config.turn_compression_max_scale = {:.2};\n\
                              detector.temporal_jump_reject_enabled = {};\n\
                              detector.max_interframe_jump_m = {:.3};\n\
                              detector.max_outlier_frames = {};\n\
@@ -2185,6 +2210,11 @@ impl eframe::App for RailTuner2DApp {
                             self.max_missed_frames,
                             self.track_match_dist_m,
                             self.track_match_lateral_m,
+                            self.turn_compression_enabled,
+                            self.turn_radius_min,
+                            self.turn_radius_max,
+                            self.turn_compression_min_scale,
+                            self.turn_compression_max_scale,
                             self.temporal_jump_reject_enabled,
                             self.max_interframe_jump_m,
                             self.max_outlier_frames,
@@ -2535,6 +2565,84 @@ impl eframe::App for RailTuner2DApp {
                                 .on_hover_text("Вертикальный сдвиг (Z) высотного габарита на дальней дистанции (+ вверх, - вниз)")
                                 .changed();
 
+                            ui.separator();
+                            param_changed |= ui
+                                .checkbox(
+                                    &mut self.turn_compression_enabled,
+                                    "🔄 Compress Shapecast Length in Turns",
+                                )
+                                .on_hover_text("Динамическое сжатие длины (дальности) габарита приближения при входе в поворот")
+                                .changed();
+
+                            if self.turn_compression_enabled {
+                                ui.label("Turn Radius Min (m) [Max Compression]:");
+                                param_changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut self.turn_radius_min, 50.0..=500.0)
+                                            .step_by(10.0),
+                                    )
+                                    .on_hover_text("Радиус кривизны, при котором (и меньше) достигается максимальное сжатие длины")
+                                    .changed();
+
+                                ui.label("Turn Radius Max (m) [No Compression]:");
+                                param_changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut self.turn_radius_max, 300.0..=2000.0)
+                                            .step_by(50.0),
+                                    )
+                                    .on_hover_text("Радиус кривизны, выше которого сжатие не применяется (масштаб 1.00)")
+                                    .changed();
+
+                                ui.label("Turn Min Scale (in curve):");
+                                param_changed |= ui
+                                    .add(
+                                        egui::Slider::new(
+                                            &mut self.turn_compression_min_scale,
+                                            0.30..=1.00,
+                                        )
+                                        .step_by(0.05)
+                                        .custom_formatter(|val, _| {
+                                            format!("{:.2} ({:.0}%)", val, val * 100.0)
+                                        }),
+                                    )
+                                    .on_hover_text("Масштаб длины (дальности) габарита в крутом повороте")
+                                    .changed();
+
+                                ui.label("Turn Max Scale (straight):");
+                                param_changed |= ui
+                                    .add(
+                                        egui::Slider::new(
+                                            &mut self.turn_compression_max_scale,
+                                            0.50..=1.50,
+                                        )
+                                        .step_by(0.05)
+                                        .custom_formatter(|val, _| {
+                                            format!("{:.2} ({:.0}%)", val, val * 100.0)
+                                        }),
+                                    )
+                                    .on_hover_text("Масштаб длины (дальности) габарита на прямом участке")
+                                    .changed();
+
+                                if let Some(r) = &self.last_bent_res {
+                                    let scale = self
+                                        .detector
+                                        .obstacle_config
+                                        .compute_turn_compression_scale(r.turn_radius);
+                                    let eff_dist = r.max_distance_m;
+                                    ui.colored_label(
+                                        Color32::from_rgb(0, 220, 220),
+                                        format!(
+                                            "R: {:.1}m | Scale: {:.1}% | Eff Length: {:.1}m (Base: {:.1}m)",
+                                            r.turn_radius,
+                                            scale * 100.0,
+                                            eff_dist,
+                                            self.max_distance_m
+                                        ),
+                                    );
+                                }
+                            }
+                            ui.separator();
+
                             ui.label("Min Height Above Rail (m):");
                             param_changed |= ui
                                 .add(egui::Slider::new(&mut self.min_height_above_rail, 0.05..=0.50).step_by(0.01))
@@ -2658,6 +2766,17 @@ impl eframe::App for RailTuner2DApp {
                             ui.label("Radius: ∞ (Straight)");
                         } else {
                             ui.label(format!("Radius: {:.1} m", r.turn_radius));
+                        }
+                        if self.turn_compression_enabled {
+                            let scale = self
+                                .detector
+                                .obstacle_config
+                                .compute_turn_compression_scale(r.turn_radius);
+                            ui.label(format!(
+                                "Shapecast Length: {:.1} m (Scale: {:.0}%)",
+                                r.max_distance_m,
+                                scale * 100.0
+                            ));
                         }
                         ui.label(format!("Points Detected: {}", r.points.len()));
                         ui.label(format!(

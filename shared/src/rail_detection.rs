@@ -515,6 +515,41 @@ pub struct ObstacleConfig {
     pub track_match_dist_m: f32,
     /// Допустимое латеральное смещение между кадрами для одного объекта (м), default: 0.80 м
     pub track_match_lateral_m: f32,
+    /// Включение динамического сжатия длины габарита (шейпкаста / дальности детекции) в поворотах в зависимости от радиуса кривизны
+    pub turn_compression_enabled: bool,
+    /// Минимальный радиус поворота (м), при котором достигается максимальное сжатие длины габарита (min_scale), default: 200.0 м
+    pub turn_radius_min: f32,
+    /// Максимальный радиус поворота (м), выше которого сжатие длины не применяется (scale = max_scale = 1.0), default: 1000.0 м
+    pub turn_radius_max: f32,
+    /// Минимальный масштаб длины габарита при крутом повороте (R <= turn_radius_min), default: 0.70 (70% от max_distance_m)
+    pub turn_compression_min_scale: f32,
+    /// Максимальный масштаб длины габарита на прямом участке (R >= turn_radius_max), default: 1.00 (100% от max_distance_m)
+    pub turn_compression_max_scale: f32,
+}
+
+impl ObstacleConfig {
+    /// Вычисляет коэффициент масштабирования длины (дальности) габарита (шейпкаста) в зависимости от радиуса поворота
+    pub fn compute_turn_compression_scale(&self, turn_radius: f32) -> f32 {
+        if !self.turn_compression_enabled
+            || (self.turn_radius_max - self.turn_radius_min).abs() < 1e-4
+        {
+            return 1.0;
+        }
+        crate::utils::remap_clamped(
+            turn_radius,
+            self.turn_radius_min,
+            self.turn_radius_max,
+            self.turn_compression_min_scale,
+            self.turn_compression_max_scale,
+        )
+    }
+
+    /// Вычисляет эффективную максимальную дальность (длину) габарита с учетом сжатия в повороте
+    pub fn effective_max_distance(&self, turn_radius: f32) -> f32 {
+        let scale = self.compute_turn_compression_scale(turn_radius);
+        let min_dist = (2.0 + self.clearance_start_offset).max(5.0);
+        (self.max_distance_m * scale).max(min_dist)
+    }
 }
 
 impl Default for ObstacleConfig {
@@ -539,6 +574,11 @@ impl Default for ObstacleConfig {
             max_missed_frames: 1,
             track_match_dist_m: 2.50,
             track_match_lateral_m: 0.80,
+            turn_compression_enabled: false,
+            turn_radius_min: 200.0,
+            turn_radius_max: 1000.0,
+            turn_compression_min_scale: 0.70,
+            turn_compression_max_scale: 1.00,
         }
     }
 }
@@ -1431,12 +1471,21 @@ impl RailTrackDetector {
 
         let t_rail_dur = t_start_rail.elapsed();
 
+        let eff_max_distance = if self.obstacle_config.enabled {
+            self.obstacle_config.effective_max_distance(turn_radius)
+        } else {
+            self.obstacle_config.max_distance_m
+        };
+
         let t_start_obs = std::time::Instant::now();
         let mut obstacles = if self.obstacle_config.enabled {
+            let mut obs_cfg = self.obstacle_config.clone();
+            obs_cfg.max_distance_m = eff_max_distance;
+
             let (obs_frame, is_warped) = if let Some(raw) = raw_frame {
                 (raw, false)
             } else {
-                (frame, self.obstacle_config.upward_curvature.abs() > 1e-7)
+                (frame, obs_cfg.upward_curvature.abs() > 1e-7)
             };
             self.detect_obstacles(
                 obs_frame,
@@ -1444,7 +1493,7 @@ impl RailTrackDetector {
                 &poly_y,
                 &poly_z,
                 median_gauge,
-                &self.obstacle_config,
+                &obs_cfg,
                 is_warped,
             )
         } else {
@@ -1500,7 +1549,7 @@ impl RailTrackDetector {
             clearance_start_offset: self.obstacle_config.clearance_start_offset,
             min_height_above_rail: self.obstacle_config.min_height_above_rail,
             max_height_above_rail: self.obstacle_config.max_height_above_rail,
-            max_distance_m: self.obstacle_config.max_distance_m,
+            max_distance_m: eff_max_distance,
             upward_curvature: self.obstacle_config.upward_curvature,
             obstacle_enabled: self.obstacle_config.enabled,
             is_real_coordinates: false,
@@ -2287,5 +2336,47 @@ mod tests {
             "Shapecast wireframe should start at x=5.5m with offset=3.5m, got {}",
             pt_near[0]
         );
+    }
+
+    #[test]
+    fn test_turn_compression() {
+        let mut cfg = ObstacleConfig::default();
+        cfg.max_distance_m = 60.0;
+        cfg.turn_compression_enabled = true;
+        cfg.turn_radius_min = 200.0;
+        cfg.turn_radius_max = 1000.0;
+        cfg.turn_compression_min_scale = 0.70;
+        cfg.turn_compression_max_scale = 1.00;
+
+        // Straight track (large radius): scale should be 1.0, distance 60.0m
+        let scale_straight = cfg.compute_turn_compression_scale(99999.0);
+        assert!((scale_straight - 1.0).abs() < 1e-4);
+        let eff_dist_straight = cfg.effective_max_distance(99999.0);
+        assert!((eff_dist_straight - 60.0).abs() < 1e-4);
+
+        // Max compression at sharp turn (radius <= 200.0): scale should be 0.7, distance 42.0m
+        let scale_sharp = cfg.compute_turn_compression_scale(200.0);
+        assert!((scale_sharp - 0.70).abs() < 1e-4);
+        let eff_dist_sharp = cfg.effective_max_distance(200.0);
+        assert!((eff_dist_sharp - 42.0).abs() < 1e-4);
+
+        // Even sharper (radius = 100.0): clamped to 0.70
+        let scale_very_sharp = cfg.compute_turn_compression_scale(100.0);
+        assert!((scale_very_sharp - 0.70).abs() < 1e-4);
+        let eff_dist_very_sharp = cfg.effective_max_distance(100.0);
+        assert!((eff_dist_very_sharp - 42.0).abs() < 1e-4);
+
+        // Mid turn (radius = 600.0): scale 0.85, distance 51.0m
+        let scale_mid = cfg.compute_turn_compression_scale(600.0);
+        assert!((scale_mid - 0.85).abs() < 1e-4);
+        let eff_dist_mid = cfg.effective_max_distance(600.0);
+        assert!((eff_dist_mid - 51.0).abs() < 1e-4);
+
+        // Disabled turn compression: always 1.0 and 60.0m
+        cfg.turn_compression_enabled = false;
+        let scale_disabled = cfg.compute_turn_compression_scale(200.0);
+        assert!((scale_disabled - 1.0).abs() < 1e-4);
+        let eff_dist_disabled = cfg.effective_max_distance(200.0);
+        assert!((eff_dist_disabled - 60.0).abs() < 1e-4);
     }
 }
