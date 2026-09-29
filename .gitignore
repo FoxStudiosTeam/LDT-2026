@@ -21,7 +21,8 @@ CMakeCompilerIdC/
 CMakeCompilerIdCXX/
 CMakeCompilerIdCUDA/
 cmake_install.cmake
-Makefile
+!/Makefile
+!/makefile
 
 # --- Артефакты компиляторов и линковщиков MSVC (Windows) ---
 *.exe

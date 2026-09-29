@@ -18,11 +18,38 @@ services:
     environment:
       - ROS_LOCALHOST_ONLY=1
     volumes:
-      - bag_data:/app/dataset:ro
+      - ${DATASET_PATH:-./dataset}:/app/dataset:ro
     command: >
       bash -c "
-        echo '► [DATASET] Старт проигрывания датасета' &&
-        ros2 bag play /app/dataset --loop --read-ahead-queue-size 30
+        source /opt/ros/humble/setup.bash
+        TARGET=''
+        if [ -n \"\$$BAG_NAME\" ] && [ -e \"/app/dataset/\$$BAG_NAME\" ]; then
+          TARGET=\"/app/dataset/\$$BAG_NAME\"
+        elif [ -f \"/app/dataset/metadata.yaml\" ]; then
+          TARGET=\"/app/dataset\"
+        else
+          FOUND=\$$(find /app/dataset -maxdepth 2 \( -name 'metadata.yaml' -o -name '*.db3' \) 2>/dev/null | head -n 1)
+          if [ -n \"\$$FOUND\" ]; then
+            if [[ \"\$$FOUND\" == *\"metadata.yaml\"* ]]; then
+              TARGET=\"\$$(dirname \"\$$FOUND\")\"
+            else
+              TARGET=\"\$$FOUND\"
+            fi
+            echo '► [DATASET] Автовыбор первого найденного датасета: ' \"\$$TARGET\"
+            echo '► [DATASET] Чтобы выбрать другой: make play BAG=имя_папки или задайте BAG_NAME'
+          fi
+        fi
+        if [ -z \"\$$TARGET\" ]; then
+          echo '❌ [DATASET] Ошибка: датасеты не найдены в /app/dataset!'
+          echo '   Поместите .db3 или папку с rosbag2 в папку ./dataset на хосте (или укажите DATASET_PATH в .env).'
+          exit 1
+        fi
+        ARGS=\"\$$BAG_ARGS\"
+        if [ -z \"\$$ARGS\" ]; then
+          ARGS=\"--loop --read-ahead-queue-size 30\"
+        fi
+        echo \"► [DATASET] Запуск: ros2 bag play \$$TARGET \$$ARGS\"
+        exec ros2 bag play \"\$$TARGET\" \$$ARGS
       "
   ros2_stream_player:
     image: ghcr.io/foxstudiosteam/ldt-2026/ros2_stream_player:latest
@@ -36,6 +63,8 @@ services:
       - ROS_LOCALHOST_ONLY=1
     env_file:
       - .env
+    volumes:
+      - ${DATASET_PATH:-./dataset}:/app/dataset:ro
     command: [ "--server" ]
     depends_on:
       - rust_viewer
@@ -113,9 +142,8 @@ services:
       - WINIT_UNIX_BACKEND=x11
 
     volumes:
-      - bag_data:/app/dataset:ro
+      - ${DATASET_PATH:-./dataset}:/app/dataset:ro
       - ./frames:/app/frames:ro
-      - ./dataset:/app/dataset_local:ro
 
   # 5. Rust CLI слушатель топика /rail/error (высокопроизводительный слушатель телеметрии)
   # Запуск: docker compose run --rm rust_error_listener
@@ -134,7 +162,4 @@ services:
       - ROS_LOCALHOST_ONLY=1
       - ROS_ERROR_TOPIC=/rail/error
 
-volumes:
-  bag_data:
-    external: true
 
