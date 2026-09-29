@@ -1,13 +1,30 @@
 //! debug_viz.rs — генерация отладочных примитивов для Rerun
 
-use rerun::{
-    Boxes2D, Boxes3D, Color, LineStrips2D, LineStrips3D, Points2D, Points3D, Radius,
-    RecordingStream,
-};
 use crate::error::{AppError, ErrCtx};
 use crate::types::{AppPointCloud, CloudStats, ProcessingQueue, is_zero_point};
+use rerun::blueprint::{Blueprint, BlueprintActivation, Horizontal, Spatial2DView, Spatial3DView};
+use rerun::{
+    Boxes2D, Boxes3D, Color, DepthImage, LineStrips2D, LineStrips3D, Points2D, Points3D, Radius,
+    RecordingStream,
+};
 
 // ─── Пороги ───────────────────────────────────────────────────────────────────
+pub fn setup_rerun_layout(rec: &RecordingStream) -> Result<(), AppError> {
+    let view_3d = Spatial3DView::new("3D Spatial World (Cloud, Rails, Shapecast, Obstacles)")
+        .with_origin("world")
+        .with_contents(["+ world/**"]);
+    let view_2d = Spatial2DView::new("2D Depth Map (Range, Rails, Shapecast, Obstacles)")
+        .with_origin("depth_map")
+        .with_contents(["+ depth_map/**"]);
+
+    let bp = Blueprint::new(Horizontal::new([view_3d.into(), view_2d.into()]))
+        .with_auto_views(false)
+        .with_auto_layout(false);
+
+    bp.send(rec, BlueprintActivation::default()).app_error()?;
+    Ok(())
+}
+
 const NEAR_RANGE_M: f32 = 1.0; // точки ближе этого — "опасные"
 const HIGH_Z_M: f32 = 2.0; // точки выше этого — "верхний слой"
 
@@ -571,7 +588,7 @@ impl DebugStream for RecordingStream {
                 .map(|i| [r.x_curve[i], r.y_center[i], r.z_center[i]])
                 .collect();
             self.log(
-                "tracks/3d/centerline",
+                "world/tracks/centerline",
                 &LineStrips3D::new([center_pts])
                     .with_colors([Color::from_rgb(0, 255, 60)])
                     .with_radii([Radius::new_ui_points(2.5)]),
@@ -583,7 +600,7 @@ impl DebugStream for RecordingStream {
                 .map(|i| [r.x_left[i], r.y_left[i], r.z_center[i]])
                 .collect();
             self.log(
-                "tracks/3d/left_rail",
+                "world/tracks/left_rail",
                 &LineStrips3D::new([left_pts])
                     .with_colors([Color::from_rgb(30, 210, 255)])
                     .with_radii([Radius::new_ui_points(2.5)]),
@@ -595,7 +612,7 @@ impl DebugStream for RecordingStream {
                 .map(|i| [r.x_right[i], r.y_right[i], r.z_center[i]])
                 .collect();
             self.log(
-                "tracks/3d/right_rail",
+                "world/tracks/right_rail",
                 &LineStrips3D::new([right_pts])
                     .with_colors([Color::from_rgb(255, 90, 30)])
                     .with_radii([Radius::new_ui_points(2.5)]),
@@ -611,7 +628,7 @@ impl DebugStream for RecordingStream {
                 ]);
             }
             self.log(
-                "tracks/3d/sleepers",
+                "world/tracks/sleepers",
                 &LineStrips3D::new(sleepers)
                     .with_colors([Color::from_rgb(180, 220, 180)])
                     .with_radii([Radius::new_ui_points(1.2)]),
@@ -636,7 +653,7 @@ impl DebugStream for RecordingStream {
                 .collect();
 
             self.log(
-                "tracks/3d/points_left",
+                "world/tracks/points_left",
                 &Points3D::new(pts_l)
                     .with_colors([Color::from_rgb(0, 255, 255)])
                     .with_radii([Radius::new_ui_points(3.0)]),
@@ -644,7 +661,7 @@ impl DebugStream for RecordingStream {
             .app_error()?;
 
             self.log(
-                "tracks/3d/points_right",
+                "world/tracks/points_right",
                 &Points3D::new(pts_r)
                     .with_colors([Color::from_rgb(255, 120, 0)])
                     .with_radii([Radius::new_ui_points(3.0)]),
@@ -652,7 +669,7 @@ impl DebugStream for RecordingStream {
             .app_error()?;
 
             self.log(
-                "tracks/3d/points_center",
+                "world/tracks/points_center",
                 &Points3D::new(pts_c)
                     .with_colors([Color::from_rgb(255, 255, 0)])
                     .with_radii([Radius::new_ui_points(2.0)]),
@@ -671,7 +688,7 @@ impl DebugStream for RecordingStream {
                     .collect();
 
                 self.log(
-                    "tracks/3d/extrapolation_center",
+                    "world/tracks/extrapolation_center",
                     &LineStrips3D::new([ext_c])
                         .with_colors([Color::from_rgb(255, 0, 255)])
                         .with_radii([Radius::new_ui_points(2.0)]),
@@ -679,7 +696,7 @@ impl DebugStream for RecordingStream {
                 .app_error()?;
 
                 self.log(
-                    "tracks/3d/extrapolation_left",
+                    "world/tracks/extrapolation_left",
                     &LineStrips3D::new([ext_l])
                         .with_colors([Color::from_rgb(200, 50, 200)])
                         .with_radii([Radius::new_ui_points(1.5)]),
@@ -687,7 +704,7 @@ impl DebugStream for RecordingStream {
                 .app_error()?;
 
                 self.log(
-                    "tracks/3d/extrapolation_right",
+                    "world/tracks/extrapolation_right",
                     &LineStrips3D::new([ext_r])
                         .with_colors([Color::from_rgb(200, 50, 200)])
                         .with_radii([Radius::new_ui_points(1.5)]),
@@ -741,7 +758,7 @@ impl DebugStream for RecordingStream {
                     .collect();
 
                 self.log(
-                    "tracks/3d/obstacles",
+                    "world/tracks/obstacles",
                     &Boxes3D::from_centers_and_sizes(centers, sizes)
                         .with_colors(colors)
                         .with_labels(labels),
@@ -749,7 +766,7 @@ impl DebugStream for RecordingStream {
                 .app_error()?;
             } else {
                 let _ = self.log(
-                    "tracks/3d/obstacles",
+                    "world/tracks/obstacles",
                     &Boxes3D::from_centers_and_sizes([] as [[f32; 3]; 0], [] as [[f32; 3]; 0]),
                 );
             }
@@ -759,7 +776,7 @@ impl DebugStream for RecordingStream {
             if !shapecast_3d.is_empty() {
                 let col = r.shapecast_color();
                 self.log(
-                    "tracks/3d/shapecast",
+                    "world/tracks/shapecast",
                     &LineStrips3D::new(shapecast_3d)
                         .with_colors([Color::from_rgb(col[0], col[1], col[2])])
                         .with_radii([Radius::new_ui_points(1.2)]),
@@ -767,55 +784,58 @@ impl DebugStream for RecordingStream {
                 .app_error()?;
             } else {
                 let _ = self.log(
-                    "tracks/3d/shapecast",
+                    "world/tracks/shapecast",
                     &LineStrips3D::new([] as [Vec<[f32; 3]>; 0]),
                 );
             }
         } else {
             // Clear visualization on frames where no track detected
             let _ = self.log(
-                "tracks/3d/shapecast",
+                "world/tracks/shapecast",
                 &LineStrips3D::new([] as [Vec<[f32; 3]>; 0]),
             );
             let _ = self.log(
-                "tracks/3d/centerline",
+                "world/tracks/centerline",
                 &LineStrips3D::new([] as [Vec<[f32; 3]>; 0]),
             );
             let _ = self.log(
-                "tracks/3d/left_rail",
+                "world/tracks/left_rail",
                 &LineStrips3D::new([] as [Vec<[f32; 3]>; 0]),
             );
             let _ = self.log(
-                "tracks/3d/right_rail",
+                "world/tracks/right_rail",
                 &LineStrips3D::new([] as [Vec<[f32; 3]>; 0]),
             );
             let _ = self.log(
-                "tracks/3d/sleepers",
+                "world/tracks/sleepers",
                 &LineStrips3D::new([] as [Vec<[f32; 3]>; 0]),
             );
-            let _ = self.log("tracks/3d/points_left", &Points3D::new([] as [[f32; 3]; 0]));
             let _ = self.log(
-                "tracks/3d/points_right",
+                "world/tracks/points_left",
                 &Points3D::new([] as [[f32; 3]; 0]),
             );
             let _ = self.log(
-                "tracks/3d/points_center",
+                "world/tracks/points_right",
                 &Points3D::new([] as [[f32; 3]; 0]),
             );
             let _ = self.log(
-                "tracks/3d/extrapolation_center",
+                "world/tracks/points_center",
+                &Points3D::new([] as [[f32; 3]; 0]),
+            );
+            let _ = self.log(
+                "world/tracks/extrapolation_center",
                 &LineStrips3D::new([] as [Vec<[f32; 3]>; 0]),
             );
             let _ = self.log(
-                "tracks/3d/extrapolation_left",
+                "world/tracks/extrapolation_left",
                 &LineStrips3D::new([] as [Vec<[f32; 3]>; 0]),
             );
             let _ = self.log(
-                "tracks/3d/extrapolation_right",
+                "world/tracks/extrapolation_right",
                 &LineStrips3D::new([] as [Vec<[f32; 3]>; 0]),
             );
             let _ = self.log(
-                "tracks/3d/obstacles",
+                "world/tracks/obstacles",
                 &Boxes3D::from_centers_and_sizes([] as [[f32; 3]; 0], [] as [[f32; 3]; 0]),
             );
         }
@@ -829,12 +849,13 @@ impl DebugStream for RecordingStream {
         geo: &crate::rail_detection::LidarGeometry,
         res: Option<&crate::rail_detection::DetectionResult>,
     ) -> Result<(), AppError> {
-        // 1. Логируем 2D инвертированную карту интенсивности (Image) в entity "depth_map/intensity"
-        // (Карта глубины вырезана, используется инвертированная интенсивность: белые пустоты, темные рельсы)
+        // 1. Карта глубины (DepthImage) и инвертированная карта интенсивности (Image)
+        if let Ok(depth_img) = crop_frame.to_rerun() {
+            let _ = self.log("depth_map/depth", &depth_img);
+        }
         if !crop_frame.intensity.is_empty() {
             if let Ok(intensity_img) = crop_frame.to_rerun_intensity_inverted(20.0) {
-                self.log("depth_map/intensity", &intensity_img)
-                    .app_error()?;
+                let _ = self.log("depth_map/intensity", &intensity_img);
             }
         }
 
@@ -1183,4 +1204,3 @@ impl DebugStream for RecordingStream {
         Ok(())
     }
 }
-

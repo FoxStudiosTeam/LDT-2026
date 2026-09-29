@@ -1933,10 +1933,9 @@ impl RailTuner2DApp {
                 let active_ri = self.active_range_image.as_ref().unwrap_or(raw_ri);
 
                 // ─── ОКНО 1: 3D сцена ───
-                // Точки реального облака и искривленного облака из RangeImage
+                // Точки реального физического неискривленного облака из RangeImage
                 let total = geo.height * geo.width;
                 let mut pts_real = Vec::with_capacity(total);
-                let mut pts_bent = Vec::with_capacity(total);
                 let mut colors = Vec::with_capacity(total);
 
                 for row in 0..geo.height {
@@ -1946,8 +1945,6 @@ impl RailTuner2DApp {
                         if r > 0.5 && r < 200.0 {
                             let (x, y, z) = geo.row_col_range_to_xyz(row, col, r);
                             pts_real.push([x, y, z]);
-                            let z_bent = z + self.upward_curvature * x * x;
-                            pts_bent.push([x, y, z_bent]);
 
                             let norm = (r / 200.0).clamp(0.0, 1.0);
                             let c = turbo_rgb(norm);
@@ -1956,29 +1953,18 @@ impl RailTuner2DApp {
                     }
                 }
 
-                // Истинные физические точки лидара в реальном мире:
+                // ─── ОКНО 1: Истинные физические точки лидара в реальном мире (3D неискривленное облако) ───
                 let _ = rec.log(
-                    "lidar/point_cloud",
+                    "world/point_cloud",
                     &Points3D::new(&pts_real)
-                        .with_colors(colors.clone())
+                        .with_colors(colors)
                         .with_radii([Radius::new_ui_points(1.2)]),
                 );
 
-                // Искривленные точки тоннеля:
-                if self.upward_curvature.abs() > 1e-7 {
-                    let _ = rec.log(
-                        "lidar/point_cloud_bent",
-                        &Points3D::new(&pts_bent)
-                            .with_colors(colors)
-                            .with_radii([Radius::new_ui_points(1.2)]),
-                    );
-                }
-
-                // 3D рельсы с ВОССТАНОВЛЕННЫМ реальным положением (садятся строго на реальные рельсы):
+                // 3D рельсы, шпалы, экстраполяция, шейпкаст и препятствия с ВОССТАНОВЛЕННЫМ реальным положением:
                 let _ = rec.log_rail_detection(self.last_res.as_ref());
 
-                // ─── ОКНО 2: 2D Карта глубины, интенсивности, путей и Shapecast ───
-                // Стримим искривленную карту глубины и интенсивности с соответствующими путями:
+                // ─── ОКНО 2: 2D Карта глубины, путей, шейпкаста и препятствий ───
                 let _ = rec.log_rail_detection_2d(active_ri, geo, self.last_bent_res.as_ref());
             }
             self.profiling.rerun_stream_ms = t_rerun.elapsed().as_secs_f32() * 1000.0;
@@ -3104,6 +3090,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .or_else(|_| RecordingStreamBuilder::new("rail_tuner_2d").connect_grpc())
             .ok()
     };
+
+    if let Some(ref r) = rec {
+        let _ = shared::debug_helper::setup_rerun_layout(r);
+    }
 
     let app = RailTuner2DApp::new(available_tracks, initial_track_idx, dataset, rec);
     let native_options = eframe::NativeOptions {

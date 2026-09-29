@@ -301,6 +301,12 @@ impl DetectionResult {
             p.z_right -= cz * p.x_right * p.x_right;
             p.z_center -= cz * p.x_center * p.x_center;
         }
+        for obs in &mut self.obstacles {
+            let x_obs = 0.5 * (obs.bbox_3d_min[0] + obs.bbox_3d_max[0]);
+            let dz = cz * x_obs * x_obs;
+            obs.bbox_3d_min[2] -= dz;
+            obs.bbox_3d_max[2] -= dz;
+        }
         self.is_real_coordinates = true;
     }
 

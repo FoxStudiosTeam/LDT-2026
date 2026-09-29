@@ -147,7 +147,6 @@ pub async fn entry(
             // ─── ОКНО 1: 3D сцена ───
             let total = geo.height * geo.width;
             let mut pts_real = Vec::with_capacity(total);
-            let mut pts_bent = Vec::with_capacity(total);
             let mut colors = Vec::with_capacity(total);
 
             for row in 0..geo.height {
@@ -157,8 +156,6 @@ pub async fn entry(
                     if r > 0.5 && r < 200.0 {
                         let (x, y, z) = geo.row_col_range_to_xyz(row, col, r);
                         pts_real.push([x, y, z]);
-                        let z_bent = z + c_z * x * x;
-                        pts_bent.push([x, y, z_bent]);
 
                         let norm = (r / 200.0).clamp(0.0, 1.0);
                         let c = turbo_rgb(norm);
@@ -167,28 +164,18 @@ pub async fn entry(
                 }
             }
 
-            // Истинные физические точки лидара в реальном мире:
+            // ─── ОКНО 1: Истинные физические точки лидара (3D неискривленное облако) ───
             let _ = recording_stream.log(
-                "lidar/point_cloud",
+                "world/point_cloud",
                 &Points3D::new(&pts_real)
-                    .with_colors(colors.clone())
+                    .with_colors(colors)
                     .with_radii([Radius::new_ui_points(1.2)]),
             );
 
-            // Искривленные точки тоннеля (как в rail_tuner_2d):
-            if c_z.abs() > 1e-7 {
-                let _ = recording_stream.log(
-                    "lidar/point_cloud_bent",
-                    &Points3D::new(&pts_bent)
-                        .with_colors(colors)
-                        .with_radii([Radius::new_ui_points(1.2)]),
-                );
-            }
-
-            // 3D рельсы с ВОССТАНОВЛЕННЫМ реальным положением:
+            // 3D рельсы, шпалы, экстраполяция, шейпкаст и препятствия с ВОССТАНОВЛЕННЫМ реальным положением:
             let _ = recording_stream.log_rail_detection(real_result.as_ref());
 
-            // ─── ОКНО 2: 2D Карта глубины, интенсивности, путей и Shapecast ───
+            // ─── ОКНО 2: 2D Карта глубины, путей, шейпкаста и препятствий ───
             let _ = recording_stream.log_rail_detection_2d(&active_ri, &geo, bent_result.as_ref());
             let rerun_dur = t_rerun.elapsed();
 

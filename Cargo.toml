@@ -3,7 +3,7 @@ members = [
     "rust_listener",
     "data-extraction",
     "shared",
-    "rail_tuner_2d",
+    "rail_tuner_2d", "test_error_listener",
 ]
 resolver = "2"
 

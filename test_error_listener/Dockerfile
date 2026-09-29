@@ -9,12 +9,6 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     pkg-config \
     libssl-dev \
-    libxkbcommon-dev \
-    libgl1-mesa-dev \
-    libxcursor-dev \
-    libxi-dev \
-    libxinerama-dev \
-    libxrandr-dev \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -41,22 +35,21 @@ RUN mkdir -p \
         rust_listener/src \
         rail_tuner_2d/src \
         test_error_listener/src \
-    && echo "fn main() {}" > rail_tuner_2d/src/main.rs \
-    && echo "fn main() {}" > rust_listener/src/main.rs \
     && echo "fn main() {}" > test_error_listener/src/main.rs \
+    && echo "fn main() {}" > rust_listener/src/main.rs \
+    && echo "fn main() {}" > rail_tuner_2d/src/main.rs \
     && touch \
         shared/src/lib.rs \
         data-extraction/src/lib.rs \
         rust_listener/src/lib.rs
 
-# ⚡ Оптимизации Cargo
+# ⚡ Оптимизации сборки
 ENV CARGO_PROFILE_RELEASE_LTO=true
 ENV CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
 ENV CARGO_PROFILE_RELEASE_STRIP=true
 ENV CARGO_PROFILE_RELEASE_OPT_LEVEL=3
 
-RUN cargo build -p rail_tuner_2d
- #  --release 
+RUN cargo build --release -p test_error_listener
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 📦 РЕАЛЬНЫЙ ИСХОДНЫЙ КОД
@@ -76,17 +69,17 @@ COPY test_error_listener/ ./test_error_listener/
 
 RUN rm -rf \
     target/release/.fingerprint/shared-* \
-    target/release/.fingerprint/rail_tuner_2d-* \
+    target/release/.fingerprint/ros2_data_extraction-* \
     target/release/.fingerprint/test_error_listener-* \
     || true
 
-RUN cargo build --release -p rail_tuner_2d
+RUN cargo build --release -p test_error_listener
 
 # Зачистка отладочных символов
-RUN strip /app/target/release/rail_tuner_2d
+RUN strip /app/target/release/test_error_listener
 
 # ==============================================================================
-# 🏁 СТЕЙДЖ 2: RUNTIME С noVNC WEB ПАНЕЛЬЮ
+# 🏁 СТЕЙДЖ 2: МИНИМАЛЬНЫЙ RUNTIME
 # ==============================================================================
 FROM ubuntu:22.04
 
@@ -94,39 +87,14 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    xvfb \
-    x11vnc \
-    novnc \
-    websockify \
-    x11-utils \
-    libx11-6 \
-    libx11-xcb1 \
-    libxcursor1 \
-    libxi6 \
-    libxinerama1 \
-    libxrandr2 \
-    libxrender1 \
-    libxext6 \
-    libxfixes3 \
-    libsm6 \
-    libice6 \
-    libxkbcommon0 \
-    libxkbcommon-x11-0 \
-    libgl1-mesa-glx \
-    libgl1-mesa-dri \
-    mesa-vulkan-drivers \
-    libfontconfig1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-COPY --from=builder /app/target/release/rail_tuner_2d /app/rail_tuner_2d
-COPY rail_tuner_2d/entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
+COPY --from=builder /app/target/release/test_error_listener /app/test_error_listener
 
-# Web-порт для noVNC панели
-EXPOSE 6080
-# VNC порт (опционально для прямого VNC клиента)
-EXPOSE 5900
+ENV ROS_DISTRO=humble
+ENV ROS_LOCALHOST_ONLY=1
+ENV ROS_ERROR_TOPIC=/rail/error
 
-ENTRYPOINT ["/app/entrypoint.sh"]
+ENTRYPOINT ["/app/test_error_listener"]

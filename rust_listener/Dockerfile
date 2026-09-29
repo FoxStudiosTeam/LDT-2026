@@ -31,6 +31,7 @@ COPY shared/Cargo.toml ./shared/
 COPY data-extraction/Cargo.toml ./data-extraction/
 COPY rust_listener/Cargo.toml ./rust_listener/
 COPY rail_tuner_2d/Cargo.toml ./rail_tuner_2d/
+COPY test_error_listener/Cargo.toml ./test_error_listener/
 
 RUN mkdir -p \
         shared/src \
@@ -39,6 +40,7 @@ RUN mkdir -p \
         rail_tuner_2d/src \
     && echo "fn main() {}" > rust_listener/src/main.rs \
     && echo "fn main() {}" > rail_tuner_2d/src/main.rs \
+    && echo "fn main() {}" > test_error_listener/src/main.rs \
     && touch \
         shared/src/lib.rs \
         data-extraction/src/lib.rs \
@@ -59,18 +61,21 @@ RUN rm -rf \
     shared/src \
     data-extraction/src \
     rust_listener/src \
-    rail_tuner_2d/src
+    rail_tuner_2d/src \
+    test_error_listener/src
 
 COPY shared/ ./shared/
 COPY data-extraction/ ./data-extraction/
 COPY rust_listener/ ./rust_listener/
 COPY rail_tuner_2d/ ./rail_tuner_2d/
+COPY test_error_listener/ ./test_error_listener/
 
 RUN rm -rf \
     target/release/.fingerprint/shared-* \
     target/release/.fingerprint/ros2_data_extraction-* \
     target/release/.fingerprint/rust_listener-* \
     target/release/.fingerprint/rail_tuner_2d-* \
+    target/release/.fingerprint/test_error_listener-* \
     || true
 
 RUN cargo build --release -p rust_listener --bin ros2_debug_viewer

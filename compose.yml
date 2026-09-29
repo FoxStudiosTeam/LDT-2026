@@ -115,6 +115,22 @@ services:
       - ./frames:/app/frames:ro
       - ./dataset:/app/dataset_local:ro
 
+  # 5. Rust CLI слушатель топика /rail/error (высокопроизводительный слушатель телеметрии)
+  # Запуск: docker compose run --rm rust_error_listener
+  # Или в сыром JSON: docker compose run --rm rust_error_listener --raw
+  rust_error_listener:
+    build:
+      context: .
+      dockerfile: ./test_error_listener/Dockerfile
+    container_name: rust_error_listener
+    network_mode: "host"
+    ipc: "host"
+    env_file:
+      - .env
+    environment:
+      - ROS_LOCALHOST_ONLY=1
+      - ROS_ERROR_TOPIC=/rail/error
+
 volumes:
   bag_data:
     external: true
