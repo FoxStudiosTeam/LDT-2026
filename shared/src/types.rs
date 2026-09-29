@@ -43,13 +43,13 @@ pub fn is_zero_point(x: f32, y: f32, z: f32) -> bool {
 }
 
 #[repr(C)]
-pub struct CudaArray<const SIZE: usize> {
-    pub ptr: *mut f32,
+pub struct CudaArray<const SIZE: usize, T: Copy> {
+    pub ptr: *mut T,
     pub length: usize,
 }
 
-impl<const SIZE: usize> CudaArray<SIZE> {
-    pub fn get(&self, index: usize) -> Option<f32> {
+impl<const SIZE: usize, T: Copy> CudaArray<SIZE, T> {
+    pub fn get(&self, index: usize) -> Option<T> {
         if index >= self.length || self.ptr.is_null() {
             return None;
         }
@@ -57,7 +57,7 @@ impl<const SIZE: usize> CudaArray<SIZE> {
     }
 
     // Теперь берет истинный последний элемент, а не физический конец капы
-    pub fn last(&self) -> Option<&f32> {
+    pub fn last(&self) -> Option<&T> {
         if self.length == 0 || self.ptr.is_null() {
             return None;
         }
@@ -68,7 +68,7 @@ impl<const SIZE: usize> CudaArray<SIZE> {
         }
     }
 
-    pub fn push(&mut self, value: f32) {
+    pub fn push(&mut self, value: T) {
         if self.length == SIZE {
             return;
         }
@@ -91,11 +91,11 @@ impl<const SIZE: usize> CudaArray<SIZE> {
     }
 }
 
-unsafe impl<const SIZE: usize> Send for CudaArray<SIZE> {}
-unsafe impl<const SIZE: usize> Sync for CudaArray<SIZE> {}
+unsafe impl<const SIZE: usize, T: Copy> Send for CudaArray<SIZE, T> {}
+unsafe impl<const SIZE: usize, T: Copy> Sync for CudaArray<SIZE, T> {}
 
-impl<const SIZE: usize> Deref for CudaArray<SIZE> {
-    type Target = [f32];
+impl<const SIZE: usize, T: Copy> Deref for CudaArray<SIZE, T> {
+    type Target = [T];
 
     fn deref(&self) -> &Self::Target {
         if self.ptr.is_null() {
@@ -106,7 +106,7 @@ impl<const SIZE: usize> Deref for CudaArray<SIZE> {
     }
 }
 
-impl<const SIZE: usize> DerefMut for CudaArray<SIZE> {
+impl<const SIZE: usize, T: Copy> DerefMut for CudaArray<SIZE, T> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         if self.ptr.is_null() {
@@ -139,14 +139,14 @@ pub const SIZE: usize = 2_000_000;
 pub type AppPointCloud = PointCloud<SIZE>;
 
 pub struct PointCloud<const SIZE: usize> {
-    pub x: TripleBuffer<CudaArray<SIZE>>,
-    pub y: TripleBuffer<CudaArray<SIZE>>,
-    pub z: TripleBuffer<CudaArray<SIZE>>,
-    pub intensity: TripleBuffer<CudaArray<SIZE>>,
+    pub x: TripleBuffer<CudaArray<SIZE, f32>>,
+    pub y: TripleBuffer<CudaArray<SIZE, f32>>,
+    pub z: TripleBuffer<CudaArray<SIZE, f32>>,
+    pub intensity: TripleBuffer<CudaArray<SIZE, f32>>,
 
     pub can_write: bool,
 
-    pub ring: TripleBuffer<u16>,
+    pub ring: TripleBuffer<CudaArray<SIZE, u16>>,
     // Дублирующее поле "pub length: TripleBuffer<usize>" удалено, чтобы избежать рассинхронизации.
     pub height: TripleBuffer<u32>,
     pub width: TripleBuffer<u32>,
@@ -162,6 +162,7 @@ impl<const SIZE: usize> PointCloud<SIZE> {
         self.y[queue].clear();
         self.z[queue].clear();
         self.intensity[queue].clear();
+        self.ring[queue].clear();
     }
 
     pub fn new(
@@ -169,8 +170,26 @@ impl<const SIZE: usize> PointCloud<SIZE> {
         y_ptrs: [*mut f32; 3],
         z_ptrs: [*mut f32; 3],
         i_ptrs: [*mut f32; 3],
+        r_ptrs: [*mut u16; 3],
     ) -> Self {
         let make_fields = |ptrs: [*mut f32; 3]| {
+            [
+                CudaArray {
+                    ptr: ptrs[0],
+                    length: 0,
+                },
+                CudaArray {
+                    ptr: ptrs[1],
+                    length: 0,
+                },
+                CudaArray {
+                    ptr: ptrs[2],
+                    length: 0,
+                },
+            ]
+        };
+
+        let make_ring_fields = |ptrs: [*mut u16; 3]| {
             [
                 CudaArray {
                     ptr: ptrs[0],
@@ -196,7 +215,7 @@ impl<const SIZE: usize> PointCloud<SIZE> {
 
             width: TripleBuffer([0; 3]),
             height: TripleBuffer([0; 3]),
-            ring: TripleBuffer([0; 3]),
+            ring: TripleBuffer(make_ring_fields(r_ptrs)),
             timestamp: TripleBuffer([0; 3]),
             is_dense: TripleBuffer([false; 3]),
         }
@@ -234,18 +253,23 @@ impl fmt::Display for ProcessingQueue {
 }
 
 impl<const SIZE: usize> PointCloud<SIZE> {
-    pub fn iter(&self, queue: ProcessingQueue) -> impl Iterator<Item = (&f32, &f32, &f32, &f32)> {
+    pub fn iter(
+        &self,
+        queue: ProcessingQueue,
+    ) -> impl Iterator<Item = (&f32, &f32, &f32, &f32, &u16)> {
         let len = self.len(queue);
         let x_iter = self.x[queue][..len].iter();
         let y_iter = self.y[queue][..len].iter();
         let z_iter = self.z[queue][..len].iter();
         let int_iter = self.intensity[queue][..len].iter();
+        let r_iter = self.ring[queue][..len].iter();
 
         x_iter
             .zip(y_iter)
             .zip(z_iter)
             .zip(int_iter)
-            .map(|(((x, y), z), intensity)| (x, y, z, intensity))
+            .zip(r_iter)
+            .map(|((((x, y), z), intensity), ring)| (x, y, z, intensity, ring))
     }
 
     #[inline(always)]
@@ -254,9 +278,42 @@ impl<const SIZE: usize> PointCloud<SIZE> {
         self.x[queue].length
     }
 
+    #[inline(always)]
+    pub fn get_point(&self, queue: ProcessingQueue, index: usize) -> Option<(f32, f32, f32)> {
+        if index < self.len(queue) {
+            Some((
+                self.x[queue][index],
+                self.y[queue][index],
+                self.z[queue][index],
+            ))
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn get_point_with_intensity(
+        &self,
+        queue: ProcessingQueue,
+        index: usize,
+    ) -> Option<(f32, f32, f32, f32)> {
+        if index < self.len(queue) {
+            Some((
+                self.x[queue][index],
+                self.y[queue][index],
+                self.z[queue][index],
+                self.intensity[queue][index],
+            ))
+        } else {
+            None
+        }
+    }
+
     pub fn compute_stats(&self, queue: ProcessingQueue) -> CloudStats {
         let mut cloud_stats = CloudStats::new();
         let current_len = self.len(queue);
+
+        tracing::debug!("Len: {}", current_len);
 
         if current_len == 0 {
             return cloud_stats;
@@ -265,7 +322,7 @@ impl<const SIZE: usize> PointCloud<SIZE> {
         let (mut sum_x, mut sum_y, mut sum_z) = (0.0f32, 0.0f32, 0.0f32);
         let mut valid_count = 0usize;
 
-        for (&x, &y, &z, _) in self.iter(queue) {
+        for (&x, &y, &z, _, _) in self.iter(queue) {
             if is_zero_point(x, y, z) {
                 continue;
             }

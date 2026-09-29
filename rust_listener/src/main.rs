@@ -4,9 +4,6 @@
 //!   source /opt/ros/humble/setup.bash
 //!   cargo run --bin ros2_debug_viewer
 
-mod debug;
-mod engine;
-
 use std::sync::{Arc, RwLock};
 
 use shared::error::AppError;
@@ -39,7 +36,11 @@ async fn main() -> Result<(), AppError> {
     let (non_blocking_writer, _guard) = tracing_appender::non_blocking(std::io::stdout());
     let filter = EnvFilter::try_from_default_env()
         //  формат: package=level "," - разделитель
-        .unwrap_or_else(|_| EnvFilter::new("debug,rustdds=off,h2=off"));
+        .unwrap_or_else(|_| {
+            EnvFilter::new(
+                "info,ros2_data_extraction=info,ros2_debug_viewer=info,shared=info,rustdds=off",
+            )
+        });
 
     tracing_subscriber::fmt()
         .with_writer(non_blocking_writer)
@@ -54,9 +55,10 @@ async fn main() -> Result<(), AppError> {
     let y_ptr = pin_ptr(SIZE);
     let z_ptr = pin_ptr(SIZE);
     let i_ptr = pin_ptr(SIZE);
+    let r_ptr = pin_u16_ptr(SIZE);
 
     let cloud = Arc::<RwLock<AppPointCloud>>::new(RwLock::new(AppPointCloud::new(
-        x_ptr, y_ptr, z_ptr, i_ptr,
+        x_ptr, y_ptr, z_ptr, i_ptr, r_ptr,
     )));
 
     debug::std::print_banner();
@@ -70,8 +72,12 @@ async fn main() -> Result<(), AppError> {
         return Ok(());
     }
 
-    let point_cloud_stream =
-        ros2_data_extraction::init_sub(ENV.ROS_DOMAIN_ID, Arc::clone(&cloud)).await?;
+    let point_cloud_stream = ros2_data_extraction::init_sub_with_error_topic(
+        ENV.ROS_DOMAIN_ID,
+        Arc::clone(&cloud),
+        &ENV.ROS_ERROR_TOPIC,
+    )
+    .await?;
 
     let _ = entry(point_cloud_stream, rerun, Arc::clone(&cloud)).await?;
 

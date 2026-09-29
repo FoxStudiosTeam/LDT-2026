@@ -1,13 +1,13 @@
 FROM ros:humble
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV ROS_DOMAIN_ID=42
 ENV PYTHONUNBUFFERED=1
 ENV DATASET_DIR=/app/dataset
 
 RUN apt-get update && apt-get install -y \
     python3-pip \
     ros-humble-rosbag2-py \
+    ros-humble-rosbag2-storage-mcap \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

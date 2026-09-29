@@ -25,3 +25,18 @@ pub fn pin_ptr(size : usize) -> [*mut f32; 3] {
         [ptr1, ptr2, ptr3]
     }
 }
+pub fn pin_u16_ptr(size : usize) -> [*mut u16; 3] {
+    unsafe {
+        let layout = Layout::array::<u16>(size).unwrap();
+
+        let ptr1 = alloc(layout) as *mut u16;
+        let ptr2 = alloc(layout) as *mut u16;
+        let ptr3 = alloc(layout) as *mut u16;
+
+        if ptr1.is_null() || ptr2.is_null() || ptr3.is_null() {
+            std::alloc::handle_alloc_error(layout);
+        }
+
+        [ptr1, ptr2, ptr3]
+    }
+}

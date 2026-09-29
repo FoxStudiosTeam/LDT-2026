@@ -1,0 +1,13 @@
+[package]
+name = "test_error_listener"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = "0.4"
+
+ros2_data_extraction.workspace = true
+shared.workspace = true

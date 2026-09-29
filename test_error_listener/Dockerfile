@@ -1,19 +1,15 @@
 # ==============================================================================
-# 🛠️ СТЕЙДЖ 1: СБОРКА (Тяжелый образ со всеми компиляторами)
+# 🛠️ СТЕЙДЖ 1: СБОРКА
 # ==============================================================================
-FROM nvidia/cuda:12.2.2-devel-ubuntu22.04 AS builder
+FROM ubuntu:22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
     build-essential \
     pkg-config \
-    libclang-dev \
-    cmake \
-    curl \
     libssl-dev \
-    libxkbcommon-dev \
-    libgl1-mesa-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Установка Rust
@@ -38,21 +34,22 @@ RUN mkdir -p \
         data-extraction/src \
         rust_listener/src \
         rail_tuner_2d/src \
+        test_error_listener/src \
+    && echo "fn main() {}" > test_error_listener/src/main.rs \
     && echo "fn main() {}" > rust_listener/src/main.rs \
     && echo "fn main() {}" > rail_tuner_2d/src/main.rs \
-    && echo "fn main() {}" > test_error_listener/src/main.rs \
     && touch \
         shared/src/lib.rs \
         data-extraction/src/lib.rs \
         rust_listener/src/lib.rs
 
-# ⚡ Оптимизируем Cargo прямо на лету во время кэширования сборки
+# ⚡ Оптимизации сборки
 ENV CARGO_PROFILE_RELEASE_LTO=true
 ENV CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
 ENV CARGO_PROFILE_RELEASE_STRIP=true
 ENV CARGO_PROFILE_RELEASE_OPT_LEVEL=3
 
-RUN cargo build --release -p rust_listener --bin ros2_debug_viewer
+RUN cargo build --release -p test_error_listener
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 📦 РЕАЛЬНЫЙ ИСХОДНЫЙ КОД
@@ -73,31 +70,31 @@ COPY test_error_listener/ ./test_error_listener/
 RUN rm -rf \
     target/release/.fingerprint/shared-* \
     target/release/.fingerprint/ros2_data_extraction-* \
-    target/release/.fingerprint/rust_listener-* \
-    target/release/.fingerprint/rail_tuner_2d-* \
     target/release/.fingerprint/test_error_listener-* \
     || true
 
-RUN cargo build --release -p rust_listener --bin ros2_debug_viewer
+RUN cargo build --release -p test_error_listener
 
-# Дополнительно вычищаем остаточные отладочные символы из готовых бинарников
-RUN strip /app/target/release/ros2_debug_viewer
+# Зачистка отладочных символов
+RUN strip /app/target/release/test_error_listener
 
 # ==============================================================================
 # 🏁 СТЕЙДЖ 2: МИНИМАЛЬНЫЙ RUNTIME
 # ==============================================================================
-FROM nvidia/cuda:12.2.2-runtime-ubuntu22.04
+FROM ubuntu:22.04
 
-WORKDIR /app
+ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /app/target/release/ros2_debug_viewer /app/ros2_debug_viewer
+WORKDIR /app
 
-# Оставляем системные пути для работы NVidia контейнера через драйвер хоста
-ENV LD_LIBRARY_PATH="/usr/local/cuda-12.2/lib64:${LD_LIBRARY_PATH}"
+COPY --from=builder /app/target/release/test_error_listener /app/test_error_listener
+
 ENV ROS_DISTRO=humble
+ENV ROS_LOCALHOST_ONLY=1
+ENV ROS_ERROR_TOPIC=/rail/error
 
-ENTRYPOINT ["/app/ros2_debug_viewer"]
+ENTRYPOINT ["/app/test_error_listener"]
