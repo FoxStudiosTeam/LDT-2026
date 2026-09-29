@@ -121,7 +121,13 @@ WORKDIR /app
 
 COPY --from=builder /app/target/release/rail_tuner_2d /app/rail_tuner_2d
 COPY rail_tuner_2d/entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh && mkdir -p /tmp/runtime-root && chmod 0700 /tmp/runtime-root
+
+ENV DISPLAY=:99
+ENV XDG_RUNTIME_DIR=/tmp/runtime-root
+ENV WINIT_UNIX_BACKEND=x11
+ENV LIBGL_ALWAYS_SOFTWARE=1
+
 
 # Web-порт для noVNC панели
 EXPOSE 6080
