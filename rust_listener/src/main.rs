@@ -6,14 +6,27 @@
 
 use std::sync::{Arc, RwLock};
 
-use rust_listener::debug::{self, rerun::init_rerun};
-use rust_listener::engine::engine_entry::entry;
-use rust_listener::engine::types::{pin_ptr, pin_u16_ptr};
-use rust_listener::{ENV, Env};
 use shared::error::AppError;
+
 use shared::types::{AppPointCloud, SIZE};
 use tracing::*;
 use tracing_subscriber::EnvFilter;
+
+use crate::debug::rerun::init_rerun;
+use crate::engine::engine_entry::entry;
+use crate::engine::types::pin_ptr;
+
+kaiv_utils::env_config! {
+    ".env" => pub (crate) ENV = pub (crate) Env {
+        RERUN_URL : String = "rerun+http://host.docker.internal:9876/proxy".to_string(),
+        ROS_DOMAIN_ID : u16 = 42,
+        TOTAL_FRAMES : u64 = u64::MAX,
+        TEST_RERUN : bool = false,
+        PREVIEW_FOV_X_DEG : f32 = 25.0,
+        RENDER_PATH : String = "".to_string(),
+        OBSTACLES_CONFIG : String = "".to_string()
+    }
+}
 
 // ─── Точка входа ──────────────────────────────────────────────────────────────
 
