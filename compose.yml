@@ -91,22 +91,31 @@ services:
     working_dir: /app
     command: ["python3", "test_error_listener.py"]
 
-  # 4. Альтернативный Rust подписчик на /rail/error (работает без Python)
-  # Запуск: docker compose run --rm rust_error_listener
-  rust_error_listener:
+  # 4. Интерактивный 2D Range Image тюнер детектора рельсов (egui Web Panel)
+  # Веб-панель доступна в любом браузере: http://localhost:6080
+  # Запуск: docker compose up rail_tuner_2d
+  rail_tuner_2d:
     build:
       context: .
-      dockerfile: ./rust_listener/Dockerfile
-    container_name: rust_error_listener
+      dockerfile: ./rail_tuner_2d/Dockerfile
+    container_name: rail_tuner_2d
     network_mode: "host"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ipc: "host"
+    shm_size: '2gb'
     env_file:
       - .env
     environment:
-      - ROS_LOCALHOST_ONLY=1
-      - ROS_ERROR_TOPIC=/rail/error
-    entrypoint: ["/app/test_error_listener"]
+      - RERUN_URL=rerun+http://host.docker.internal:9876/proxy
+      - SCREEN_WIDTH=1600
+      - SCREEN_HEIGHT=900
+    volumes:
+      - bag_data:/app/dataset:ro
+      - ./frames:/app/frames:ro
+      - ./dataset:/app/dataset_local:ro
 
 volumes:
   bag_data:
     external: true
+

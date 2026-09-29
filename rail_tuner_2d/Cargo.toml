@@ -1,0 +1,15 @@
+[package]
+name = "rail_tuner_2d"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+eframe = "0.36.2"
+egui = "0.36.2"
+image = { version = "0.25", default-features = false, features = ["png"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+cdr = "0.2"
+rerun = "0.37.2"
+rayon = "1.12.0"
+
+shared.workspace = true

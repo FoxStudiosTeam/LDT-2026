@@ -1,19 +1,17 @@
 # ==============================================================================
-# 🛠️ СТЕЙДЖ 1: СБОРКА (Тяжелый образ со всеми компиляторами)
+# 🛠️ СТЕЙДЖ 1: СБОРКА
 # ==============================================================================
-FROM nvidia/cuda:12.2.2-devel-ubuntu22.04 AS builder
+FROM ubuntu:22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
     build-essential \
     pkg-config \
-    libclang-dev \
-    cmake \
-    curl \
     libssl-dev \
     libxkbcommon-dev \
     libgl1-mesa-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Установка Rust
@@ -37,20 +35,20 @@ RUN mkdir -p \
         data-extraction/src \
         rust_listener/src \
         rail_tuner_2d/src \
-    && echo "fn main() {}" > rust_listener/src/main.rs \
     && echo "fn main() {}" > rail_tuner_2d/src/main.rs \
+    && echo "fn main() {}" > rust_listener/src/main.rs \
     && touch \
         shared/src/lib.rs \
         data-extraction/src/lib.rs \
         rust_listener/src/lib.rs
 
-# ⚡ Оптимизируем Cargo прямо на лету во время кэширования сборки
+# ⚡ Оптимизации Cargo
 ENV CARGO_PROFILE_RELEASE_LTO=true
 ENV CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
 ENV CARGO_PROFILE_RELEASE_STRIP=true
 ENV CARGO_PROFILE_RELEASE_OPT_LEVEL=3
 
-RUN cargo build --release -p rust_listener --bin ros2_debug_viewer
+RUN cargo build --release -p rail_tuner_2d
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 📦 РЕАЛЬНЫЙ ИСХОДНЫЙ КОД
@@ -68,31 +66,44 @@ COPY rail_tuner_2d/ ./rail_tuner_2d/
 
 RUN rm -rf \
     target/release/.fingerprint/shared-* \
-    target/release/.fingerprint/ros2_data_extraction-* \
-    target/release/.fingerprint/rust_listener-* \
     target/release/.fingerprint/rail_tuner_2d-* \
     || true
 
-RUN cargo build --release -p rust_listener --bin ros2_debug_viewer
+RUN cargo build --release -p rail_tuner_2d
 
-# Дополнительно вычищаем остаточные отладочные символы из готовых бинарников
-RUN strip /app/target/release/ros2_debug_viewer
+# Зачистка отладочных символов
+RUN strip /app/target/release/rail_tuner_2d
 
 # ==============================================================================
-# 🏁 СТЕЙДЖ 2: МИНИМАЛЬНЫЙ RUNTIME
+# 🏁 СТЕЙДЖ 2: RUNTIME С noVNC WEB ПАНЕЛЬЮ
 # ==============================================================================
-FROM nvidia/cuda:12.2.2-runtime-ubuntu22.04
+FROM ubuntu:22.04
 
-WORKDIR /app
+ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    xvfb \
+    x11vnc \
+    novnc \
+    websockify \
+    x11-utils \
+    libxkbcommon-x11-0 \
+    libgl1-mesa-glx \
+    libgl1-mesa-dri \
+    mesa-vulkan-drivers \
+    libfontconfig1 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /app/target/release/ros2_debug_viewer /app/ros2_debug_viewer
+WORKDIR /app
 
-# Оставляем системные пути для работы NVidia контейнера через драйвер хоста
-ENV LD_LIBRARY_PATH="/usr/local/cuda-12.2/lib64:${LD_LIBRARY_PATH}"
-ENV ROS_DISTRO=humble
+COPY --from=builder /app/target/release/rail_tuner_2d /app/rail_tuner_2d
+COPY rail_tuner_2d/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
-ENTRYPOINT ["/app/ros2_debug_viewer"]
+# Web-порт для noVNC панели
+EXPOSE 6080
+# VNC порт (опционально для прямого VNC клиента)
+EXPOSE 5900
+
+ENTRYPOINT ["/app/entrypoint.sh"]

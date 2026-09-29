@@ -1,6 +1,7 @@
 pub mod boxcast;
 pub mod configs;
 pub mod debug_boxcast;
+pub mod debug_helper;
 pub mod error;
 pub mod rail_detection;
 pub mod range_image;

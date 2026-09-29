@@ -21,7 +21,7 @@
 //!   cargo run --bin rail_tuner_2d
 //!   cargo run --bin rail_tuner_2d -- frames
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
@@ -31,8 +31,8 @@ use eframe::egui::{self, Color32, ColorImage, Key, TextureHandle, TextureOptions
 use rayon::prelude::*;
 use rerun::{Color, Points3D, Radius, RecordingStream, RecordingStreamBuilder};
 use rusqlite::{Connection, OpenFlags};
-use rust_listener::debug::helper::DebugStream;
 use shared::configs::DetectionPreset;
+use shared::debug_helper::DebugStream;
 use shared::rail_detection::{
     DetectionResult, LidarGeometry, ObstacleDetectionMode, RailTrackDetector,
 };
@@ -65,6 +65,26 @@ pub enum TrackSource {
     Db3Bag { dir: PathBuf, files: Vec<PathBuf> },
     Db3(PathBuf),
     NpyDir(PathBuf),
+}
+
+#[derive(Hash, PartialEq, Eq)]
+enum TrackSourceKey {
+    Db3Bag(PathBuf),
+    NpyDir(PathBuf),
+    Db3(PathBuf),
+}
+
+// Вспомогательная функция для канонизации первого/основного пути источника
+fn get_canonical_key(source: &TrackSource) -> TrackSourceKey {
+    match source {
+        TrackSource::Db3Bag { dir, .. } => {
+            TrackSourceKey::Db3Bag(dir.canonicalize().unwrap_or_else(|_| dir.clone()))
+        }
+        TrackSource::NpyDir(p) => {
+            TrackSourceKey::NpyDir(p.canonicalize().unwrap_or_else(|_| p.clone()))
+        }
+        TrackSource::Db3(p) => TrackSourceKey::Db3(p.canonicalize().unwrap_or_else(|_| p.clone())),
+    }
 }
 
 impl TrackSource {
@@ -260,7 +280,7 @@ fn scan_tracks_in_root(root: &Path, tracks: &mut Vec<TrackSource>) {
     }
 }
 
-/// Находит доступные треки: ROS2 .db3 датасеты (включая мультифайловые) и .npy директории
+/// Находит доступные треки и гарантирует их уникальность
 pub fn discover_available_tracks(cli_arg: Option<&str>) -> Vec<TrackSource> {
     let mut tracks = Vec::new();
 
@@ -299,48 +319,52 @@ pub fn discover_available_tracks(cli_arg: Option<&str>) -> Vec<TrackSource> {
                                 files,
                             });
                         } else {
-                            tracks.push(TrackSource::Db3(p));
+                            tracks.push(TrackSource::Db3(p.clone()));
                         }
                     } else {
-                        tracks.push(TrackSource::Db3(p));
+                        tracks.push(TrackSource::Db3(p.clone()));
                     }
                 } else {
-                    tracks.push(TrackSource::Db3(p));
+                    tracks.push(TrackSource::Db3(p.clone()));
                 }
             }
         }
     }
 
     // 2. Сканирование папки dataset и текущей директории
-    let search_roots = [
+    let search_roots = deduplicate_paths(vec![
         PathBuf::from("dataset"),
         PathBuf::from("../dataset"),
         PathBuf::from("."),
-    ];
+    ]);
 
     for root in &search_roots {
         scan_tracks_in_root(root, &mut tracks);
     }
 
-    // 3. Сканирование известных папок с .npy кадрами
-    let npy_roots = [
-        PathBuf::from("frames"),
-        PathBuf::from("../frames"),
-        PathBuf::from("dev_pyrails/frames"),
-    ];
-    for n in &npy_roots {
-        if n.exists() && n.is_dir() {
-            let npy = scan_npy_frames(n);
-            if !npy.is_empty() {
-                let ts = TrackSource::NpyDir(n.clone());
-                if !tracks.contains(&ts) {
-                    tracks.push(ts);
-                }
+    // 3. Гарантия уникальности с сохранением первого найденного (приоритетного из CLI)
+    let mut seen = HashSet::new();
+    tracks.retain(|track| {
+        let key = get_canonical_key(track);
+        seen.insert(key) // insert возвращает false, если ключ уже присутствует
+    });
+
+    tracks
+}
+
+fn deduplicate_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+
+    for path in paths {
+        if let Ok(canonical) = path.canonicalize() {
+            if seen.insert(canonical) {
+                result.push(path);
             }
         }
     }
 
-    tracks
+    result
 }
 
 /// Поиск ID топика PointCloud2 в SQLite базе rosbag2
@@ -3064,10 +3088,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Подключение к Rerun (или запуск viewer)
     println!("[*] Connecting / Spawning Rerun viewer...");
-    let rec = RecordingStreamBuilder::new("rail_tuner_2d")
-        .spawn()
-        .or_else(|_| RecordingStreamBuilder::new("rail_tuner_2d").connect_grpc())
-        .ok();
+    let rec = if let Ok(url) = std::env::var("RERUN_URL") {
+        let trimmed = url.trim();
+        if !trimmed.is_empty() {
+            println!("[*] Connecting to RERUN_URL: {}", trimmed);
+            RecordingStreamBuilder::new("rail_tuner_2d")
+                .connect_grpc_opts(trimmed.to_string())
+                .ok()
+        } else {
+            None
+        }
+    } else {
+        RecordingStreamBuilder::new("rail_tuner_2d")
+            .spawn()
+            .or_else(|_| RecordingStreamBuilder::new("rail_tuner_2d").connect_grpc())
+            .ok()
+    };
 
     let app = RailTuner2DApp::new(available_tracks, initial_track_idx, dataset, rec);
     let native_options = eframe::NativeOptions {
