@@ -1,25 +1,31 @@
-//! rail_ort.rs — Orthographic / Ring-based Railway Track Detection for 3D LiDAR
+//! rail_ort.rs — Orthographic / Slice-based Railway Track Detection for 3D LiDAR
 //!
-//! Алгоритм детекции:
-//! 1. На вход принимаются PointCloud и ProcessingQueue:
-//!    - `crop_tunnel` производит пространственную обрезку тоннеля: Z in [z_min, z_max], X in [x_min, x_max].
-//!    - Фильтрация коллизий: отсечение слишком близких точек на кольце (< min_point_distance).
-//!    - Точки сохраняются в виде `RawFloorPoint` (хранит компактный индекс в PointCloud).
-//! 2. По кольцам от `ring_start` к `ring_end` ищутся резкие скачки по отражающей способности (|Delta I| >= intensity_jump_threshold).
-//! 3. Кандидаты отбираются по ширине колеи (nominal_gauge +- tolerance), высоте и непрерывности (lateral jump).
-//! 4. Аппроксимация траектории полиномами (Y(X) парабола, Z(X) наклон), темпоральное сглаживание, экстраполяция и Boxcast габарита.
+//! Физическая модель железнодорожного пути:
+//! 1. Рельсовое полотно — это жесткая параллельная конструкция с фиксированной колеей 1520 мм (номинал 1.520 м).
+//! 2. Левый и правый рельсы жестко связаны с осью пути:
+//!    X_left(y)  = X_center(y) + half_gauge
+//!    X_right(y) = X_center(y) - half_gauge
+//!    Оба рельса поворачивают синхронно с единым наклоном оси пути: dX/dY = slope_c.
+//! 3. На первом срезе под кабиной поезд физически стоит на путях:
+//!    X_center находится в узком коридоре пола [-0.60 .. +0.60] м.
+//! 4. От первого среза алгоритм шагает вперед по срезам:
+//!    - Предикшн положения: X_pred = X_prev + slope_c * dY
+//!    - Жесткий коридор отклонения рельсов (max_lateral_rail_jump) вокруг предсказанной траектории.
+//!    - Приоритет минимальной интенсивности (головка рельса зеркалит луч, I ~ 0).
+//!    - Фильтр минимального шага min_longitudinal_jump исключает дубликаты.
+//!    - Плавный уклон по высоте Z.
 
 use std::collections::VecDeque;
 use std::time::Instant;
 
 use crate::rail_detection::{
     DetectionHistoryItem, LidarGeometry, ObstacleConfig, RailPoint,
-    RailTrackDetector, TrackObstacle,
+    RailTrackDetector, TrackObstacle, ObstacleDetectionMode
 };
 use crate::range_image::RangeImage;
 use crate::types::{is_zero_point, AppPointCloud, ProcessingQueue};
 
-/// Конфигурация ортографического детектора путей по кольцам (RailOrt)
+/// Конфигурация ортографического детектора путей (RailOrt)
 #[derive(Clone, Debug)]
 pub struct RailOrtConfig {
     /// Нижняя граница по высоте полотна (м), отсечение подпола/балласта
@@ -31,9 +37,9 @@ pub struct RailOrtConfig {
     /// Максимальная дистанция вперед (м)
     pub y_max: f32,
 
-    /// Стартовое (ближнее к поезду) кольцо лидара (номер ring/строки, например 127)
+    /// Стартовое кольцо лидара (для совместимости)
     pub ring_start: usize,
-    /// Конечное (дальнее) кольцо лидара (номер ring/строки, например 15)
+    /// Конечное кольцо лидара (для совместимости)
     pub ring_end: usize,
 
     /// Порог резкого скачка по отражающей способности (|Delta I|) для поиска кандидатов
@@ -41,23 +47,34 @@ pub struct RailOrtConfig {
     /// Максимальная интенсивность точки рельса (0 = не ограничивать)
     pub intensity_max: f32,
 
-    /// Минимальное расстояние между точками на одном кольце для фильтрации коллизий/прореживания (м)
-    /// Например 0.01 (1 см) или 0.05 (5 см). 0.0 = фильтрация отключена.
+    /// Номинальный скачёк по высоте для рельс
+    pub nominal_height_jump: f32,
+    /// Допуск высоты рельс
+    pub height_jump_tolerance: f32,
+
+    /// Минимальное расстояние между точками на одном кольце/срезе для фильтрации коллизий (м)
     pub min_point_distance: f32,
 
     /// Номинальная ширина колеи (м), стандарт 1.520 м (1520 мм)
     pub nominal_gauge: f32,
-    /// Допуск ширины колеи (м), например 0.08 м (диапазон [nominal - tol .. nominal + tol])
+    /// Допуск ширины колеи (м), например 0.10 м
     pub gauge_tolerance: f32,
-    /// Максимальная разница по высоте между левым и правым рельсом (м)
+    /// Максимальная разница по высоте между левым и правым рельсом в одном срезе (м)
     pub max_rail_height_diff: f32,
 
-    /// Максимально допустимый скачок центра колеи между кольцами по Y (м)
+    /// Максимально допустимый скачок центра колеи между срезами по Y (м)
     pub max_lateral_jump: f32,
-    /// Максимально допустимый скачок отдельного рельса между кольцами по Y (м)
+    /// Максимально допустимый скачок отдельного рельса относительно предсказанной линии (м)
     pub max_lateral_rail_jump: f32,
+    /// Максимальный допустимый шаг между последовательными парами по Y (м)
+    pub max_longitudinal_jump: f32,
+    /// Минимальный допустимый шаг между парами по Y (м) для исключения скучивания точек
+    pub min_longitudinal_jump: f32,
 
-    /// Дистанция экстраполяции пути вперед (м), например 25.0 м
+    /// Минимальная продольная протяженность найденного пути (м) для отсечения шума (0 = выключено)
+    pub min_track_length_m: f32,
+
+    /// Дистанция экстраполяции пути вперед (м), например 30.0 м
     pub extrapolate_m: f32,
     /// Окно темпорального сглаживания полинома (кадров)
     pub smooth_n: usize,
@@ -66,29 +83,56 @@ pub struct RailOrtConfig {
     pub detect_obstacles: bool,
     /// Конфигурация поиска препятствий и габарита приближения (Boxcast)
     pub obstacle_config: ObstacleConfig,
+
+    pub intensity_score: f32,
+    pub gauge_err_score: f32,
+    pub delta_z_score: f32,
+    pub continuity_score: f32,
 }
 
 impl Default for RailOrtConfig {
     fn default() -> Self {
         Self {
-            z_min: -2.50,
-            z_max: -1.00,
-            y_min: 1.50,
-            y_max: 200.0,
-            ring_start: 127,
-            ring_end: 40,
-            intensity_jump_threshold: 8.0,
-            intensity_max: 0.0,
-            min_point_distance: 0.01,
-            nominal_gauge: 1.520,
-            gauge_tolerance: 0.08,
-            max_rail_height_diff: 0.12,
-            max_lateral_jump: 3.0,
-            max_lateral_rail_jump: 0.15,
-            extrapolate_m: 50.0,
-            smooth_n: 2,
-            detect_obstacles: true,
-            obstacle_config: ObstacleConfig::default(),
+            z_min : -12.00,
+            z_max : -1.00,
+            y_min : 2.00,
+            y_max : 50.0,
+            ring_start : 127,
+            ring_end : 40,
+            intensity_jump_threshold : 1.00,
+            intensity_max : 2.5,
+            nominal_height_jump : 0.44,
+            height_jump_tolerance : 0.46,
+            min_point_distance : 0.030,
+            min_track_length_m: 0.000,
+            nominal_gauge : 1.520,
+            gauge_tolerance : 0.100,
+            max_rail_height_diff : 0.100,
+            max_lateral_jump : 1.00,
+            max_lateral_rail_jump : 0.050,
+            max_longitudinal_jump : 4.50,
+            min_longitudinal_jump : 0.000,
+            extrapolate_m : 40.0,
+            smooth_n : 6,
+            detect_obstacles : true,
+            intensity_score : 1.20,
+            gauge_err_score : 3.30,
+            delta_z_score : 4.00,
+            continuity_score : 2.40,
+            obstacle_config: ObstacleConfig{
+                enabled : true,
+                mode : ObstacleDetectionMode::Boxcast3D,
+                clearance_width : 2.20,
+                clearance_narrowing_width : 0.6000,
+                clearance_narrowing_height : 0.3000,
+                min_height_above_rail : 0.20,
+                max_height_above_rail : 3.10,
+                min_points : 6,
+                max_distance_m : 60.0,
+                depth_diff_thresh : 0.25,
+                upward_curvature : 0.00040,
+                cluster_depth_thresh : 0.80,
+            },
         }
     }
 }
@@ -142,8 +186,8 @@ pub struct DetectionResultOrt {
     pub turn_radius: f32,
     pub turn_direction: String,
     pub lateral_shift_15m: f32,
-    pub poly_y: [f32; 3],
-    pub poly_z: [f32; 2],
+    pub poly_y: [f32; 3], // Полином бокового смещения X(Y) = a*Y^2 + b*Y + c
+    pub poly_z: [f32; 2], // Полином высоты Z(Y) = d*Y + e
     pub x_curve: Vec<f32>,
     pub y_center: Vec<f32>,
     pub z_center: Vec<f32>,
@@ -164,6 +208,9 @@ pub struct DetectionResultOrt {
     pub avg_intensity_left: f32,
     pub avg_intensity_right: f32,
     pub obstacles: Vec<TrackObstacle>,
+    pub clearance_width: f32,
+    pub min_height_above_rail: f32,
+    pub max_height_above_rail: f32,
     pub timing_rail_ms: f32,
     pub timing_obstacles_ms: f32,
     pub timing_total_ms: f32,
@@ -172,17 +219,17 @@ pub struct DetectionResultOrt {
 impl DetectionResultOrt {
     /// Генерирует 3D полилинии (wireframe strips) для визуализации габарита приближения пути (Boxcast)
     pub fn shapecast_wireframe_3d(&self) -> Vec<Vec<[f32; 3]>> {
-        let x_min = 2.0_f32;
-        let x_max = self
-            .x_ext
+        let y_start = self.y_center.first().copied().unwrap_or(-2.0);
+        let y_end = self
+            .y_ext
             .last()
             .copied()
-            .or_else(|| self.x_curve.last().copied())
-            .unwrap_or(40.0)
-            .max(x_min + 2.0);
+            .or_else(|| self.y_center.last().copied())
+            .unwrap_or(-40.0);
 
         let step_m = 0.5_f32;
-        let num_steps = ((x_max - x_min) / step_m).round().max(10.0) as usize;
+        let total_dist = (y_end - y_start).abs();
+        let num_steps = ((total_dist / step_m).round().max(10.0)) as usize;
 
         let mut line_bl = Vec::with_capacity(num_steps + 1);
         let mut line_br = Vec::with_capacity(num_steps + 1);
@@ -193,26 +240,30 @@ impl DetectionResultOrt {
         let hoop_dist_m = 4.0_f32;
         let hoop_step = ((hoop_dist_m / step_m).round().max(1.0)) as usize;
 
-        let clearance_width = 3.20_f32;
-        let min_height_above_rail = -0.10_f32;
-        let max_height_above_rail = 2.40_f32;
+        let clearance_width = if self.clearance_width > 0.0 { self.clearance_width } else { 2.10 };
+        let min_height_above_rail = self.min_height_above_rail;
+        let max_height_above_rail = if self.max_height_above_rail > self.min_height_above_rail {
+            self.max_height_above_rail
+        } else {
+            3.00
+        };
         let half_w = clearance_width * 0.5;
 
         for i in 0..=num_steps {
             let t = (i as f32) / (num_steps as f32);
-            let x = x_min + t * (x_max - x_min);
+            let y = y_start + t * (y_end - y_start);
 
-            let y_c = self.poly_y[0] * x * x + self.poly_y[1] * x + self.poly_y[2];
-            let z_surf = self.poly_z[0] * x + self.poly_z[1];
-            let dy_dx = 2.0 * self.poly_y[0] * x + self.poly_y[1];
-            let theta = dy_dx.atan();
-            let sin_t = theta.sin();
+            let x_c = self.poly_y[0] * y * y + self.poly_y[1] * y + self.poly_y[2];
+            let z_surf = self.poly_z[0] * y + self.poly_z[1];
+            let dx_dy = 2.0 * self.poly_y[0] * y + self.poly_y[1];
+            let theta = dx_dy.atan();
             let cos_t = theta.cos();
+            let sin_t = theta.sin();
 
-            let xl = x + half_w * sin_t;
-            let yl = y_c - half_w * cos_t;
-            let xr = x - half_w * sin_t;
-            let yr = y_c + half_w * cos_t;
+            let xl = x_c + half_w * cos_t;
+            let yl = y - half_w * sin_t;
+            let xr = x_c - half_w * cos_t;
+            let yr = y + half_w * sin_t;
 
             let zb = z_surf + min_height_above_rail;
             let zt = z_surf + max_height_above_rail;
@@ -260,297 +311,265 @@ impl DetectionResultOrt {
     }
 }
 
-/// Ортографический детектор рельсов по кольцам лидара и отражающей способности
+/// Ортографический детектор путей по продольным 10-см срезам (slices)
 pub struct RailOrtDetector {
     pub config: RailOrtConfig,
     pub geometry: LidarGeometry,
     pub history: VecDeque<DetectionHistoryItem>,
-    pub last_frame_idx: Option<usize>,
-    internal_obstacle_detector: RailTrackDetector,
+    pub internal_obstacle_detector: RailTrackDetector,
 }
 
 impl RailOrtDetector {
     pub fn new(geometry: LidarGeometry, config: RailOrtConfig) -> Self {
-        let internal_obstacle_detector = RailTrackDetector::new(geometry.clone());
+        let mut internal_obstacle_detector = RailTrackDetector::new(geometry.clone());
+        internal_obstacle_detector.obstacle_config = config.obstacle_config.clone();
         Self {
             config,
             geometry,
             history: VecDeque::new(),
-            last_frame_idx: None,
             internal_obstacle_detector,
         }
     }
 
-    /// Сброс истории темпорального сглаживания
     pub fn reset(&mut self) {
         self.history.clear();
-        self.last_frame_idx = None;
-        self.internal_obstacle_detector.reset();
     }
 
-    /// Обрезка тоннеля с группировкой по кольцам (128 колец) и фильтрацией коллизий
+    /// 1. Пространственная нарезка облака лидара на 10-см срезы по координате Y (дистанция вперед)
+    /// Формула индекса: slice_idx = (-y * 10.0).round()
+    pub fn crop_tunnel_slices(
+        &self,
+        cloud: &AppPointCloud,
+        queue: ProcessingQueue,
+    ) -> Vec<Vec<RawFloorPoint>> {
+        let num_slices = ((self.config.y_max * 10.0).ceil() as usize).max(100) + 1;
+        let mut slices: Vec<Vec<RawFloorPoint>> = vec![Vec::new(); num_slices];
+        let total_pts = cloud.len(queue);
+
+        for (i, (&_x, &y, &z, &int, _)) in cloud.iter(queue).enumerate() {
+            if i >= total_pts {
+                break;
+            }
+
+            let dist_fwd = -y;
+            if dist_fwd < self.config.y_min || dist_fwd > self.config.y_max {
+                continue;
+            }
+
+            if z < self.config.z_min || z > self.config.z_max {
+                continue;
+            }
+
+            if self.config.intensity_max > 0.0 && int.abs() > self.config.intensity_max {
+                continue;
+            }
+
+            let slice_idx = (dist_fwd * 10.0).round() as usize;
+            if slice_idx < num_slices {
+                slices[slice_idx].push(RawFloorPoint::new(i));
+            }
+        }
+
+        slices
+    }
+
+    /// Алиас для обратной совместимости вызовов
+    #[inline(always)]
     pub fn crop_tunnel_rings(
         &self,
         cloud: &AppPointCloud,
         queue: ProcessingQueue,
     ) -> Vec<Vec<RawFloorPoint>> {
-        let total_pts = cloud.len(queue);
-        if total_pts == 0 {
-            return vec![Vec::new(); 128];
-        }
-
-        let mut rings: Vec<Vec<RawFloorPoint>> = vec![Vec::new(); 128];
-
-        // Фильтрация коллизий: если min_point_distance > 0.0, отсекаем точки на одном кольце,
-        // расстояние между которыми меньше заданного порога (например, 1 см или 5 см).
-        let min_dist = self.config.min_point_distance;
-        let min_dist_sq = min_dist * min_dist;
-
-        let mut last_pos: Option<(f32, f32, f32)> = None;
-
-        for (i, (&x, &y, &z, _, &ring_u16)) in cloud.iter(queue).enumerate() {
-            if i >= total_pts {
-                break;
-            }
-            if is_zero_point(x, y, z) {
-                continue;
-            }
-
-            if z >= self.config.z_min
-                && z <= self.config.z_max
-                && y.abs() >= self.config.y_min
-                && y.abs() <= self.config.y_max
-            {
-                if let Some((lx, ly, lz)) = last_pos {
-                    let dx = x - lx;
-                    let dy = y - ly;
-                    let dz = z - lz;
-                    if dx * dx + dy * dy + dz * dz < min_dist_sq {
-                        // Коллизия точек — пропускаем дублирующуюся / слишком близкую точку
-                        continue;
-                    }
-                }
-                last_pos = Some((x, y, z));
-
-                let r = (ring_u16 as usize).min(127);
-                rings[r].push(RawFloorPoint { index: i });
-            }
-        }
-
-        rings
+        self.crop_tunnel_slices(cloud, queue)
     }
 
-    /// Детекция рельсов по облаку точек AppPointCloud
-    pub fn detect_rails(
+    /// Основной алгоритм детекции рельсов:
+    /// Идем от ближних к дальним 10-см срезам (от поезда вглубь тоннеля)
+    pub fn process_slices(
         &mut self,
+        slices: &mut [Vec<RawFloorPoint>],
         cloud: &AppPointCloud,
         queue: ProcessingQueue,
         frame_idx: usize,
-    ) -> Option<DetectionResultOrt> {
-        let mut rings = self.crop_tunnel_rings(cloud, queue);
-        self.process_rings(&mut rings, cloud, queue, frame_idx, None)
-    }
-
-    /// Алиас детекции для обратной совместимости (вызывает `detect_rails`)
-    #[inline(always)]
-    pub fn detect_from_cloud(
-        &mut self,
-        cloud: &AppPointCloud,
-        queue: ProcessingQueue,
-        frame_idx: usize,
-    ) -> Option<DetectionResultOrt> {
-        self.detect_rails(cloud, queue, frame_idx)
-    }
-
-    /// Основной алгоритм:
-    /// 2. Идем от ring_start (ближнего к поезду) к ring_end, ищем резкие скачки отражающей способности
-    /// 3. Отбираем кандидатов по паттерну: колея, одна высота, lateral jump — сохраняем в пулл лучших точек
-    /// 4. Повторяем до ring_end
-    /// 5. Строим прямые/полиномы и Boxcast габарита
-    pub fn process_rings(
-        &mut self,
-        rings: &mut Vec<Vec<RawFloorPoint>>,
-        cloud: &AppPointCloud,
-        queue: ProcessingQueue,
-        frame_idx: usize,
-        obs_frame: Option<&RangeImage>,
+        _obs_frame: Option<&RangeImage>,
     ) -> Option<DetectionResultOrt> {
         let t_start_rail = Instant::now();
 
-        // Проверка непрерывности истории
-        if let Some(last_idx) = self.last_frame_idx {
-            if frame_idx > last_idx + 4 {
-                self.history.clear();
-            }
+        if slices.is_empty() {
+            return None;
         }
-        self.last_frame_idx = Some(frame_idx);
 
-        let max_ring_avail = rings.len().saturating_sub(1);
-        let row_start = self.config.ring_start.min(max_ring_avail);
-        let row_end = self.config.ring_end.min(row_start);
+        let max_slice_avail = slices.len().saturating_sub(1);
+        let start_slice = ((self.config.y_min * 10.0).round() as usize).min(max_slice_avail);
+        let end_slice = ((self.config.y_max * 10.0).round() as usize).min(max_slice_avail);
 
         let mut best_points_pool: Vec<RailPoint> = Vec::new();
-        let mut prev_x_center: Option<f32> = None;
-        let mut prev_x_left: Option<f32> = None;
-        let mut prev_x_right: Option<f32> = None;
-        let mut last_detected_ring: Option<usize> = None;
 
-        let g_min = self.config.nominal_gauge - self.config.gauge_tolerance;
-        let g_max = self.config.nominal_gauge + self.config.gauge_tolerance;
-        let threshold = self.config.intensity_jump_threshold;
-        let max_int = self.config.intensity_max;
+        let g_nom = self.config.nominal_gauge;
+        let g_tol = self.config.gauge_tolerance;
+        let half_g = g_nom * 0.5;
+        let max_lat_rail = self.config.max_lateral_rail_jump;
+        let max_lon_jump = self.config.max_longitudinal_jump;
+        let min_lon_jump = self.config.min_longitudinal_jump;
+        let max_rail_height_diff = self.config.max_rail_height_diff;
 
-        // Прямые ссылки на срезы SoA буферов лидара в регистрах CPU
         let xs = &cloud.x[queue];
         let ys = &cloud.y[queue];
         let zs = &cloud.z[queue];
         let ints = &cloud.intensity[queue];
 
-        for (rev_offset, pts) in rings[row_end..=row_start].iter_mut().rev().enumerate() {
-            let ring = row_start - rev_offset;
-            let n = pts.len();
-            if n < 2 {
+        let slice_iter = start_slice..=end_slice;
+
+        // Единый устойчивый наклон траектории пути: dX/dY и dZ/dY
+        let mut track_slope_c = 0.0_f32;
+        let mut track_slope_z = 0.0_f32;
+
+        for slice_idx in slice_iter {
+            let pts = &mut slices[slice_idx];
+            if pts.len() < 2 {
                 continue;
             }
 
-            // Сортировка слева направо: X- (право) -> X+ (лево)
-            pts.sort_unstable_by(|a, b|
-                xs[a.index].total_cmp(&xs[b.index]));
+            // 1. Сортируем точки среза строго по X слева направо (от X- справа к X+ слева)
+            pts.sort_unstable_by(|a, b| xs[a.index].total_cmp(&xs[b.index]));
 
-            let ring_gap = if let Some(lr) = last_detected_ring {
-                lr.abs_diff(ring) as f32
-            } else {
-                1.0
-            };
-            // На дальних кольцах шаг по расстоянию больше, расширяем коридор
-            let gap_scale = 1.0 + 0.35 * (ring_gap - 1.0).max(0.0);
-            let max_lat = (0.60 * gap_scale).min(1.80);
-            let max_lat_rail = (0.50 * gap_scale).min(1.50);
+            let last_pt = best_points_pool.last().cloned();
 
             let mut best_pair: Option<RailPoint> = None;
             let mut best_score = f32::INFINITY;
 
-            // 1. Первая точка pl — правый рельс (X < 0)
+            // 2. Внешний цикл: ищем правый рельс pr (X- = справа)
             for (i, pr) in pts.iter().enumerate() {
                 let idx_r = pr.index;
                 let xr = xs[idx_r];
-
-                if let Some(pxl) = prev_x_right {
-                    if (xr - pxl).abs() > max_lat_rail {
-                        continue;
-                    }
-                } else if xr < -1.40 || xr > -0.15 {
-                    // На первом кольце правый рельс в диапазоне [-1.40 .. -0.15]
-                    continue;
-                }
-
-                let int_r = ints[idx_r];
-                if max_int > 0.0 && int_r > max_int {
-                    continue;
-                }
-
                 let yr = ys[idx_r];
                 let zr = zs[idx_r];
+                let int_r = ints[idx_r];
 
-                // 2. Вторая точка pr — левый рельс (X > 0, правее в отсортированном массиве)
-                for (j_offset, pr) in pts[i + 1..].iter().enumerate() {
-                    let j = i + 1 + j_offset;
-                    let idx_l = pr.index;
-                    let xl = xs[idx_l];
-                    let dx = xl - xr; // xr > xl, строго положительная разность
+                let dy = if let Some(ref lp) = last_pt { yr - lp.y_center } else { 0.0 };
+                let abs_dy = dy.abs();
 
-                    if dx < g_min - 0.15 {
+                // Проверка продольного шага:
+                if let Some(ref _lp) = last_pt {
+                    if min_lon_jump > 0.0 && abs_dy < min_lon_jump {
                         continue;
                     }
-                    if dx > g_max + 0.15 {
+                    if max_lon_jump > 0.0 && abs_dy > max_lon_jump {
+                        continue;
+                    }
+                }
+
+                // Предикшн положения рельсов от центра пути:
+                // X_c(y) = lp.x_center + slope * dy
+                // X_right = X_c - half_gauge, X_left = X_c + half_gauge
+                let (pred_xr, pred_xl, pred_xc, pred_zc, allowed_lat) = if let Some(ref lp) = last_pt {
+                    let xc = lp.x_center + track_slope_c * dy;
+                    let zc = lp.z_center + track_slope_z * dy;
+                    let allowed = max_lat_rail + 0.08 * abs_dy;
+                    (xc - half_g, xc + half_g, xc, zc, allowed)
+                } else {
+                    // Под кабиной ось поезда в коридоре [-0.60 .. +0.60] м
+                    (0.0 - half_g, 0.0 + half_g, 0.0, zr, 0.50)
+                };
+
+                // Отклонение правого рельса от предсказанной линии
+                if (xr - pred_xr).abs() > allowed_lat {
+                    continue;
+                }
+
+                // Внутренний диапазон по X для левого рельса:
+                // Он обязан находиться на расстоянии nominal_gauge +- tolerance от xr!
+                let target_min_xl = xr + (g_nom - g_tol);
+                let target_max_xl = xr + (g_nom + g_tol);
+
+                // 3. Внутренний цикл: ищем левый рельс pl
+                for pl in &pts[i + 1..] {
+                    let idx_l = pl.index;
+                    let xl = xs[idx_l];
+
+                    if xl < target_min_xl {
+                        continue;
+                    }
+                    if xl > target_max_xl {
+                        // Точки отсортированы по X — дальше искать бессмысленно!
                         break;
                     }
 
-                    if let Some(pxl) = prev_x_left {
-                        if (xl - pxl).abs() > max_lat_rail {
-                            continue;
-                        }
-                    } else if xl < 0.15 || xl > 1.40 {
-                        // На первом кольце левый рельс в диапазоне [0.15 .. 1.40]
-                        continue;
-                    }
-
-                    let int_l = ints[idx_l];
-                    if max_int > 0.0 && int_l > max_int {
-                        continue;
-                    }
-
-                    let zl = zs[idx_l];
-                    let dz = zl - zr;
-                    if dz.abs() > self.config.max_rail_height_diff {
+                    // Отклонение левого рельса от предсказанной линии полотна
+                    if (xl - pred_xl).abs() > allowed_lat {
                         continue;
                     }
 
                     let yl = ys[idx_l];
-                    let dy = yr - yl;
-                    let gauge = (dx * dx + dy * dy).sqrt();
-                    if gauge < g_min || gauge > g_max {
+                    let zl = zs[idx_l];
+                    let int_l = ints[idx_l];
+
+                    // Перепад высот между рельсами в одном срезе
+                    let dz = zl - zr;
+                    if dz.abs() > max_rail_height_diff {
                         continue;
                     }
 
                     let xm = 0.5 * (xl + xr);
-                    if let Some(prev_xm) = prev_x_center {
-                        if (xm - prev_xm).abs() > max_lat {
+                    let ym = 0.5 * (yl + yr);
+                    let zm = 0.5 * (zl + zr);
+
+                    // Проверка центра пути под кабиной на первом шаге
+                    if last_pt.is_none() && (xm < -0.60 || xm > 0.60) {
+                        continue;
+                    }
+
+                    // Ограничение изменения центра пути и уклона Z
+                    if last_pt.is_some() {
+                        if (xm - pred_xc).abs() > (self.config.max_lateral_jump + 0.08 * abs_dy) {
+                            continue;
+                        }
+                        let max_allowed_dz = 0.08 + (track_slope_z * dy).abs() + 0.05 * abs_dy;
+                        if (zm - pred_zc).abs() > max_allowed_dz {
                             continue;
                         }
                     }
 
-                    let cur_xc = -0.5 * (yr + yl); // X вперед
-                    let cur_yc = xm;               // Y вбок
-                    let cur_zc = 0.5 * (zr + zl);  // Z вверх
-
-                    if let Some(prev_pt) = best_points_pool.last() {
-                        let dx3d = cur_xc - prev_pt.x_center;
-                        let dy3d = cur_yc - prev_pt.y_center;
-                        let dz3d = cur_zc - prev_pt.z_center;
-
-                        let max_dist = self.config.max_lateral_jump * gap_scale;
-                        if dx3d * dx3d + dy3d * dy3d + dz3d * dz3d > max_dist * max_dist {
-                            continue; // Слишком резкий скачок — кандидат отбрасывается!
-                        }
+                    let current_gauge = xl - xr;
+                    let gauge_err = (current_gauge - g_nom).abs();
+                    if gauge_err > g_tol {
+                        continue;
                     }
 
-                    // Скоринг: точная геометрия колеи + непрерывность
-                    let gauge_err = (gauge - self.config.nominal_gauge).abs();
-                    let continuity_err = if let Some(prev_xm) = prev_x_center {
-                        (xm - prev_xm).abs()
-                    } else {
-                        0.0
-                    };
+                    // Скоринг пары:
+                    // 1. Интенсивность около 0 (рельсы минимально диффузят)
+                    let intensity_cost = (int_l.abs() + int_r.abs()) * self.config.intensity_score;
 
-                    // Зеркальная головка рельса: чем ниже интенсивность, тем лучше
-                    let intensity_score = (int_l + int_r) * 0.03;
+                    // 2. Отклонение ширины колеи от 1.520 м
+                    let gauge_cost = gauge_err * self.config.gauge_err_score;
 
-                    // УБРАН штраф за xm.abs(), теперь поворот не штрафуется!
-                    let score = gauge_err * 3.5
-                        + continuity_err * 2.5
-                        + dz.abs() * 1.5
-                        + intensity_score;
+                    // 3. Непрерывность смещения центров и рельсов
+                    let continuity_cost = ((xm - pred_xc).abs() + (xr - pred_xr).abs() + (xl - pred_xl).abs())
+                        * self.config.continuity_score;
+
+                    // 4. Перепад по высоте
+                    let dz_cost = dz.abs() * self.config.delta_z_score;
+
+                    let jump_pen = (xm - pred_xc).abs() * self.config.continuity_score * 0.4 + (zm - pred_zc).abs() * self.config.continuity_score * 0.4;
+
+                    let score = intensity_cost + gauge_cost + continuity_cost + dz_cost - jump_pen;
 
                     if score < best_score {
                         best_score = score;
-
-                        // Перевод в СК поезда/Rerun:
-                        // X = вперед (-y), Y = вбок (+x), Z = высота (+z)
                         best_pair = Some(RailPoint {
-                            row: ring,
+                            row: slice_idx,
                             col_left: 0,
                             col_right: 0,
-                            x_left: -yl,
-                            y_left: xl,
+                            x_left: xl,
+                            y_left: yl,
                             z_left: zl,
-                            x_right: -yr,
-                            y_right: xr,
+                            x_right: xr,
+                            y_right: yr,
                             z_right: zr,
-                            x_center: -0.5 * (yl + yr),
-                            y_center: xm,
-                            z_center: 0.5 * (zl + zr),
-                            gauge,
+                            x_center: xm,
+                            y_center: ym,
+                            z_center: zm,
+                            gauge: current_gauge,
                             intensity_left: int_l,
                             intensity_right: int_r,
                         });
@@ -558,13 +577,23 @@ impl RailOrtDetector {
                 }
             }
 
-            if let Some(ref pair) = best_pair {
-                // Запоминаем X сенсора (в pair.y_* записан X сенсора xl, xr, xm)
-                prev_x_center = Some(pair.y_center);
-                prev_x_left   = Some(pair.y_left);
-                prev_x_right  = Some(pair.y_right);
-                last_detected_ring = Some(ring);
-                best_points_pool.push(pair.clone());
+            // Если на данном срезе найдена пара рельсов
+            if let Some(pair) = best_pair {
+                // Обновляем единый наклон оси пути dX/dY и dZ/dY
+                if let Some(ref lp) = last_pt {
+                    let dy = pair.y_center - lp.y_center;
+                    if dy.abs() > 0.15 {
+                        // Оцениваем мгновенный наклон и ограничиваем физическим максимумом кривых метро
+                        let raw_slope_c = ((pair.x_center - lp.x_center) / dy).clamp(-0.25, 0.25);
+                        let raw_slope_z = ((pair.z_center - lp.z_center) / dy).clamp(-0.15, 0.15);
+
+                        // Мягкое экспоненциальное сглаживание (EMA) для подавления численного шума
+                        track_slope_c = 0.80 * track_slope_c + 0.20 * raw_slope_c;
+                        track_slope_z = 0.80 * track_slope_z + 0.20 * raw_slope_z;
+                    }
+                }
+
+                best_points_pool.push(pair);
             }
         }
 
@@ -572,25 +601,29 @@ impl RailOrtDetector {
             return None;
         }
 
-        if best_points_pool.len() < 4 {
-            return None;
-        }
-
-        // 5. Строим прямые/полиномы: Y(X) - боковое смещение от расстояния вперед, Z(X) - уклон от расстояния вперед
+        // 4. Строим полиномы: X(Y) - боковое смещение, Z(Y) - уклон
         let xm: Vec<f32> = best_points_pool.iter().map(|p| p.x_center).collect();
         let ym: Vec<f32> = best_points_pool.iter().map(|p| p.y_center).collect();
         let zm: Vec<f32> = best_points_pool.iter().map(|p| p.z_center).collect();
 
-        // ПРАВИЛЬНО: аргумент X (дистанция вперед), целевая функция Y (смещение влево/вправо):
-        let raw_poly_y = polyfit2(&xm, &ym).unwrap_or([0.0, 0.0, 0.0]);
-        let raw_poly_z = polyfit1(&xm, &zm).unwrap_or([0.0, zm.first().copied().unwrap_or(0.0)]);
+        // Проверка минимальной протяженности пути
+        let ym_max = ym.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        let ym_min = ym.iter().cloned().fold(f32::INFINITY, f32::min);
+        let track_length = (ym_max - ym_min).abs();
+
+        if self.config.min_track_length_m > 0.0 && track_length < self.config.min_track_length_m {
+            return None;
+        }
+
+        let raw_poly_y = polyfit2(&ym, &xm).unwrap_or([0.0, 0.0, 0.0]); // X(Y)
+        let raw_poly_z = polyfit1(&ym, &zm).unwrap_or([0.0, zm.first().copied().unwrap_or(0.0)]); // Z(Y)
 
         let mut sorted_gauges: Vec<f32> = best_points_pool.iter().map(|p| p.gauge).collect();
         sorted_gauges.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let median_gauge = sorted_gauges[sorted_gauges.len() / 2];
-        let x_det_max = xm.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        let x_det_max = ym.iter().map(|y| y.abs()).fold(f32::NEG_INFINITY, f32::max);
 
-        // Темпоральное взвешенное сглаживание
+        // Темпоральное взвешенное сглаживание полинома
         self.history.push_back(DetectionHistoryItem {
             poly_y: raw_poly_y,
             poly_z: raw_poly_z,
@@ -608,9 +641,9 @@ impl RailOrtDetector {
             let mut sum_xmax = 0.0f64;
             let mut total_w = 0.0f64;
 
-            for (i, item) in self.history.iter().enumerate() {
-                let w = (i + 1) as f64;
-                total_w += w;
+            let n = self.history.len();
+            for (idx, item) in self.history.iter().enumerate() {
+                let w = (idx + 1) as f64 / n as f64;
                 sum_y[0] += item.poly_y[0] as f64 * w;
                 sum_y[1] += item.poly_y[1] as f64 * w;
                 sum_y[2] += item.poly_y[2] as f64 * w;
@@ -618,6 +651,7 @@ impl RailOrtDetector {
                 sum_z[1] += item.poly_z[1] as f64 * w;
                 sum_gauge += item.gauge as f64 * w;
                 sum_xmax += item.x_det_max as f64 * w;
+                total_w += w;
             }
 
             let inv_w = 1.0 / total_w;
@@ -642,19 +676,19 @@ impl RailOrtDetector {
             99999.0
         };
 
-        let lateral_shift_15m = a * (15.0 * 15.0) + b * 15.0;
+        // В СК лидара: Y- вперед, X+ влево, X- вправо
+        let lateral_shift_15m = a * (15.0 * 15.0) - b * 15.0;
         let turn_direction = if lateral_shift_15m.abs() < 0.20 && a.abs() < 0.0003 {
             "STRAIGHT".to_string()
-        } else if lateral_shift_15m < 0.0 || a < 0.0 {
+        } else if lateral_shift_15m > 0.0 {
             "CURVE LEFT".to_string()
         } else {
             "CURVE RIGHT".to_string()
         };
 
         // Ресемплинг аналитических 3D линий путей
-        let xm_min = xm.iter().cloned().fold(f32::INFINITY, f32::min);
-        let x_min = 2.0_f32.max(xm_min);
-        let x_max = smooth_det_max.max(x_min + 1.0);
+        let y_start = ym_max.min(-1.5);
+        let y_end = ym_min.min(-smooth_det_max).min(y_start - 1.0);
 
         let n_resample = 100;
         let mut x_curve = Vec::with_capacity(n_resample);
@@ -669,26 +703,26 @@ impl RailOrtDetector {
 
         for i in 0..n_resample {
             let t = i as f32 / (n_resample - 1) as f32;
-            let xi = x_min + t * (x_max - x_min);
-            let yi = a * xi * xi + b * xi + c;
-            let zi = d * xi + e;
+            let yi = y_start + t * (y_end - y_start);
+            let xi = a * yi * yi + b * yi + c;
+            let zi = d * yi + e;
 
-            let theta_poly = (2.0 * a * xi + b).atan();
-            let sin_t = theta_poly.sin();
+            let theta_poly = (2.0 * a * yi + b).atan();
             let cos_t = theta_poly.cos();
+            let sin_t = theta_poly.sin();
 
             x_curve.push(xi);
             y_center.push(yi);
             z_center.push(zi);
 
-            x_left.push(xi + half_w * sin_t);
-            y_left.push(yi - half_w * cos_t);
+            x_left.push(xi + half_w * cos_t);
+            y_left.push(yi - half_w * sin_t);
 
-            x_right.push(xi - half_w * sin_t);
-            y_right.push(yi + half_w * cos_t);
+            x_right.push(xi - half_w * cos_t);
+            y_right.push(yi + half_w * sin_t);
         }
 
-        // Экстраполяция полинома вперед на M метров
+        // Экстраполяция полинома вперед (в сторону еще более отрицательного Y)
         let mut x_ext = Vec::new();
         let mut y_ext = Vec::new();
         let mut z_ext = Vec::new();
@@ -699,31 +733,32 @@ impl RailOrtDetector {
 
         if self.config.extrapolate_m > 0.0 {
             let n_ext = 50;
-            let x_ext_end = x_max + self.config.extrapolate_m;
+            let y_ext_start = y_end;
+            let y_ext_end = y_end - self.config.extrapolate_m;
             for i in 0..n_ext {
                 let t = i as f32 / (n_ext - 1) as f32;
-                let xe = x_max + t * (x_ext_end - x_max);
-                let ye = a * xe * xe + b * xe + c;
-                let ze = d * xe + e;
+                let ye = y_ext_start + t * (y_ext_end - y_ext_start);
+                let xe = a * ye * ye + b * ye + c;
+                let ze = d * ye + e;
 
-                let theta_poly = (2.0 * a * xe + b).atan();
-                let sin_t = theta_poly.sin();
+                let theta_poly = (2.0 * a * ye + b).atan();
                 let cos_t = theta_poly.cos();
+                let sin_t = theta_poly.sin();
 
                 x_ext.push(xe);
                 y_ext.push(ye);
                 z_ext.push(ze);
 
-                x_ext_l.push(xe + half_w * sin_t);
-                y_ext_l.push(ye - half_w * cos_t);
+                x_ext_l.push(xe + half_w * cos_t);
+                y_ext_l.push(ye - half_w * sin_t);
 
-                x_ext_r.push(xe - half_w * sin_t);
-                y_ext_r.push(ye + half_w * cos_t);
+                x_ext_r.push(xe - half_w * cos_t);
+                y_ext_r.push(ye + half_w * sin_t);
             }
         }
 
-        let total_checked_rings = (row_start.abs_diff(row_end) + 1) as f32;
-        let confidence = (best_points_pool.len() as f32 / total_checked_rings).min(1.0);
+        let total_checked_slices = (start_slice.abs_diff(end_slice) + 1) as f32;
+        let confidence = (best_points_pool.len() as f32 / total_checked_slices.max(1.0)).min(1.0);
 
         let (avg_i_l, avg_i_r) = if !best_points_pool.is_empty() {
             let n = best_points_pool.len() as f32;
@@ -737,30 +772,17 @@ impl RailOrtDetector {
 
         let t_rail_dur = t_start_rail.elapsed();
 
-        // Поиск препятствий и проверка кинематического габарита (Boxcast)
+        // Прямой 3D Boxcast без искажения тоннеля (warp)
         let t_start_obs = Instant::now();
         let obstacles = if self.config.detect_obstacles && self.config.obstacle_config.enabled {
-            if let Some(frame) = obs_frame {
-                self.internal_obstacle_detector.detect_obstacles(
-                    frame,
-                    Some((cloud, queue)),
-                    &poly_y,
-                    &poly_z,
-                    median_gauge,
-                    &self.config.obstacle_config,
-                    false,
-                )
-            } else {
-                // Прямой Boxcast по точкам AppPointCloud
-                detect_obstacles_direct(
-                    cloud,
-                    queue,
-                    &poly_y,
-                    &poly_z,
-                    median_gauge,
-                    &self.config.obstacle_config,
-                )
-            }
+            detect_obstacles_direct(
+                cloud,
+                queue,
+                &poly_y,
+                &poly_z,
+                median_gauge,
+                &self.config.obstacle_config,
+            )
         } else {
             Vec::new()
         };
@@ -802,15 +824,32 @@ impl RailOrtDetector {
             avg_intensity_left: avg_i_l,
             avg_intensity_right: avg_i_r,
             obstacles,
+            clearance_width: self.config.obstacle_config.clearance_width,
+            min_height_above_rail: self.config.obstacle_config.min_height_above_rail,
+            max_height_above_rail: self.config.obstacle_config.max_height_above_rail,
             timing_rail_ms,
             timing_obstacles_ms,
             timing_total_ms,
         })
     }
+
+    /// Алиас для обратной совместимости вызовов
+    #[inline(always)]
+    pub fn process_rings(
+        &mut self,
+        slices: &mut [Vec<RawFloorPoint>],
+        cloud: &AppPointCloud,
+        queue: ProcessingQueue,
+        frame_idx: usize,
+        obs_frame: Option<&RangeImage>,
+    ) -> Option<DetectionResultOrt> {
+        self.process_slices(slices, cloud, queue, frame_idx, obs_frame)
+    }
 }
 
-/// Прямой Boxcast габарита приближения по облаку точек AppPointCloud
-fn detect_obstacles_direct(
+/// Прямой 3D Boxcast габарита приближения по облаку точек AppPointCloud
+/// без искусственного искажения тоннеля (warp)
+pub fn detect_obstacles_direct(
     pc: &AppPointCloud,
     queue: ProcessingQueue,
     poly_y: &[f32; 3],
@@ -823,65 +862,145 @@ fn detect_obstacles_direct(
 
     let half_gauge = gauge * 0.5;
     let danger_half_w = half_gauge + 0.15;
-    let clearance_half_w = cfg.clearance_width * 0.5;
+    let clearance_width = cfg.clearance_width;
+    let min_w = gauge.max(1.0).min(clearance_width);
+    let nom_h = (cfg.max_height_above_rail - cfg.min_height_above_rail).max(0.1);
+    let center_h = (cfg.min_height_above_rail + cfg.max_height_above_rail) * 0.5;
+    let min_h_thickness = 0.30_f32.min(nom_h);
 
     let total = pc.len(queue);
-    let mut count_crit = 0usize;
-    let mut count_warn = 0usize;
-    let mut min_dist = f32::INFINITY;
+
+    // Точки-вторжения: (x, y, z, dist_fwd, d_lat, dz, is_critical)
+    let mut intrusions: Vec<([f32; 3], f32, f32, f32, bool)> = Vec::new();
 
     for (i, (&x, &y, &z, _, _)) in pc.iter(queue).enumerate() {
         if i >= total {
             break;
         }
-        if x < 2.0 || x > cfg.max_distance_m || is_zero_point(x, y, z) {
+        let dist_fwd = -y;
+        if dist_fwd < 2.0 || dist_fwd > cfg.max_distance_m || is_zero_point(x, y, z) {
             continue;
         }
 
-        let y_track = a * x * x + b * x + c;
-        let z_track = d * x + e;
+        // Положение оси пути в точке y: X_track(y) и Z_track(y)
+        let x_track = a * y * y + b * y + c;
+        let z_track = d * y + e;
 
-        let dy = (y - y_track).abs();
+        // Касательный угол пути в этой точке
+        let k = 2.0 * a * y + b;
+        let cos_theta = 1.0 / (1.0 + k * k).sqrt();
+
+        // Боковое расстояние по нормали к оси пути
+        let d_lat = (x - x_track) * cos_theta;
         let dz = z - z_track;
 
-        if dz >= cfg.min_height_above_rail && dz <= cfg.max_height_above_rail {
-            if dy <= clearance_half_w {
-                let is_critical = dy <= danger_half_w;
-                if is_critical {
-                    count_crit += 1;
-                } else {
-                    count_warn += 1;
-                }
-                if x < min_dist {
-                    min_dist = x;
-                }
-            }
+        // Сужение/расширение габарита по дальности
+        let dx_fwd = (dist_fwd - 2.0).max(0.0);
+        let cur_half_w = (clearance_width - cfg.clearance_narrowing_width * dx_fwd)
+            .max(min_w)
+            * 0.5;
+        let cur_h = (nom_h - cfg.clearance_narrowing_height * dx_fwd).max(min_h_thickness);
+        let cur_min_h = center_h - cur_h * 0.5;
+        let cur_max_h = center_h + cur_h * 0.5;
+
+        if d_lat.abs() <= cur_half_w && dz >= cur_min_h && dz <= cur_max_h {
+            let is_critical = d_lat.abs() <= danger_half_w;
+            intrusions.push(([x, y, z], dist_fwd, d_lat, dz, is_critical));
         }
     }
 
+    if intrusions.is_empty() {
+        return Vec::new();
+    }
+
+    // Сортировка по продольной дистанции вперед
+    intrusions.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
+
+    // Кластеризация по продольному расстоянию вдоль пути
+    let cluster_depth = cfg.cluster_depth_thresh.max(0.60);
+    let mut clusters: Vec<Vec<([f32; 3], f32, f32, f32, bool)>> = Vec::new();
+    let mut cur_cluster: Vec<([f32; 3], f32, f32, f32, bool)> = Vec::new();
+
+    for pt in intrusions {
+        if let Some(last_in_cluster) = cur_cluster.last() {
+            if (pt.1 - last_in_cluster.1).abs() > cluster_depth {
+                if !cur_cluster.is_empty() {
+                    clusters.push(std::mem::take(&mut cur_cluster));
+                }
+            }
+        }
+        cur_cluster.push(pt);
+    }
+    if !cur_cluster.is_empty() {
+        clusters.push(cur_cluster);
+    }
+
     let mut obstacles = Vec::new();
-    if count_crit > 0 || count_warn > 0 {
-        let is_crit = count_crit > 0;
-        let total_pts = count_crit + count_warn;
-        let obs_h = cfg.max_height_above_rail - cfg.min_height_above_rail;
+    let mut obs_id = 1usize;
+
+    for cl in clusters {
+        if cl.len() < cfg.min_points {
+            continue;
+        }
+
+        let n = cl.len() as f32;
+        let mut min_x = f32::INFINITY;
+        let mut max_x = f32::NEG_INFINITY;
+        let mut min_y = f32::INFINITY;
+        let mut max_y = f32::NEG_INFINITY;
+        let mut min_z = f32::INFINITY;
+        let mut max_z = f32::NEG_INFINITY;
+
+        let mut sum_dist = 0.0f32;
+        let mut sum_lat = 0.0f32;
+        let mut sum_dz = 0.0f32;
+        let mut crit_count = 0usize;
+
+        for &(p, dist_fwd, d_lat, dz, is_crit) in &cl {
+            min_x = min_x.min(p[0]);
+            max_x = max_x.max(p[0]);
+            min_y = min_y.min(p[1]);
+            max_y = max_y.max(p[1]);
+            min_z = min_z.min(p[2]);
+            max_z = max_z.max(p[2]);
+
+            sum_dist += dist_fwd;
+            sum_lat += d_lat;
+            sum_dz += dz;
+            if is_crit {
+                crit_count += 1;
+            }
+        }
+
+        let avg_dist = sum_dist / n;
+        let avg_lat = sum_lat / n;
+        let avg_dz = sum_dz / n;
+        let is_critical = crit_count >= 2;
+
+        let size_x = (max_x - min_x).max(0.15);
+        let size_y = (max_y - min_y).max(0.15);
+        let size_z = (max_z - min_z).max(0.15);
+
         obstacles.push(TrackObstacle {
-            id: 1,
-            distance_along_track: min_dist,
-            lateral_offset: 0.0,
-            height_above_rail: 0.5,
-            bbox_3d_min: [min_dist, -clearance_half_w, 0.0],
-            bbox_3d_max: [min_dist + 1.0, clearance_half_w, obs_h],
+            id: obs_id,
+            distance_along_track: avg_dist,
+            lateral_offset: avg_lat,
+            height_above_rail: avg_dz,
+            bbox_3d_min: [min_x, min_y, min_z],
+            bbox_3d_max: [max_x, max_y, max_z],
             bbox_2d: [0, 0, 10, 10],
-            points_count: total_pts,
-            is_critical: is_crit,
-            size_m: [1.0, clearance_half_w * 2.0, obs_h],
+            points_count: cl.len(),
+            is_critical,
+            size_m: [size_x, size_y, size_z],
         });
+
+        obs_id += 1;
     }
 
     obstacles
 }
 
-/// Линейная регрессия Z(X) = d*X + e
+/// Линейная регрессия Z(Y) = d*Y + e
 fn polyfit1(xs: &[f32], ys: &[f32]) -> Option<[f32; 2]> {
     let n = xs.len() as f32;
     if n < 2.0 {
@@ -902,7 +1021,7 @@ fn polyfit1(xs: &[f32], ys: &[f32]) -> Option<[f32; 2]> {
     Some([slope, intercept])
 }
 
-/// Квадратичная регрессия Y(X) = a*X^2 + b*X + c методом наименьших квадратов
+/// Квадратичная регрессия X(Y) = a*Y^2 + b*Y + c методом наименьших квадратов
 fn polyfit2(xs: &[f32], ys: &[f32]) -> Option<[f32; 3]> {
     let n = xs.len() as f64;
     if n < 3.0 {
@@ -957,4 +1076,78 @@ fn polyfit2(xs: &[f32], ys: &[f32]) -> Option<[f32; 3]> {
         (det_b / det) as f32,
         (det_c / det) as f32,
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_polyfit1_linear() {
+        let ys = vec![-10.0, -20.0, -30.0, -40.0];
+        let zs = vec![-1.0, -1.2, -1.4, -1.6]; // Z = 0.02 * Y - 0.8
+        let res = polyfit1(&ys, &zs).expect("fit failed");
+        assert!((res[0] - 0.02).abs() < 1e-4);
+        assert!((res[1] - (-0.8)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_polyfit2_parabola() {
+        let ys = vec![-5.0, -10.0, -15.0, -20.0, -25.0];
+        let xs: Vec<f32> = ys.iter().map(|&y| 0.001 * y * y - 0.02 * y + 0.1).collect();
+        let res = polyfit2(&ys, &xs).expect("fit failed");
+        assert!((res[0] - 0.001).abs() < 1e-4);
+        assert!((res[1] - (-0.02)).abs() < 1e-4);
+        assert!((res[2] - 0.1).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_shapecast_wireframe_3d_coordinates() {
+        let res = DetectionResultOrt {
+            frame_idx: 1,
+            points: Vec::new(),
+            gauge: 1.52,
+            curvature_a: 0.0,
+            heading_b: 0.0,
+            offset_c: 0.0,
+            turn_radius: 99999.0,
+            turn_direction: "STRAIGHT".to_string(),
+            lateral_shift_15m: 0.0,
+            poly_y: [0.0, 0.0, 0.0],
+            poly_z: [0.0, -1.5],
+            x_curve: Vec::new(),
+            y_center: vec![-2.0, -10.0, -20.0],
+            z_center: vec![-1.5, -1.5, -1.5],
+            x_left: Vec::new(),
+            y_left: Vec::new(),
+            x_right: Vec::new(),
+            y_right: Vec::new(),
+            confidence: 1.0,
+            extrapolate_m: 10.0,
+            smooth_n: 1,
+            x_ext: Vec::new(),
+            y_ext: vec![-20.0, -30.0],
+            z_ext: Vec::new(),
+            x_ext_l: Vec::new(),
+            y_ext_l: Vec::new(),
+            x_ext_r: Vec::new(),
+            y_ext_r: Vec::new(),
+            avg_intensity_left: 10.0,
+            avg_intensity_right: 10.0,
+            obstacles: Vec::new(),
+            clearance_width: 2.10,
+            min_height_above_rail: 0.00,
+            max_height_above_rail: 3.00,
+            timing_rail_ms: 1.0,
+            timing_obstacles_ms: 0.5,
+            timing_total_ms: 1.5,
+        };
+
+        let strips = res.shapecast_wireframe_3d();
+        assert!(!strips.is_empty());
+        let p0 = strips[0][0];
+        // X+ = left, Y- = forward, Z- = down
+        assert!(p0[1] <= -1.5, "Y should be negative forward distance");
+        assert!(p0[0] > 0.0, "Left boundary X should be positive (X+ is left)");
+    }
 }
