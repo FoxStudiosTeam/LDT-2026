@@ -61,7 +61,7 @@ services:
     environment:
       - ROS_LOCALHOST_ONLY=1
       - ROS_ERROR_TOPIC=/rail/error
-      - RERUN_URL=rerun+http://127.0.0.1:9876/proxy
+      - RERUN_URL=rerun+http://host.docker.internal:9876/proxy
     deploy:
       resources:
         reservations:
@@ -137,3 +137,4 @@ services:
 volumes:
   bag_data:
     external: true
+
