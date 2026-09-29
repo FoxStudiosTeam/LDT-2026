@@ -15,13 +15,9 @@ path = "src/main.rs"
 #name = "rail_tuner"
 #path = "src/bin/rail_tuner.rs"
 #
-#[[bin]]
-#name = "rail_tuner_2d"
-#path = "src/bin/rail_tuner_2d.rs"
-#
-#[[bin]]
-#name = "inject_db3_rings"
-#path = "src/bin/inject_db3_rings.rs"
+[[bin]]
+name = "rail_tuner_2d"
+path = "src/bin/rail_tuner_2d.rs"
 
 [[bin]]
 name = "test_error_listener"
@@ -34,9 +30,6 @@ path = "src/bin/diagnose_detector.rs"
 [[bin]]
 name = "rail_live_tuner"
 path = "src/bin/rail_live_tuner.rs"
-
-[profile.release]
-debug = true
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }

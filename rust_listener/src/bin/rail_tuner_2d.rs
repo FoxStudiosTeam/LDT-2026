@@ -32,11 +32,62 @@ use rayon::prelude::*;
 use rerun::{Color, Points3D, Radius, RecordingStream, RecordingStreamBuilder};
 use rusqlite::{Connection, OpenFlags};
 use rust_listener::debug::helper::DebugStream;
+use rust_listener::engine::types::{pin_ptr, pin_u16_ptr};
 use shared::rail_detection::{
     DetectionResult, LidarGeometry, ObstacleDetectionMode, ObstacleStatus, RailTrackDetector,
 };
+use shared::rail_ort::{DetectionResultOrt, RailOrtConfig, RailOrtDetector};
 use shared::range_image::RangeImage;
 use shared::transport::PointCloud2;
+use shared::types::{AppPointCloud, ProcessingQueue, SIZE};
+
+/// Режим работы детектора
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DetectorEngineMode {
+    RailTrack2D,
+    RailOrt3D,
+    Comparison,
+}
+
+/// Заполнение AppPointCloud из RangeImage для детектора RailOrt
+fn fill_cloud_from_range_image(
+    ri: &RangeImage,
+    geo: &LidarGeometry,
+    cloud: &mut AppPointCloud,
+    queue: ProcessingQueue,
+) {
+    cloud.clear(queue);
+    let mut count = 0;
+    for r in 0..ri.height {
+        let r_off = r * ri.width;
+        for c in 0..ri.width {
+            let depth = ri.data[r_off + c];
+            if depth > 0.5 && depth < 200.0 {
+                let (x_fwd, y_lat, z_up) = geo.row_col_range_to_xyz(r, c, depth);
+                // В СК лидара: x_sensor = -y_lat, y_sensor = -x_fwd (дистанция вперед отрицательная), z_sensor = z_up
+                let sx = -y_lat;
+                let sy = -x_fwd;
+                let sz = z_up;
+                let sint = ri.get_intensity(r, c);
+                let sring = r as u16;
+
+                if count < AppPointCloud::CAP {
+                    cloud.x[queue][count] = sx;
+                    cloud.y[queue][count] = sy;
+                    cloud.z[queue][count] = sz;
+                    cloud.intensity[queue][count] = sint;
+                    cloud.ring[queue][count] = sring;
+                    cloud.x[queue].length += 1;
+                    cloud.y[queue].length += 1;
+                    cloud.z[queue].length += 1;
+                    cloud.intensity[queue].length += 1;
+                    cloud.ring[queue].length += 1;
+                    count += 1;
+                }
+            }
+        }
+    }
+}
 
 /// Google Turbo Colormap polynomial approximation
 #[inline(always)]
@@ -1178,6 +1229,8 @@ impl EguiRangePainter {
         &self,
         frame: &RangeImage,
         res: Option<&DetectionResult>,
+        cmp_res: Option<&DetectionResult>,
+        is_comparison: bool,
         geo: &LidarGeometry,
         _clearance_width: f32,
         layer_cfg: &LayerViewConfig,
@@ -1324,6 +1377,36 @@ impl EguiRangePainter {
                         })
                         .collect();
                     draw_line_rgb(&mut rgb, out_w, out_h, &px_strip, shapecast2_col, 1);
+                }
+            }
+
+            // Comparison mode: draw RailOrt curves in Gold / Yellow
+            if is_comparison {
+                if let Some(r_cmp) = cmp_res {
+                    let to_px = |xs: &[f32], ys: &[f32], zs: &[f32]| -> Vec<(i32, i32)> {
+                        let mut out = Vec::new();
+                        for i in 0..xs.len() {
+                            let (row, col) = geo.xyz_to_row_col(xs[i], ys[i], zs[i]);
+                            if row >= 0 && (row as usize) < h && col >= 0 && (col as usize) < w {
+                                out.push((
+                                    (col as usize * self.scale) as i32,
+                                    (row as usize * self.scale) as i32,
+                                ));
+                            }
+                        }
+                        out
+                    };
+
+                    let pts_c = to_px(&r_cmp.x_curve, &r_cmp.y_center, &r_cmp.z_center);
+                    let pts_l = to_px(&r_cmp.x_left, &r_cmp.y_left, &r_cmp.z_center);
+                    let pts_r = to_px(&r_cmp.x_right, &r_cmp.y_right, &r_cmp.z_center);
+
+                    // RailOrt Left rail (Gold)
+                    draw_line_rgb(&mut rgb, out_w, out_h, &pts_l, [255, 215, 0], 2);
+                    // RailOrt Right rail (Golden Orange)
+                    draw_line_rgb(&mut rgb, out_w, out_h, &pts_r, [255, 140, 0], 2);
+                    // RailOrt Centerline (Bright Yellow)
+                    draw_line_rgb(&mut rgb, out_w, out_h, &pts_c, [255, 255, 50], 2);
                 }
             }
 
@@ -1589,6 +1672,8 @@ pub struct PipelineProfiling {
     pub egui_paint_ms: f32,
     /// 8. Загрузка текстуры на GPU (egui load_texture)
     pub texture_upload_ms: f32,
+    /// Время детекции RailOrt (срезы и полином)
+    pub ort_detect_ms: f32,
     /// Время основных вычислений до отрисовки интерфейса
     pub calc_pipeline_ms: f32,
     /// Полное сквозное время обработки и отображения одного кадра (end-to-end)
@@ -1597,6 +1682,7 @@ pub struct PipelineProfiling {
     // Сглаженные средние значения (EMA, alpha = 0.15)
     pub ema_total_ms: f32,
     pub ema_detector_ms: f32,
+    pub ema_ort_ms: f32,
     pub ema_rerun_ms: f32,
     pub ema_paint_ms: f32,
 }
@@ -1607,12 +1693,14 @@ impl PipelineProfiling {
         if self.ema_total_ms <= 0.0 {
             self.ema_total_ms = self.total_pipeline_ms;
             self.ema_detector_ms = self.detector_total_ms;
+            self.ema_ort_ms = self.ort_detect_ms;
             self.ema_rerun_ms = self.rerun_stream_ms;
             self.ema_paint_ms = self.egui_paint_ms + self.texture_upload_ms;
         } else {
             self.ema_total_ms = self.ema_total_ms * (1.0 - alpha) + self.total_pipeline_ms * alpha;
             self.ema_detector_ms =
                 self.ema_detector_ms * (1.0 - alpha) + self.detector_total_ms * alpha;
+            self.ema_ort_ms = self.ema_ort_ms * (1.0 - alpha) + self.ort_detect_ms * alpha;
             self.ema_rerun_ms = self.ema_rerun_ms * (1.0 - alpha) + self.rerun_stream_ms * alpha;
             self.ema_paint_ms = self.ema_paint_ms * (1.0 - alpha)
                 + (self.egui_paint_ms + self.texture_upload_ms) * alpha;
@@ -1691,6 +1779,40 @@ pub struct RailTuner2DApp {
     depth_diff_thresh_2: f32,
     upward_curvature_2: f32,
 
+    // Выбор активного движка детектора: RailTrack2D, RailOrt3D или Comparison
+    engine_mode: DetectorEngineMode,
+
+    // Параметры детектора RailOrt (3D Orthographic Slices)
+    ort_detector: RailOrtDetector,
+    ort_z_min: f32,
+    ort_z_max: f32,
+    ort_y_min: f32,
+    ort_y_max: f32,
+    ort_intensity_jump_threshold: f32,
+    ort_intensity_max: f32,
+    ort_nominal_height_jump: f32,
+    ort_height_jump_tolerance: f32,
+    ort_min_point_distance: f32,
+    ort_nominal_gauge: f32,
+    ort_gauge_tolerance: f32,
+    ort_max_rail_height_diff: f32,
+    ort_max_lateral_jump: f32,
+    ort_max_lateral_rail_jump: f32,
+    ort_max_longitudinal_jump: f32,
+    ort_min_longitudinal_jump: f32,
+    ort_min_track_length_m: f32,
+    ort_extrapolate_m: f32,
+    ort_smooth_n: usize,
+    ort_intensity_score: f32,
+    ort_gauge_err_score: f32,
+    ort_delta_z_score: f32,
+    ort_continuity_score: f32,
+
+    cloud_buffer: Arc<RwLock<AppPointCloud>>,
+    ort_last_res: Option<DetectionResultOrt>,
+    ort_converted_res: Option<DetectionResult>,
+    ort_cropped_3d: Vec<[f32; 3]>,
+
     // Rerun
     rec_stream: Option<RecordingStream>,
     stream_to_rerun: bool,
@@ -1723,8 +1845,48 @@ impl RailTuner2DApp {
         rec_stream: Option<RecordingStream>,
     ) -> Self {
         let detector: RailTrackDetector = rust_listener::ENV.DETECTION_PRESET.into();
+        let default_ort_cfg = RailOrtConfig::default();
+        let dummy_geo = LidarGeometry::new(128, 400, 15.0, -25.0, 40.0);
+        let ort_detector = RailOrtDetector::new(dummy_geo, default_ort_cfg.clone());
+        let cloud_buffer = Arc::new(RwLock::new(AppPointCloud::new(
+            pin_ptr(SIZE),
+            pin_ptr(SIZE),
+            pin_ptr(SIZE),
+            pin_ptr(SIZE),
+            pin_u16_ptr(SIZE),
+        )));
 
         Self {
+            engine_mode: DetectorEngineMode::RailTrack2D,
+            ort_detector,
+            ort_z_min: default_ort_cfg.z_min,
+            ort_z_max: default_ort_cfg.z_max,
+            ort_y_min: default_ort_cfg.y_min,
+            ort_y_max: default_ort_cfg.y_max,
+            ort_intensity_jump_threshold: default_ort_cfg.intensity_jump_threshold,
+            ort_intensity_max: default_ort_cfg.intensity_max,
+            ort_nominal_height_jump: default_ort_cfg.nominal_height_jump,
+            ort_height_jump_tolerance: default_ort_cfg.height_jump_tolerance,
+            ort_min_point_distance: default_ort_cfg.min_point_distance,
+            ort_nominal_gauge: default_ort_cfg.nominal_gauge,
+            ort_gauge_tolerance: default_ort_cfg.gauge_tolerance,
+            ort_max_rail_height_diff: default_ort_cfg.max_rail_height_diff,
+            ort_max_lateral_jump: default_ort_cfg.max_lateral_jump,
+            ort_max_lateral_rail_jump: default_ort_cfg.max_lateral_rail_jump,
+            ort_max_longitudinal_jump: default_ort_cfg.max_longitudinal_jump,
+            ort_min_longitudinal_jump: default_ort_cfg.min_longitudinal_jump,
+            ort_min_track_length_m: default_ort_cfg.min_track_length_m,
+            ort_extrapolate_m: default_ort_cfg.extrapolate_m,
+            ort_smooth_n: default_ort_cfg.smooth_n,
+            ort_intensity_score: default_ort_cfg.intensity_score,
+            ort_gauge_err_score: default_ort_cfg.gauge_err_score,
+            ort_delta_z_score: default_ort_cfg.delta_z_score,
+            ort_continuity_score: default_ort_cfg.continuity_score,
+
+            cloud_buffer,
+            ort_last_res: None,
+            ort_converted_res: None,
+            ort_cropped_3d: Vec::new(),
             available_tracks,
             selected_track_idx,
             streaming_mode: dataset.is_streaming,
@@ -1812,8 +1974,8 @@ impl RailTuner2DApp {
         }
     }
 
-    /// Генерация конфигурационного кода Rust для детектора
-    pub fn generate_rust_config(&self) -> String {
+    /// Генерация конфигурационного кода Rust для детектора RailTrack 2D
+    pub fn generate_railtrack_config(&self) -> String {
         format!(
             "// Tuned RailTrackDetector Config\n\
              let mut detector = RailTrackDetector::new(geo);\n\
@@ -1918,6 +2080,77 @@ impl RailTuner2DApp {
             self.max_outlier_frames,
             self.far_anchor_enabled,
         )
+    }
+
+    /// Генерация конфигурационного кода Rust для детектора RailOrt 3D
+    pub fn generate_railort_config(&self) -> String {
+        format!(
+            "// Tuned RailOrtConfig\n\
+             let mut ort_config = RailOrtConfig {{\n\
+             \x20   z_min: {:.2},\n\
+             \x20   z_max: {:.2},\n\
+             \x20   y_min: {:.2},\n\
+             \x20   y_max: {:.2},\n\
+             \x20   intensity_jump_threshold: {:.2},\n\
+             \x20   intensity_max: {:.2},\n\
+             \x20   nominal_height_jump: {:.2},\n\
+             \x20   height_jump_tolerance: {:.2},\n\
+             \x20   min_point_distance: {:.3},\n\
+             \x20   nominal_gauge: {:.3},\n\
+             \x20   gauge_tolerance: {:.3},\n\
+             \x20   max_rail_height_diff: {:.3},\n\
+             \x20   max_lateral_jump: {:.3},\n\
+             \x20   max_lateral_rail_jump: {:.3},\n\
+             \x20   max_longitudinal_jump: {:.3},\n\
+             \x20   min_longitudinal_jump: {:.3},\n\
+             \x20   min_track_length_m: {:.3},\n\
+             \x20   extrapolate_m: {:.1},\n\
+             \x20   smooth_n: {},\n\
+             \x20   intensity_score: {:.1},\n\
+             \x20   gauge_err_score: {:.1},\n\
+             \x20   delta_z_score: {:.1},\n\
+             \x20   continuity_score: {:.1},\n\
+             \x20   ..RailOrtConfig::default()\n\
+             }};",
+            self.ort_z_min,
+            self.ort_z_max,
+            self.ort_y_min,
+            self.ort_y_max,
+            self.ort_intensity_jump_threshold,
+            self.ort_intensity_max,
+            self.ort_nominal_height_jump,
+            self.ort_height_jump_tolerance,
+            self.ort_min_point_distance,
+            self.ort_nominal_gauge,
+            self.ort_gauge_tolerance,
+            self.ort_max_rail_height_diff,
+            self.ort_max_lateral_jump,
+            self.ort_max_lateral_rail_jump,
+            self.ort_max_longitudinal_jump,
+            self.ort_min_longitudinal_jump,
+            self.ort_min_track_length_m,
+            self.ort_extrapolate_m,
+            self.ort_smooth_n,
+            self.ort_intensity_score,
+            self.ort_gauge_err_score,
+            self.ort_delta_z_score,
+            self.ort_continuity_score,
+        )
+    }
+
+    /// Генерация конфигурационного кода Rust для активного движка
+    pub fn generate_rust_config(&self) -> String {
+        match self.engine_mode {
+            DetectorEngineMode::RailTrack2D => self.generate_railtrack_config(),
+            DetectorEngineMode::RailOrt3D => self.generate_railort_config(),
+            DetectorEngineMode::Comparison => {
+                format!(
+                    "// ═══════════════ RailTrack 2D Config ═══════════════\n{}\n\n// ═══════════════ RailOrt 3D Config ═══════════════\n{}",
+                    self.generate_railtrack_config(),
+                    self.generate_railort_config()
+                )
+            }
+        }
     }
 
     /// Проверяет, нужно ли игнорировать датасет в автопрогоне (cloud_with_fake_obj, doubleT_obstacle)
@@ -2159,13 +2392,23 @@ impl RailTuner2DApp {
             return;
         }
 
-        let obstacle_found = self.last_res.as_ref().map_or(false, |r| {
-            r.obstacles.iter().any(|o| {
-                o.is_critical
-                    || o.status == ObstacleStatus::ClearanceWarning
-                    || o.status == ObstacleStatus::Critical
+        let has_obs = |res: Option<&DetectionResult>| -> bool {
+            res.map_or(false, |r| {
+                r.obstacles.iter().any(|o| {
+                    o.is_critical
+                        || o.status == ObstacleStatus::ClearanceWarning
+                        || o.status == ObstacleStatus::Critical
+                })
             })
-        });
+        };
+
+        let obstacle_found = match self.engine_mode {
+            DetectorEngineMode::RailTrack2D => has_obs(self.last_res.as_ref()),
+            DetectorEngineMode::RailOrt3D => has_obs(self.ort_converted_res.as_ref()),
+            DetectorEngineMode::Comparison => {
+                has_obs(self.last_res.as_ref()) || has_obs(self.ort_converted_res.as_ref())
+            }
+        };
 
         if obstacle_found {
             self.auto_run_active = false;
@@ -2174,13 +2417,25 @@ impl RailTuner2DApp {
 
             let track_name = self.available_tracks[self.selected_track_idx].label();
             let total = self.dataset.total_count.load(Ordering::Relaxed);
-            let num_crit = self.last_res.as_ref().map_or(0, |r| {
+            let active_res = match self.engine_mode {
+                DetectorEngineMode::RailTrack2D => self.last_res.as_ref(),
+                DetectorEngineMode::RailOrt3D => self.ort_converted_res.as_ref(),
+                DetectorEngineMode::Comparison => {
+                    if has_obs(self.last_res.as_ref()) {
+                        self.last_res.as_ref()
+                    } else {
+                        self.ort_converted_res.as_ref()
+                    }
+                }
+            };
+
+            let num_crit = active_res.map_or(0, |r| {
                 r.obstacles
                     .iter()
                     .filter(|o| o.is_critical || o.status == ObstacleStatus::Critical)
                     .count()
             });
-            let num_warn = self.last_res.as_ref().map_or(0, |r| {
+            let num_warn = active_res.map_or(0, |r| {
                 r.obstacles
                     .iter()
                     .filter(|o| o.status == ObstacleStatus::ClearanceWarning)
@@ -2226,8 +2481,12 @@ impl RailTuner2DApp {
         self.active_range_image = None;
         self.last_res = None;
         self.last_bent_res = None;
+        self.ort_last_res = None;
+        self.ort_converted_res = None;
+        self.ort_cropped_3d.clear();
         self.profiling = PipelineProfiling::default();
         self.detector.reset();
+        self.ort_detector.reset();
     }
 
     /// Перезагружает текущий трек с переключением режима стриминга
@@ -2297,6 +2556,53 @@ impl RailTuner2DApp {
         self.detector.obstacle_config.upward_curvature_2 = self.upward_curvature_2;
     }
 
+    fn sync_ort_params(&mut self) {
+        let cfg = &mut self.ort_detector.config;
+        cfg.y_min = self.ort_y_min;
+        cfg.y_max = self.ort_y_max;
+        cfg.z_min = self.ort_z_min;
+        cfg.z_max = self.ort_z_max;
+        cfg.intensity_jump_threshold = self.ort_intensity_jump_threshold;
+        cfg.intensity_max = self.ort_intensity_max;
+        cfg.nominal_height_jump = self.ort_nominal_height_jump;
+        cfg.height_jump_tolerance = self.ort_height_jump_tolerance;
+        cfg.min_point_distance = self.ort_min_point_distance;
+        cfg.nominal_gauge = self.ort_nominal_gauge;
+        cfg.gauge_tolerance = self.ort_gauge_tolerance;
+        cfg.max_rail_height_diff = self.ort_max_rail_height_diff;
+        cfg.max_lateral_jump = self.ort_max_lateral_jump;
+        cfg.max_lateral_rail_jump = self.ort_max_lateral_rail_jump;
+        cfg.max_longitudinal_jump = self.ort_max_longitudinal_jump;
+        cfg.min_longitudinal_jump = self.ort_min_longitudinal_jump;
+        cfg.min_track_length_m = self.ort_min_track_length_m;
+        cfg.extrapolate_m = self.ort_extrapolate_m;
+        cfg.smooth_n = self.ort_smooth_n;
+        cfg.intensity_score = self.ort_intensity_score;
+        cfg.gauge_err_score = self.ort_gauge_err_score;
+        cfg.delta_z_score = self.ort_delta_z_score;
+        cfg.continuity_score = self.ort_continuity_score;
+
+        cfg.obstacle_config.enabled = self.obstacle_enabled;
+        cfg.obstacle_config.mode = self.obstacle_mode;
+        cfg.obstacle_config.clearance_width = self.clearance_width;
+        cfg.obstacle_config.min_height_above_rail = self.min_height_above_rail;
+        cfg.obstacle_config.max_height_above_rail = self.max_height_above_rail;
+        cfg.obstacle_config.min_points = self.min_points;
+        cfg.obstacle_config.max_distance_m = self.max_distance_m;
+        cfg.obstacle_config.depth_diff_thresh = self.depth_diff_thresh;
+        cfg.obstacle_config.upward_curvature = self.upward_curvature;
+        cfg.obstacle_config.clearance_narrowing_width = self.clearance_narrowing_width;
+        cfg.obstacle_config.clearance_narrowing_height = self.clearance_narrowing_height;
+        cfg.obstacle_config.clearance_height_end_shift = self.clearance_height_end_shift;
+        cfg.obstacle_config.clearance_start_offset = self.clearance_start_offset;
+        cfg.obstacle_config.cluster_depth_thresh = self.cluster_depth_thresh;
+        cfg.obstacle_config.temporal_tracking_enabled = self.temporal_tracking_enabled;
+        cfg.obstacle_config.min_hits_for_critical = self.min_hits_for_critical;
+        cfg.obstacle_config.max_missed_frames = self.max_missed_frames;
+        cfg.obstacle_config.track_match_dist_m = self.track_match_dist_m;
+        cfg.obstacle_config.track_match_lateral_m = self.track_match_lateral_m;
+    }
+
     fn process_current_frame(&mut self) -> bool {
         let frame_opt = self.dataset.get_frame(self.current_frame_idx);
 
@@ -2318,58 +2624,112 @@ impl RailTuner2DApp {
             );
         }
 
-        let geo = &self.detector.geometry;
+        let geo = self.detector.geometry.clone();
         let raw_ri = &frame.range_image;
 
-        // 1. Искривление всех точек тоннеля и карты глубины/интенсивности:
-        //    Z_bent = Z + c_z * X^2
-        let t_warp = Instant::now();
-        let active_ri = if self.upward_curvature.abs() > 1e-7 {
-            raw_ri.warp_curvature(geo, self.upward_curvature)
+        // ─── 1. RailTrack 2D Detector (при RailTrack2D или Comparison) ───
+        if self.engine_mode != DetectorEngineMode::RailOrt3D {
+            let t_warp = Instant::now();
+            let active_ri = if self.upward_curvature.abs() > 1e-7 {
+                raw_ri.warp_curvature(&geo, self.upward_curvature)
+            } else {
+                raw_ri.clone()
+            };
+            self.profiling.warp_ms = t_warp.elapsed().as_secs_f32() * 1000.0;
+
+            self.sync_detector_params();
+
+            let t_detect = Instant::now();
+            let bent_res = self
+                .detector
+                .detect_with_raw(&active_ri, Some(raw_ri), None, frame.idx);
+
+            let detect_dur = t_detect.elapsed();
+            self.profiling.detector_total_ms = detect_dur.as_secs_f32() * 1000.0;
+            self.last_calc_dur = detect_dur;
+
+            if let Some(ref r) = bent_res {
+                self.profiling.rail_detect_ms = r.timing_rail_ms;
+                self.profiling.obstacle_detect_ms = r.timing_obstacles_ms;
+            } else {
+                self.profiling.rail_detect_ms = 0.0;
+                self.profiling.obstacle_detect_ms = 0.0;
+            }
+
+            let t_restore = Instant::now();
+            let mut real_res = bent_res.clone();
+            if let Some(ref mut r) = real_res {
+                r.restore_real_coordinates();
+            }
+            self.profiling.restore_coords_ms = t_restore.elapsed().as_secs_f32() * 1000.0;
+
+            self.last_bent_res = bent_res;
+            self.last_res = real_res;
+            self.active_range_image = Some(active_ri);
         } else {
-            raw_ri.clone()
-        };
-        self.profiling.warp_ms = t_warp.elapsed().as_secs_f32() * 1000.0;
-
-        self.sync_detector_params();
-
-        // 2. Детекция путей на искривленном (выпрямленном) представлении и габарита на истинных координатах
-        let t_detect = Instant::now();
-        let bent_res = self
-            .detector
-            .detect_with_raw(&active_ri, Some(raw_ri), None, frame.idx);
-        if let Some(_r) = &bent_res {
-            // println!("Radius: {}", r.turn_radius);
-            // 400 - max
-            // self.detector.obstacle_config.clearance_narrowing_width = r.turn_radius;
-        }
-
-        let detect_dur = t_detect.elapsed();
-        self.last_calc_dur = detect_dur;
-        self.profiling.detector_total_ms = detect_dur.as_secs_f32() * 1000.0;
-
-        if let Some(ref r) = bent_res {
-            self.profiling.rail_detect_ms = r.timing_rail_ms;
-            self.profiling.obstacle_detect_ms = r.timing_obstacles_ms;
-        } else {
+            self.last_bent_res = None;
+            self.last_res = None;
+            self.profiling.warp_ms = 0.0;
             self.profiling.rail_detect_ms = 0.0;
             self.profiling.obstacle_detect_ms = 0.0;
+            self.profiling.restore_coords_ms = 0.0;
         }
 
-        // 3. Восстановление истинных координат для Rerun и 3D мира:
-        //    Z_real = Z_bent - upward_curvature * X^2
-        let t_restore = Instant::now();
-        let mut real_res = bent_res.clone();
-        if let Some(ref mut r) = real_res {
-            r.restore_real_coordinates();
+        // ─── 2. RailOrt 3D Detector (при RailOrt3D или Comparison) ───
+        if self.engine_mode != DetectorEngineMode::RailTrack2D {
+            {
+                let mut cloud = self.cloud_buffer.write().unwrap();
+                fill_cloud_from_range_image(raw_ri, &geo, &mut cloud, ProcessingQueue::READ);
+            }
+            self.sync_ort_params();
+
+            let t_ort = Instant::now();
+            let (cropped_pts, res_ort) = {
+                let cloud = self.cloud_buffer.read().unwrap();
+                let mut slices = self
+                    .ort_detector
+                    .crop_tunnel_slices(&cloud, ProcessingQueue::READ);
+                let res = self.ort_detector.process_slices(
+                    &mut slices,
+                    &cloud,
+                    ProcessingQueue::READ,
+                    frame.idx,
+                    Some(raw_ri),
+                );
+                let pts: Vec<[f32; 3]> = slices
+                    .iter()
+                    .flatten()
+                    .map(|pt| pt.get_xyz(&cloud, ProcessingQueue::READ))
+                    .collect();
+                (pts, res)
+            };
+            let ort_dur = t_ort.elapsed();
+            self.profiling.ort_detect_ms = ort_dur.as_secs_f32() * 1000.0;
+            if self.engine_mode == DetectorEngineMode::RailOrt3D {
+                self.last_calc_dur = ort_dur;
+                self.profiling.detector_total_ms = self.profiling.ort_detect_ms;
+            }
+
+            let converted = res_ort
+                .as_ref()
+                .map(|r| r.to_detection_result(&self.ort_detector.config.obstacle_config));
+            self.ort_last_res = res_ort;
+            self.ort_converted_res = converted.clone();
+            self.ort_cropped_3d = cropped_pts;
+
+            if self.engine_mode == DetectorEngineMode::RailOrt3D {
+                self.active_range_image = Some(raw_ri.clone());
+                self.last_bent_res = converted.clone();
+                self.last_res = converted;
+            }
+        } else {
+            self.ort_last_res = None;
+            self.ort_converted_res = None;
+            self.ort_cropped_3d.clear();
+            self.profiling.ort_detect_ms = 0.0;
         }
-        self.profiling.restore_coords_ms = t_restore.elapsed().as_secs_f32() * 1000.0;
 
-        self.last_bent_res = bent_res;
-        self.last_res = real_res;
-        self.active_range_image = Some(active_ri);
-
-        // Отправка в Rerun (2 окна: 3D и 2D)
+        // ─── 3. Отправка в Rerun (3D и 2D) ───
         let t_rerun = Instant::now();
         if self.stream_to_rerun {
             if let Some(ref rec) = self.rec_stream {
@@ -2379,7 +2739,6 @@ impl RailTuner2DApp {
                 let raw_ri = &frame.range_image;
                 let active_ri = self.active_range_image.as_ref().unwrap_or(raw_ri);
 
-                // ─── ОКНО 1: 3D сцена ───
                 // Точки реального облака и искривленного облака из RangeImage
                 let total = geo.height * geo.width;
                 let mut pts_real = Vec::with_capacity(total);
@@ -2411,22 +2770,32 @@ impl RailTuner2DApp {
                         .with_radii([Radius::new_ui_points(1.2)]),
                 );
 
-                // Искривленные точки тоннеля:
-                if self.upward_curvature.abs() > 1e-7 {
-                    let _ = rec.log(
-                        "lidar/point_cloud_bent",
-                        &Points3D::new(&pts_bent)
-                            .with_colors(colors)
-                            .with_radii([Radius::new_ui_points(1.2)]),
-                    );
+                // RailTrack 2D 3D & 2D views
+                if self.engine_mode != DetectorEngineMode::RailOrt3D {
+                    if self.upward_curvature.abs() > 1e-7 {
+                        let _ = rec.log(
+                            "lidar/point_cloud_bent",
+                            &Points3D::new(&pts_bent)
+                                .with_colors(colors)
+                                .with_radii([Radius::new_ui_points(1.2)]),
+                        );
+                    }
+                    let _ = rec.log_rail_detection(self.last_res.as_ref());
+                    let _ = rec.log_rail_detection_2d(active_ri, geo, self.last_bent_res.as_ref());
                 }
 
-                // 3D рельсы с ВОССТАНОВЛЕННЫМ реальным положением (садятся строго на реальные рельсы):
-                let _ = rec.log_rail_detection(self.last_res.as_ref());
-
-                // ─── ОКНО 2: 2D Карта глубины, интенсивности, путей и Shapecast ───
-                // Стримим искривленную карту глубины и интенсивности с соответствующими путями:
-                let _ = rec.log_rail_detection_2d(active_ri, geo, self.last_bent_res.as_ref());
+                // RailOrt 3D views
+                if self.engine_mode != DetectorEngineMode::RailTrack2D {
+                    if !self.ort_cropped_3d.is_empty() {
+                        let _ = rec.log(
+                            "tracks_ort/tunnel_cropped",
+                            &Points3D::new(&self.ort_cropped_3d)
+                                .with_colors([Color::from_rgb(255, 255, 0)])
+                                .with_radii([Radius::new_ui_points(1.4)]),
+                        );
+                    }
+                    rec.log_ort_detection_3d(self.ort_last_res.as_ref());
+                }
             }
             self.profiling.rerun_stream_ms = t_rerun.elapsed().as_secs_f32() * 1000.0;
         } else {
@@ -2441,10 +2810,22 @@ impl RailTuner2DApp {
         if let Some(f) = self.dataset.get_frame(self.current_frame_idx) {
             let active_ri = self.active_range_image.as_ref().unwrap_or(&f.range_image);
 
+            let (primary_res, cmp_res, is_comparison) = match self.engine_mode {
+                DetectorEngineMode::RailTrack2D => (self.last_bent_res.as_ref(), None, false),
+                DetectorEngineMode::RailOrt3D => (self.ort_converted_res.as_ref(), None, false),
+                DetectorEngineMode::Comparison => (
+                    self.last_bent_res.as_ref(),
+                    self.ort_converted_res.as_ref(),
+                    true,
+                ),
+            };
+
             let t_paint = Instant::now();
             let color_img = self.painter.paint(
                 active_ri,
-                self.last_bent_res.as_ref(),
+                primary_res,
+                cmp_res,
+                is_comparison,
                 &self.detector.geometry,
                 self.clearance_width,
                 &self.layer_cfg,
@@ -2731,8 +3112,41 @@ impl eframe::App for RailTuner2DApp {
                 left.add_space(4.0);
 
                 let mut param_changed = false;
+
                 left.group(|ui| {
-                    ui.heading("🎛️ Rail Detection Parameters");
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("🚀 Режим детектора:").strong());
+                        let prev_mode = self.engine_mode;
+                        ui.radio_value(
+                            &mut self.engine_mode,
+                            DetectorEngineMode::RailTrack2D,
+                            "🛤️ RailTrack 2D",
+                        );
+                        ui.radio_value(
+                            &mut self.engine_mode,
+                            DetectorEngineMode::RailOrt3D,
+                            "📐 RailOrt 3D",
+                        );
+                        ui.radio_value(
+                            &mut self.engine_mode,
+                            DetectorEngineMode::Comparison,
+                            "⚡ Сравнение (Both)",
+                        );
+                        if self.engine_mode != prev_mode {
+                            param_changed = true;
+                        }
+                    });
+                });
+
+                left.add_space(4.0);
+
+                left.group(|ui| {
+                    ui.heading("🎛️ Detection Parameters");
+
+                    if self.engine_mode != DetectorEngineMode::RailOrt3D {
+                        egui::CollapsingHeader::new("🛤️ RailTrack 2D Parameters")
+                            .default_open(self.engine_mode == DetectorEngineMode::RailTrack2D)
+                            .show(ui, |ui| {
 
                     egui::CollapsingHeader::new("🔍 Discontinuity / Depth Step")
                         .default_open(true)
@@ -3233,6 +3647,128 @@ impl eframe::App for RailTuner2DApp {
                                     .changed();
                             }
                         });
+                        });
+                    }
+
+                    if self.engine_mode != DetectorEngineMode::RailTrack2D {
+                        egui::CollapsingHeader::new("📐 RailOrt 3D Parameters")
+                            .default_open(self.engine_mode == DetectorEngineMode::RailOrt3D)
+                            .show(ui, |ui| {
+                                egui::CollapsingHeader::new("🚇 Tunnel Bounds & Filter")
+                                    .default_open(true)
+                                    .show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.label("Z vert min/max (m):");
+                                            param_changed |= ui
+                                                .add(egui::Slider::new(&mut self.ort_z_min, -20.0..=0.0).step_by(0.1))
+                                                .changed();
+                                            param_changed |= ui
+                                                .add(egui::Slider::new(&mut self.ort_z_max, -5.0..=5.0).step_by(0.1))
+                                                .changed();
+                                        });
+                                        ui.horizontal(|ui| {
+                                            ui.label("Y fwd min/max (m):");
+                                            param_changed |= ui
+                                                .add(egui::Slider::new(&mut self.ort_y_min, 0.0..=20.0).step_by(0.5))
+                                                .changed();
+                                            param_changed |= ui
+                                                .add(egui::Slider::new(&mut self.ort_y_max, 10.0..=120.0).step_by(1.0))
+                                                .changed();
+                                        });
+                                        ui.label("Intensity Jump Thresh:");
+                                        param_changed |= ui
+                                            .add(egui::Slider::new(&mut self.ort_intensity_jump_threshold, 0.1..=10.0).step_by(0.1))
+                                            .changed();
+                                        ui.label("Intensity Max (0 = no cap):");
+                                        param_changed |= ui
+                                            .add(egui::Slider::new(&mut self.ort_intensity_max, 0.0..=20.0).step_by(0.1))
+                                            .changed();
+                                    });
+
+                                egui::CollapsingHeader::new("📏 Gauge & Rail Geometry")
+                                    .default_open(true)
+                                    .show(ui, |ui| {
+                                        ui.label("Nominal Gauge (m):");
+                                        param_changed |= ui
+                                            .add(egui::Slider::new(&mut self.ort_nominal_gauge, 1.40..=1.60).step_by(0.005))
+                                            .changed();
+                                        ui.label("Gauge Tolerance (m):");
+                                        param_changed |= ui
+                                            .add(egui::Slider::new(&mut self.ort_gauge_tolerance, 0.02..=0.30).step_by(0.01))
+                                            .changed();
+                                        ui.label("Nominal Height Jump (m):");
+                                        param_changed |= ui
+                                            .add(egui::Slider::new(&mut self.ort_nominal_height_jump, 0.05..=1.0).step_by(0.02))
+                                            .changed();
+                                        ui.label("Height Jump Tolerance (m):");
+                                        param_changed |= ui
+                                            .add(egui::Slider::new(&mut self.ort_height_jump_tolerance, 0.05..=1.0).step_by(0.02))
+                                            .changed();
+                                        ui.label("Max Rail Height Diff (m):");
+                                        param_changed |= ui
+                                            .add(egui::Slider::new(&mut self.ort_max_rail_height_diff, 0.02..=0.30).step_by(0.01))
+                                            .changed();
+                                        ui.label("Min Point Distance (m):");
+                                        param_changed |= ui
+                                            .add(egui::Slider::new(&mut self.ort_min_point_distance, 0.005..=0.10).step_by(0.005))
+                                            .changed();
+                                    });
+
+                                egui::CollapsingHeader::new("⚖️ Pair Scoring Weights")
+                                    .default_open(true)
+                                    .show(ui, |ui| {
+                                        ui.label("Weight Intensity:");
+                                        param_changed |= ui
+                                            .add(egui::Slider::new(&mut self.ort_intensity_score, 0.0..=10.0).step_by(0.1))
+                                            .changed();
+                                        ui.label("Weight Gauge Error:");
+                                        param_changed |= ui
+                                            .add(egui::Slider::new(&mut self.ort_gauge_err_score, 0.0..=10.0).step_by(0.1))
+                                            .changed();
+                                        ui.label("Weight Delta Z:");
+                                        param_changed |= ui
+                                            .add(egui::Slider::new(&mut self.ort_delta_z_score, 0.0..=10.0).step_by(0.1))
+                                            .changed();
+                                        ui.label("Weight Continuity:");
+                                        param_changed |= ui
+                                            .add(egui::Slider::new(&mut self.ort_continuity_score, 0.0..=10.0).step_by(0.1))
+                                            .changed();
+                                    });
+
+                                egui::CollapsingHeader::new("🔗 Tracking, Jumps & Extrapolation")
+                                    .default_open(false)
+                                    .show(ui, |ui| {
+                                        ui.label("Max Lateral Jump (m):");
+                                        param_changed |= ui
+                                            .add(egui::Slider::new(&mut self.ort_max_lateral_jump, 0.05..=0.50).step_by(0.01))
+                                            .changed();
+                                        ui.label("Max Lateral Rail Jump (m):");
+                                        param_changed |= ui
+                                            .add(egui::Slider::new(&mut self.ort_max_lateral_rail_jump, 0.05..=0.50).step_by(0.01))
+                                            .changed();
+                                        ui.label("Max Longitudinal Jump (m):");
+                                        param_changed |= ui
+                                            .add(egui::Slider::new(&mut self.ort_max_longitudinal_jump, 0.2..=5.0).step_by(0.1))
+                                            .changed();
+                                        ui.label("Min Longitudinal Jump (m):");
+                                        param_changed |= ui
+                                            .add(egui::Slider::new(&mut self.ort_min_longitudinal_jump, 0.01..=0.5).step_by(0.01))
+                                            .changed();
+                                        ui.label("Min Track Length (m):");
+                                        param_changed |= ui
+                                            .add(egui::Slider::new(&mut self.ort_min_track_length_m, 0.0..=30.0).step_by(0.5))
+                                            .changed();
+                                        ui.label("Extrapolate (m):");
+                                        param_changed |= ui
+                                            .add(egui::Slider::new(&mut self.ort_extrapolate_m, 0.0..=60.0).step_by(1.0))
+                                            .changed();
+                                        ui.label("Smooth Window (N):");
+                                        param_changed |= ui
+                                            .add(egui::Slider::new(&mut self.ort_smooth_n, 1..=20))
+                                            .changed();
+                                    });
+                            });
+                    }
                 });
 
                 if param_changed {
@@ -3247,114 +3783,347 @@ impl eframe::App for RailTuner2DApp {
 
                 left.group(|ui| {
                     ui.heading("📊 Telemetry HUD");
-                    if let Some(ref r) = self.last_res {
-                        ui.colored_label(
-                            Color32::GREEN,
-                            format!("Confidence: {:.1}%", r.confidence * 100.0),
-                        );
-                        ui.label(format!("Gauge: {:.3} m", r.gauge));
-                        ui.label(format!("Direction: {}", r.turn_direction));
-                        if r.turn_radius.is_infinite() || r.turn_radius > 9999.0 {
-                            ui.label("Radius: ∞ (Straight)");
-                        } else {
-                            ui.label(format!("Radius: {:.1} m", r.turn_radius));
-                        }
-                        ui.label(format!("Points Detected: {}", r.points.len()));
-                        ui.label(format!(
-                            "Extrapolation: {:.1} m (N={})",
-                            self.extrapolate_m, self.smooth_n
-                        ));
-                        if r.has_intensity {
-                            ui.label(format!(
-                                "Intensity L/R: {:.1} / {:.1}",
-                                r.avg_intensity_left, r.avg_intensity_right
-                            ));
-                        }
-                        ui.label(format!(
-                            "Detection Latency: {:.2} ms",
-                            self.profiling.detector_total_ms
-                        ));
 
-                        if r.is_coasting {
-                            ui.colored_label(
-                                Color32::from_rgb(255, 90, 90),
-                                format!("⚠️ Status: COASTING (Streak: {}/{})", r.outlier_streak, self.max_outlier_frames),
-                            );
-                        } else {
-                            ui.colored_label(Color32::GREEN, "🛡️ Status: TRACKING (Continuity locked)");
-                        }
-                        if r.far_anchor_active {
-                            ui.colored_label(Color32::from_rgb(100, 220, 255), "⚓ Far Anchor: Active in fit");
-                        }
+                    if self.engine_mode == DetectorEngineMode::Comparison {
+                        egui::Grid::new("comparison_telemetry_grid")
+                            .striped(true)
+                            .num_columns(3)
+                            .spacing([12.0, 4.0])
+                            .show(ui, |ui| {
+                                ui.label(egui::RichText::new("Метрика").strong());
+                                ui.colored_label(
+                                    Color32::from_rgb(0, 215, 255),
+                                    egui::RichText::new("🛤️ RailTrack 2D").strong(),
+                                );
+                                ui.colored_label(
+                                    Color32::from_rgb(255, 215, 0),
+                                    egui::RichText::new("📐 RailOrt 3D").strong(),
+                                );
+                                ui.end_row();
+
+                                // Confidence
+                                ui.label("Уверенность:");
+                                if let Some(ref r) = self.last_res {
+                                    ui.colored_label(
+                                        Color32::GREEN,
+                                        format!("{:.1}%", r.confidence * 100.0),
+                                    );
+                                } else {
+                                    ui.label("—");
+                                }
+                                if let Some(ref r) = self.ort_converted_res {
+                                    ui.colored_label(
+                                        Color32::from_rgb(255, 215, 0),
+                                        format!("{:.1}%", r.confidence * 100.0),
+                                    );
+                                } else {
+                                    ui.label("—");
+                                }
+                                ui.end_row();
+
+                                // Gauge
+                                ui.label("Колея (Gauge):");
+                                if let Some(ref r) = self.last_res {
+                                    ui.label(format!("{:.3} m", r.gauge));
+                                } else {
+                                    ui.label("—");
+                                }
+                                if let Some(ref r) = self.ort_converted_res {
+                                    ui.label(format!("{:.3} m", r.gauge));
+                                } else {
+                                    ui.label("—");
+                                }
+                                ui.end_row();
+
+                                // Turn Radius
+                                ui.label("Радиус кривой:");
+                                if let Some(ref r) = self.last_res {
+                                    if r.turn_radius.is_infinite() || r.turn_radius > 9999.0 {
+                                        ui.label("∞ (Прямая)");
+                                    } else {
+                                        ui.label(format!("{:.1} m", r.turn_radius));
+                                    }
+                                } else {
+                                    ui.label("—");
+                                }
+                                if let Some(ref r) = self.ort_converted_res {
+                                    if r.turn_radius.is_infinite() || r.turn_radius > 9999.0 {
+                                        ui.label("∞ (Прямая)");
+                                    } else {
+                                        ui.label(format!("{:.1} m", r.turn_radius));
+                                    }
+                                } else {
+                                    ui.label("—");
+                                }
+                                ui.end_row();
+
+                                // Turn Direction
+                                ui.label("Направление:");
+                                if let Some(ref r) = self.last_res {
+                                    ui.label(format!("{}", r.turn_direction));
+                                } else {
+                                    ui.label("—");
+                                }
+                                if let Some(ref r) = self.ort_converted_res {
+                                    ui.label(format!("{}", r.turn_direction));
+                                } else {
+                                    ui.label("—");
+                                }
+                                ui.end_row();
+
+                                // Latency
+                                ui.label("Детекция путей:");
+                                ui.monospace(format!("{:.2} ms", self.profiling.rail_detect_ms));
+                                ui.monospace(format!("{:.2} ms", self.profiling.ort_detect_ms));
+                                ui.end_row();
+
+                                // Obstacles count
+                                ui.label("Препятствия:");
+                                let o1 = self.last_res.as_ref().map_or(0, |r| r.obstacles.len());
+                                let o2 = self
+                                    .ort_converted_res
+                                    .as_ref()
+                                    .map_or(0, |r| r.obstacles.len());
+                                ui.label(format!("{} шт.", o1));
+                                ui.label(format!("{} шт.", o2));
+                                ui.end_row();
+                            });
 
                         ui.add_space(4.0);
                         ui.separator();
                         ui.heading("🚨 Obstacle Status");
 
-                        let num_crit = r.obstacles.iter().filter(|o| o.status == shared::rail_detection::ObstacleStatus::Critical).count();
-                        let num_warn = r.obstacles.iter().filter(|o| o.status == shared::rail_detection::ObstacleStatus::ClearanceWarning).count();
-                        let num_unlikely = r.obstacles.iter().filter(|o| o.status == shared::rail_detection::ObstacleStatus::Unlikely).count();
+                        let mut all_obstacles = Vec::new();
+                        if let Some(ref r) = self.last_res {
+                            for o in &r.obstacles {
+                                all_obstacles.push(("RailTrack 2D", o));
+                            }
+                        }
+                        if let Some(ref r) = self.ort_converted_res {
+                            for o in &r.obstacles {
+                                all_obstacles.push(("RailOrt 3D", o));
+                            }
+                        }
+
+                        let num_crit = all_obstacles
+                            .iter()
+                            .filter(|(_, o)| {
+                                o.status == shared::rail_detection::ObstacleStatus::Critical
+                            })
+                            .count();
+                        let num_warn = all_obstacles
+                            .iter()
+                            .filter(|(_, o)| {
+                                o.status == shared::rail_detection::ObstacleStatus::ClearanceWarning
+                            })
+                            .count();
 
                         if num_crit > 0 {
-                            let closest = r
+                            ui.colored_label(
+                                Color32::RED,
+                                format!("🛑 CRITICAL: {} OBSTACLE(S) DETECTED!", num_crit),
+                            );
+                        } else if num_warn > 0 {
+                            ui.colored_label(
+                                Color32::from_rgb(255, 170, 0),
+                                format!("⚠️ WARNING: {} IN CLEARANCE ZONE!", num_warn),
+                            );
+                        } else {
+                            ui.colored_label(Color32::GREEN, "🟢 CLEAR TRACK (No obstacles)");
+                        }
+
+                        if !all_obstacles.is_empty() {
+                            egui::ScrollArea::vertical()
+                                .max_height(120.0)
+                                .show(ui, |ui| {
+                                    for (eng, o) in all_obstacles {
+                                        let (badge_color, status_str) = match o.status {
+                                            shared::rail_detection::ObstacleStatus::Critical => {
+                                                (Color32::RED, format!("CRITICAL ({}x)", o.hits))
+                                            }
+                                            shared::rail_detection::ObstacleStatus::ClearanceWarning => {
+                                                (
+                                                    Color32::from_rgb(255, 170, 0),
+                                                    format!("CLEARANCE ({}x)", o.hits),
+                                                )
+                                            }
+                                            shared::rail_detection::ObstacleStatus::Unlikely => {
+                                                (Color32::from_rgb(160, 160, 160), "UNLIKELY".to_string())
+                                            }
+                                        };
+                                        ui.horizontal(|ui| {
+                                            ui.colored_label(Color32::LIGHT_GRAY, format!("[{}]", eng));
+                                            ui.colored_label(badge_color, format!("#{} [{}]", o.id, status_str));
+                                            ui.label(format!(
+                                                "Dist: {:.1}m | Lat: {:+.2}m | H: {:.2}m | Pts: {}",
+                                                o.distance_along_track,
+                                                o.lateral_offset,
+                                                o.height_above_rail,
+                                                o.points_count,
+                                            ));
+                                        });
+                                    }
+                                });
+                        }
+                    } else {
+                        let active_res = if self.engine_mode == DetectorEngineMode::RailOrt3D {
+                            self.ort_converted_res.as_ref()
+                        } else {
+                            self.last_res.as_ref()
+                        };
+
+                        if let Some(r) = active_res {
+                            ui.colored_label(
+                                Color32::GREEN,
+                                format!("Confidence: {:.1}%", r.confidence * 100.0),
+                            );
+                            ui.label(format!("Gauge: {:.3} m", r.gauge));
+                            ui.label(format!("Direction: {}", r.turn_direction));
+                            if r.turn_radius.is_infinite() || r.turn_radius > 9999.0 {
+                                ui.label("Radius: ∞ (Straight)");
+                            } else {
+                                ui.label(format!("Radius: {:.1} m", r.turn_radius));
+                            }
+                            ui.label(format!("Points Detected: {}", r.points.len()));
+                            if self.engine_mode == DetectorEngineMode::RailTrack2D {
+                                ui.label(format!(
+                                    "Extrapolation: {:.1} m (N={})",
+                                    self.extrapolate_m, self.smooth_n
+                                ));
+                                if r.has_intensity {
+                                    ui.label(format!(
+                                        "Intensity L/R: {:.1} / {:.1}",
+                                        r.avg_intensity_left, r.avg_intensity_right
+                                    ));
+                                }
+                            }
+                            ui.label(format!(
+                                "Detection Latency: {:.2} ms",
+                                self.profiling.detector_total_ms
+                            ));
+
+                            if self.engine_mode == DetectorEngineMode::RailTrack2D {
+                                if r.is_coasting {
+                                    ui.colored_label(
+                                        Color32::from_rgb(255, 90, 90),
+                                        format!(
+                                            "⚠️ Status: COASTING (Streak: {}/{})",
+                                            r.outlier_streak, self.max_outlier_frames
+                                        ),
+                                    );
+                                } else {
+                                    ui.colored_label(
+                                        Color32::GREEN,
+                                        "🛡️ Status: TRACKING (Continuity locked)",
+                                    );
+                                }
+                                if r.far_anchor_active {
+                                    ui.colored_label(
+                                        Color32::from_rgb(100, 220, 255),
+                                        "⚓ Far Anchor: Active in fit",
+                                    );
+                                }
+                            }
+
+                            ui.add_space(4.0);
+                            ui.separator();
+                            ui.heading("🚨 Obstacle Status");
+
+                            let num_crit = r
                                 .obstacles
                                 .iter()
                                 .filter(|o| o.status == shared::rail_detection::ObstacleStatus::Critical)
-                                .map(|o| o.distance_along_track)
-                                .fold(f32::INFINITY, f32::min);
-                            ui.colored_label(
-                                Color32::RED,
-                                format!("🛑 CRITICAL: {} OBSTACLE(S) ON TRACK! (Closest: {:.1}m)", num_crit, closest),
-                            );
-                        } else if num_warn > 0 {
-                            let closest = r
+                                .count();
+                            let num_warn = r
                                 .obstacles
                                 .iter()
                                 .filter(|o| o.status == shared::rail_detection::ObstacleStatus::ClearanceWarning)
-                                .map(|o| o.distance_along_track)
-                                .fold(f32::INFINITY, f32::min);
-                            ui.colored_label(
-                                Color32::from_rgb(255, 170, 0),
-                                format!("⚠️ WARNING: {} IN CLEARANCE ZONE! (Closest: {:.1}m)", num_warn, closest),
-                            );
-                        } else if num_unlikely > 0 {
-                            ui.colored_label(
-                                Color32::from_rgb(160, 160, 160),
-                                format!("ℹ️ UNLIKELY: {} single detection(s) (waiting for repetition)", num_unlikely),
-                            );
-                        } else {
-                            ui.colored_label(
-                                Color32::GREEN,
-                                format!("🟢 CLEAR TRACK (No obstacles within {:.0}m)", self.max_distance_m),
-                            );
-                        }
+                                .count();
+                            let num_unlikely = r
+                                .obstacles
+                                .iter()
+                                .filter(|o| o.status == shared::rail_detection::ObstacleStatus::Unlikely)
+                                .count();
 
-                        if !r.obstacles.is_empty() {
-                            egui::ScrollArea::vertical().max_height(120.0).show(ui, |ui| {
-                                for o in &r.obstacles {
-                                    let (badge_color, status_str) = match o.status {
-                                        shared::rail_detection::ObstacleStatus::Critical => (Color32::RED, format!("CRITICAL ({}x)", o.hits)),
-                                        shared::rail_detection::ObstacleStatus::ClearanceWarning => (Color32::from_rgb(255, 170, 0), format!("CLEARANCE ({}x)", o.hits)),
-                                        shared::rail_detection::ObstacleStatus::Unlikely => (Color32::from_rgb(160, 160, 160), "UNLIKELY (1x)".to_string()),
-                                    };
-                                    ui.horizontal(|ui| {
-                                        ui.colored_label(badge_color, format!("#{} [{}]", o.id, status_str));
-                                        ui.label(format!(
-                                            "Dist: {:.1}m | Lat: {:+.2}m | H: {:.2}m | Pts: {} | Dim: {:.1}x{:.1}x{:.1}m",
-                                             o.distance_along_track,
-                                             o.lateral_offset,
-                                             o.height_above_rail,
-                                             o.points_count,
-                                             o.size_m[0],
-                                             o.size_m[1],
-                                             o.size_m[2],
-                                        ));
-                                    });
-                                }
-                            });
+                            if num_crit > 0 {
+                                let closest = r
+                                    .obstacles
+                                    .iter()
+                                    .filter(|o| o.status == shared::rail_detection::ObstacleStatus::Critical)
+                                    .map(|o| o.distance_along_track)
+                                    .fold(f32::INFINITY, f32::min);
+                                ui.colored_label(
+                                    Color32::RED,
+                                    format!(
+                                        "🛑 CRITICAL: {} OBSTACLE(S) ON TRACK! (Closest: {:.1}m)",
+                                        num_crit, closest
+                                    ),
+                                );
+                            } else if num_warn > 0 {
+                                let closest = r
+                                    .obstacles
+                                    .iter()
+                                    .filter(|o| o.status == shared::rail_detection::ObstacleStatus::ClearanceWarning)
+                                    .map(|o| o.distance_along_track)
+                                    .fold(f32::INFINITY, f32::min);
+                                ui.colored_label(
+                                    Color32::from_rgb(255, 170, 0),
+                                    format!(
+                                        "⚠️ WARNING: {} IN CLEARANCE ZONE! (Closest: {:.1}m)",
+                                        num_warn, closest
+                                    ),
+                                );
+                            } else if num_unlikely > 0 {
+                                ui.colored_label(
+                                    Color32::from_rgb(160, 160, 160),
+                                    format!(
+                                        "ℹ️ UNLIKELY: {} single detection(s) (waiting for repetition)",
+                                        num_unlikely
+                                    ),
+                                );
+                            } else {
+                                ui.colored_label(
+                                    Color32::GREEN,
+                                    format!("🟢 CLEAR TRACK (No obstacles within {:.0}m)", self.max_distance_m),
+                                );
+                            }
+
+                            if !r.obstacles.is_empty() {
+                                egui::ScrollArea::vertical().max_height(120.0).show(ui, |ui| {
+                                    for o in &r.obstacles {
+                                        let (badge_color, status_str) = match o.status {
+                                            shared::rail_detection::ObstacleStatus::Critical => {
+                                                (Color32::RED, format!("CRITICAL ({}x)", o.hits))
+                                            }
+                                            shared::rail_detection::ObstacleStatus::ClearanceWarning => {
+                                                (
+                                                    Color32::from_rgb(255, 170, 0),
+                                                    format!("CLEARANCE ({}x)", o.hits),
+                                                )
+                                            }
+                                            shared::rail_detection::ObstacleStatus::Unlikely => {
+                                                (Color32::from_rgb(160, 160, 160), "UNLIKELY (1x)".to_string())
+                                            }
+                                        };
+                                        ui.horizontal(|ui| {
+                                            ui.colored_label(badge_color, format!("#{} [{}]", o.id, status_str));
+                                            ui.label(format!(
+                                                "Dist: {:.1}m | Lat: {:+.2}m | H: {:.2}m | Pts: {} | Dim: {:.1}x{:.1}x{:.1}m",
+                                                o.distance_along_track,
+                                                o.lateral_offset,
+                                                o.height_above_rail,
+                                                o.points_count,
+                                                o.size_m[0],
+                                                o.size_m[1],
+                                                o.size_m[2],
+                                            ));
+                                        });
+                                    }
+                                });
+                            }
+                        } else {
+                            ui.colored_label(Color32::RED, "No Track Detected");
                         }
-                    } else {
-                        ui.colored_label(Color32::RED, "No Track Detected");
                     }
                 });
 
@@ -3388,25 +4157,34 @@ impl eframe::App for RailTuner2DApp {
                     egui::Grid::new("perf_grid").num_columns(3).spacing([8.0, 3.0]).show(ui, |ui| {
                         let tot = self.profiling.total_pipeline_ms.max(0.001);
 
-                        ui.colored_label(Color32::from_rgb(0, 215, 255), "🛤️ Rail Detection");
-                        ui.monospace(format!("{:>5.2} ms", self.profiling.rail_detect_ms));
-                        ui.label(format!("{:>3.0}%", (self.profiling.rail_detect_ms / tot * 100.0).clamp(0.0, 100.0)));
-                        ui.end_row();
+                        if self.engine_mode != DetectorEngineMode::RailOrt3D {
+                            ui.colored_label(Color32::from_rgb(0, 215, 255), "🛤️ RailTrack 2D Detection");
+                            ui.monospace(format!("{:>5.2} ms", self.profiling.rail_detect_ms));
+                            ui.label(format!("{:>3.0}%", (self.profiling.rail_detect_ms / tot * 100.0).clamp(0.0, 100.0)));
+                            ui.end_row();
 
-                        ui.colored_label(Color32::from_rgb(255, 170, 0), "🚨 Obstacles & Clearance");
-                        ui.monospace(format!("{:>5.2} ms", self.profiling.obstacle_detect_ms));
-                        ui.label(format!("{:>3.0}%", (self.profiling.obstacle_detect_ms / tot * 100.0).clamp(0.0, 100.0)));
-                        ui.end_row();
+                            ui.colored_label(Color32::from_rgb(255, 170, 0), "🚨 Obstacles & Clearance");
+                            ui.monospace(format!("{:>5.2} ms", self.profiling.obstacle_detect_ms));
+                            ui.label(format!("{:>3.0}%", (self.profiling.obstacle_detect_ms / tot * 100.0).clamp(0.0, 100.0)));
+                            ui.end_row();
 
-                        ui.colored_label(Color32::from_rgb(180, 180, 255), "🌀 Curvature Warp");
-                        ui.monospace(format!("{:>5.2} ms", self.profiling.warp_ms));
-                        ui.label(format!("{:>3.0}%", (self.profiling.warp_ms / tot * 100.0).clamp(0.0, 100.0)));
-                        ui.end_row();
+                            ui.colored_label(Color32::from_rgb(180, 180, 255), "🌀 Curvature Warp");
+                            ui.monospace(format!("{:>5.2} ms", self.profiling.warp_ms));
+                            ui.label(format!("{:>3.0}%", (self.profiling.warp_ms / tot * 100.0).clamp(0.0, 100.0)));
+                            ui.end_row();
 
-                        ui.colored_label(Color32::from_rgb(160, 220, 160), "📐 3D Restore Coords");
-                        ui.monospace(format!("{:>5.2} ms", self.profiling.restore_coords_ms));
-                        ui.label(format!("{:>3.0}%", (self.profiling.restore_coords_ms / tot * 100.0).clamp(0.0, 100.0)));
-                        ui.end_row();
+                            ui.colored_label(Color32::from_rgb(160, 220, 160), "📐 3D Restore Coords");
+                            ui.monospace(format!("{:>5.2} ms", self.profiling.restore_coords_ms));
+                            ui.label(format!("{:>3.0}%", (self.profiling.restore_coords_ms / tot * 100.0).clamp(0.0, 100.0)));
+                            ui.end_row();
+                        }
+
+                        if self.engine_mode != DetectorEngineMode::RailTrack2D {
+                            ui.colored_label(Color32::from_rgb(255, 215, 0), "📐 RailOrt 3D Slices & Fit");
+                            ui.monospace(format!("{:>5.2} ms", self.profiling.ort_detect_ms));
+                            ui.label(format!("{:>3.0}%", (self.profiling.ort_detect_ms / tot * 100.0).clamp(0.0, 100.0)));
+                            ui.end_row();
+                        }
 
                         if self.stream_to_rerun {
                             ui.colored_label(Color32::from_rgb(220, 140, 240), "📡 Rerun 3D/2D Stream");
@@ -3481,14 +4259,25 @@ impl eframe::App for RailTuner2DApp {
                                 } else {
                                     ui.colored_label(Color32::from_rgb(255, 230, 100), "[💡 Intensity]");
                                 }
-                                ui.colored_label(Color32::from_rgb(30, 210, 255), "■ Left Rail");
-                                ui.colored_label(Color32::from_rgb(255, 90, 30), "■ Right Rail");
-                                ui.colored_label(Color32::from_rgb(0, 255, 60), "■ Centerline");
-                                ui.colored_label(Color32::from_rgb(255, 0, 255), "■ Extrapolation");
-                                ui.colored_label(Color32::from_rgb(180, 220, 180), "■ Sleepers");
-                                ui.colored_label(Color32::from_rgb(0, 220, 220), "⬚ Shapecast 1");
-                                if self.shapecast2_enabled {
-                                    ui.colored_label(Color32::from_rgb(120, 160, 255), "⬚ Shapecast 2");
+                                if self.engine_mode != DetectorEngineMode::RailOrt3D {
+                                    ui.colored_label(Color32::from_rgb(30, 210, 255), "■ Left Rail");
+                                    ui.colored_label(Color32::from_rgb(255, 90, 30), "■ Right Rail");
+                                    ui.colored_label(Color32::from_rgb(0, 255, 60), "■ Centerline");
+                                    ui.colored_label(Color32::from_rgb(255, 0, 255), "■ Extrapolation");
+                                    ui.colored_label(Color32::from_rgb(180, 220, 180), "■ Sleepers");
+                                    ui.colored_label(Color32::from_rgb(0, 220, 220), "⬚ Shapecast 1");
+                                    if self.shapecast2_enabled {
+                                        ui.colored_label(Color32::from_rgb(120, 160, 255), "⬚ Shapecast 2");
+                                    }
+                                }
+                                if self.engine_mode == DetectorEngineMode::Comparison {
+                                    ui.colored_label(Color32::from_rgb(255, 215, 0), "■ Ort Left");
+                                    ui.colored_label(Color32::from_rgb(255, 140, 0), "■ Ort Right");
+                                    ui.colored_label(Color32::from_rgb(255, 255, 50), "■ Ort Center");
+                                } else if self.engine_mode == DetectorEngineMode::RailOrt3D {
+                                    ui.colored_label(Color32::from_rgb(255, 215, 0), "■ Ort Left Rail");
+                                    ui.colored_label(Color32::from_rgb(255, 140, 0), "■ Ort Right Rail");
+                                    ui.colored_label(Color32::from_rgb(255, 255, 50), "■ Ort Centerline");
                                 }
                                 ui.colored_label(Color32::RED, "■ Critical Obstacle");
                                 ui.colored_label(Color32::from_rgb(255, 170, 0), "■ Clearance Intrusion");

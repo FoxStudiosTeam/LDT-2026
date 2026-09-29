@@ -7,12 +7,12 @@ use serde_json::json;
 use shared::error::AppError;
 use shared::rail_detection::{LidarGeometry, RailTrackDetector};
 use shared::rail_ort::{RailOrtConfig, RailOrtDetector};
-use shared::range_image::{turbo_rgb, RangeImage};
+use shared::range_image::{RangeImage, turbo_rgb};
 use shared::types::{AppPointCloud, ProcessingQueue};
 use tracing::*;
 
-use crate::debug::helper::DebugStream;
 use crate::ENV;
+use crate::debug::helper::DebugStream;
 
 pub async fn entry(
     mut point_cloud_stream: PointCloudStream,
@@ -79,7 +79,7 @@ pub async fn entry(
             }
             let swap_dur = swap_start.elapsed();
 
-            // 2. Строим RangeImage и производим параллельную детекцию двух методов ПОД READ-ЛОКОМ
+            // 2. Строим RangeImage и производим параллельную детекцию двух методов ПОД READ/WRITE-ЛОКОМ
             let (
                 timestamp_ns,
                 crop_raw,
@@ -91,9 +91,9 @@ pub async fn entry(
                 warp_dur,
                 detect_dur,
                 ort_dur,
-                t_rerun
+                t_rerun,
             ) = {
-                let point_cloud = point_cloud_lock.read().expect("Mutex poisoned");
+                let mut point_cloud = point_cloud_lock.write().expect("Mutex poisoned");
                 let number = ProcessingQueue::READ;
                 let timestamp_ns: i64 = point_cloud.timestamp[number];
                 let ri = RangeImage::from_pandar128_organized(&point_cloud, number, 1);
@@ -136,25 +136,16 @@ pub async fn entry(
                     )
                 };
                 let detect_dur = t_detect.elapsed();
-                (
-                    timestamp_ns,
-                    crop_raw,
-                    active_ri,
-                    geo,
-                    c_z,
-                    bent_result,
-                    warp_dur,
-                    detect_dur
-                )
-            }; // <--- read-lock освобожден!
 
-            // 3. Восстановление истинных координат для Rerun и 3D сцены: Z_real = Z_bent - c_z * X^2
-            let t_restore = Instant::now();
-            let mut real_result = bent_result.clone();
-            if let Some(ref mut r) = real_result {
-                r.restore_real_coordinates();
-            }
-            let restore_dur = t_restore.elapsed();
+                // Детекция путей методом RailOrt
+                let t_ort = Instant::now();
+                let (cropped_tunnel, ort_result) = {
+                    let mut detector = ort_detector_lock.lock().unwrap();
+                    let mut cropped = detector.crop_tunnel_slices(&point_cloud, number);
+                    let res = detector.process_slices(&mut cropped, &point_cloud, number, frame_id as usize, Some(&crop_raw));
+                    (cropped, res)
+                };
+                let ort_dur = t_ort.elapsed();
 
                 // 4. Отправка в Rerun
                 let t_rerun = Instant::now();
@@ -216,7 +207,6 @@ pub async fn entry(
 
                 (
                     timestamp_ns,
-                    ri,
                     crop_raw,
                     active_ri,
                     geo,
@@ -226,9 +216,9 @@ pub async fn entry(
                     warp_dur,
                     detect_dur,
                     ort_dur,
-                    t_rerun
+                    t_rerun,
                 )
-            }; // <--- read-lock освобожден!
+            }; // <--- lock освобожден!
 
             // 3. Восстановление истинных координат для Rerun и 3D сцены: Z_real = Z_bent - c_z * X^2
             let mut real_result = bent_result.clone();

@@ -19,11 +19,11 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 use crate::rail_detection::{
-    DetectionHistoryItem, LidarGeometry, ObstacleConfig, RailPoint,
-    RailTrackDetector, TrackObstacle, ObstacleDetectionMode
+    DetectionHistoryItem, DetectionResult, LidarGeometry, ObstacleConfig, ObstacleDetectionMode,
+    RailPoint, RailTrackDetector, TrackObstacle,
 };
 use crate::range_image::RangeImage;
-use crate::types::{is_zero_point, AppPointCloud, ProcessingQueue};
+use crate::types::{AppPointCloud, ProcessingQueue, is_zero_point};
 
 /// Конфигурация ортографического детектора путей (RailOrt)
 #[derive(Clone, Debug)]
@@ -93,45 +93,46 @@ pub struct RailOrtConfig {
 impl Default for RailOrtConfig {
     fn default() -> Self {
         Self {
-            z_min : -12.00,
-            z_max : -1.00,
-            y_min : 2.00,
-            y_max : 50.0,
-            ring_start : 127,
-            ring_end : 40,
-            intensity_jump_threshold : 1.00,
-            intensity_max : 2.5,
-            nominal_height_jump : 0.44,
-            height_jump_tolerance : 0.46,
-            min_point_distance : 0.030,
+            z_min: -12.00,
+            z_max: -1.00,
+            y_min: 2.00,
+            y_max: 50.0,
+            ring_start: 127,
+            ring_end: 40,
+            intensity_jump_threshold: 1.00,
+            intensity_max: 2.5,
+            nominal_height_jump: 0.44,
+            height_jump_tolerance: 0.46,
+            min_point_distance: 0.030,
             min_track_length_m: 0.000,
-            nominal_gauge : 1.520,
-            gauge_tolerance : 0.100,
-            max_rail_height_diff : 0.100,
-            max_lateral_jump : 1.00,
-            max_lateral_rail_jump : 0.050,
-            max_longitudinal_jump : 4.50,
-            min_longitudinal_jump : 0.000,
-            extrapolate_m : 40.0,
-            smooth_n : 6,
-            detect_obstacles : true,
-            intensity_score : 1.20,
-            gauge_err_score : 3.30,
-            delta_z_score : 4.00,
-            continuity_score : 2.40,
-            obstacle_config: ObstacleConfig{
-                enabled : true,
-                mode : ObstacleDetectionMode::Boxcast3D,
-                clearance_width : 2.20,
-                clearance_narrowing_width : 0.6000,
-                clearance_narrowing_height : 0.3000,
-                min_height_above_rail : 0.20,
-                max_height_above_rail : 3.10,
-                min_points : 6,
-                max_distance_m : 60.0,
-                depth_diff_thresh : 0.25,
-                upward_curvature : 0.00040,
-                cluster_depth_thresh : 0.80,
+            nominal_gauge: 1.520,
+            gauge_tolerance: 0.100,
+            max_rail_height_diff: 0.100,
+            max_lateral_jump: 1.00,
+            max_lateral_rail_jump: 0.050,
+            max_longitudinal_jump: 4.50,
+            min_longitudinal_jump: 0.000,
+            extrapolate_m: 40.0,
+            smooth_n: 6,
+            detect_obstacles: true,
+            intensity_score: 1.20,
+            gauge_err_score: 3.30,
+            delta_z_score: 4.00,
+            continuity_score: 2.40,
+            obstacle_config: ObstacleConfig {
+                enabled: true,
+                mode: ObstacleDetectionMode::Boxcast3D,
+                clearance_width: 2.20,
+                clearance_narrowing_width: 0.6000,
+                clearance_narrowing_height: 0.3000,
+                min_height_above_rail: 0.20,
+                max_height_above_rail: 3.10,
+                min_points: 6,
+                max_distance_m: 60.0,
+                depth_diff_thresh: 0.25,
+                upward_curvature: 0.00040,
+                cluster_depth_thresh: 0.80,
+                ..ObstacleConfig::default()
             },
         }
     }
@@ -240,7 +241,11 @@ impl DetectionResultOrt {
         let hoop_dist_m = 4.0_f32;
         let hoop_step = ((hoop_dist_m / step_m).round().max(1.0)) as usize;
 
-        let clearance_width = if self.clearance_width > 0.0 { self.clearance_width } else { 2.10 };
+        let clearance_width = if self.clearance_width > 0.0 {
+            self.clearance_width
+        } else {
+            2.10
+        };
         let min_height_above_rail = self.min_height_above_rail;
         let max_height_above_rail = if self.max_height_above_rail > self.min_height_above_rail {
             self.max_height_above_rail
@@ -307,6 +312,107 @@ impl DetectionResultOrt {
             [255, 170, 0] // Warning Amber
         } else {
             [0, 220, 220] // Calm Cyan / Clear
+        }
+    }
+
+    /// Преобразует результат ортографического детектора в канонический DetectionResult
+    /// для сквозной совместимости с 2D рендерером, Rerun стримингом и системой двойного шейпкаста.
+    pub fn to_detection_result(&self, obs_cfg: &ObstacleConfig) -> DetectionResult {
+        let x_curve: Vec<f32> = self.y_center.iter().map(|&y| -y).collect();
+        let y_center = self.x_curve.clone();
+        let z_center = self.z_center.clone();
+
+        let x_left: Vec<f32> = self.y_left.iter().map(|&y| -y).collect();
+        let y_left = self.x_left.clone();
+
+        let x_right: Vec<f32> = self.y_right.iter().map(|&y| -y).collect();
+        let y_right = self.x_right.clone();
+
+        let x_ext: Vec<f32> = self.y_ext.iter().map(|&y| -y).collect();
+        let y_ext = self.x_ext.clone();
+        let z_ext = self.z_ext.clone();
+
+        let x_ext_l: Vec<f32> = self.y_ext_l.iter().map(|&y| -y).collect();
+        let y_ext_l = self.x_ext_l.clone();
+
+        let x_ext_r: Vec<f32> = self.y_ext_r.iter().map(|&y| -y).collect();
+        let y_ext_r = self.x_ext_r.clone();
+
+        let points = self
+            .points
+            .iter()
+            .map(|p| {
+                let mut pt = p.clone();
+                pt.x_left = -p.y_left;
+                pt.y_left = p.x_left;
+                pt.x_right = -p.y_right;
+                pt.y_right = p.x_right;
+                pt.x_center = -p.y_center;
+                pt.y_center = p.x_center;
+                pt
+            })
+            .collect();
+
+        DetectionResult {
+            frame_idx: self.frame_idx,
+            points,
+            gauge: self.gauge,
+            curvature_a: self.curvature_a,
+            heading_b: -self.heading_b,
+            offset_c: self.offset_c,
+            turn_radius: self.turn_radius,
+            turn_direction: self.turn_direction.clone(),
+            lateral_shift_15m: self.lateral_shift_15m,
+            poly_y: [self.poly_y[0], -self.poly_y[1], self.poly_y[2]],
+            poly_z: [-self.poly_z[0], self.poly_z[1]],
+            x_curve,
+            y_center,
+            z_center,
+            x_left,
+            y_left,
+            x_right,
+            y_right,
+            confidence: self.confidence,
+            extrapolate_m: self.extrapolate_m,
+            smooth_n: self.smooth_n,
+            x_ext,
+            y_ext,
+            z_ext,
+            x_ext_l,
+            y_ext_l,
+            x_ext_r,
+            y_ext_r,
+            has_intensity: self.avg_intensity_left > 0.0 || self.avg_intensity_right > 0.0,
+            avg_intensity_left: self.avg_intensity_left,
+            avg_intensity_right: self.avg_intensity_right,
+            obstacles: self.obstacles.clone(),
+            clearance_width: obs_cfg.clearance_width,
+            min_height_above_rail: obs_cfg.min_height_above_rail,
+            max_height_above_rail: obs_cfg.max_height_above_rail,
+            max_distance_m: obs_cfg.max_distance_m,
+            upward_curvature: obs_cfg.upward_curvature,
+            clearance_narrowing_width: obs_cfg.clearance_narrowing_width,
+            clearance_narrowing_height: obs_cfg.clearance_narrowing_height,
+            clearance_height_end_shift: obs_cfg.clearance_height_end_shift,
+            clearance_start_offset: obs_cfg.clearance_start_offset,
+            obstacle_enabled: obs_cfg.enabled,
+            shapecast2_enabled: obs_cfg.shapecast2_enabled,
+            clearance_width_2: obs_cfg.clearance_width_2,
+            min_height_above_rail_2: obs_cfg.min_height_above_rail_2,
+            max_height_above_rail_2: obs_cfg.max_height_above_rail_2,
+            max_distance_m_2: obs_cfg.max_distance_m_2,
+            upward_curvature_2: obs_cfg.upward_curvature_2,
+            clearance_narrowing_width_2: obs_cfg.clearance_narrowing_width_2,
+            clearance_narrowing_height_2: obs_cfg.clearance_narrowing_height_2,
+            clearance_height_end_shift_2: obs_cfg.clearance_height_end_shift_2,
+            clearance_start_offset_2: obs_cfg.clearance_start_offset_2,
+            is_real_coordinates: true,
+            is_coasting: false,
+            outlier_streak: 0,
+            far_anchor_active: false,
+            timing_rail_ms: self.timing_rail_ms,
+            timing_obstacles_ms: self.timing_obstacles_ms,
+            timing_total_ms: self.timing_total_ms,
         }
     }
 }
@@ -446,7 +552,11 @@ impl RailOrtDetector {
                 let zr = zs[idx_r];
                 let int_r = ints[idx_r];
 
-                let dy = if let Some(ref lp) = last_pt { yr - lp.y_center } else { 0.0 };
+                let dy = if let Some(ref lp) = last_pt {
+                    yr - lp.y_center
+                } else {
+                    0.0
+                };
                 let abs_dy = dy.abs();
 
                 // Проверка продольного шага:
@@ -462,15 +572,16 @@ impl RailOrtDetector {
                 // Предикшн положения рельсов от центра пути:
                 // X_c(y) = lp.x_center + slope * dy
                 // X_right = X_c - half_gauge, X_left = X_c + half_gauge
-                let (pred_xr, pred_xl, pred_xc, pred_zc, allowed_lat) = if let Some(ref lp) = last_pt {
-                    let xc = lp.x_center + track_slope_c * dy;
-                    let zc = lp.z_center + track_slope_z * dy;
-                    let allowed = max_lat_rail + 0.08 * abs_dy;
-                    (xc - half_g, xc + half_g, xc, zc, allowed)
-                } else {
-                    // Под кабиной ось поезда в коридоре [-0.60 .. +0.60] м
-                    (0.0 - half_g, 0.0 + half_g, 0.0, zr, 0.50)
-                };
+                let (pred_xr, pred_xl, pred_xc, pred_zc, allowed_lat) =
+                    if let Some(ref lp) = last_pt {
+                        let xc = lp.x_center + track_slope_c * dy;
+                        let zc = lp.z_center + track_slope_z * dy;
+                        let allowed = max_lat_rail + 0.08 * abs_dy;
+                        (xc - half_g, xc + half_g, xc, zc, allowed)
+                    } else {
+                        // Под кабиной ось поезда в коридоре [-0.60 .. +0.60] м
+                        (0.0 - half_g, 0.0 + half_g, 0.0, zr, 0.50)
+                    };
 
                 // Отклонение правого рельса от предсказанной линии
                 if (xr - pred_xr).abs() > allowed_lat {
@@ -544,13 +655,15 @@ impl RailOrtDetector {
                     let gauge_cost = gauge_err * self.config.gauge_err_score;
 
                     // 3. Непрерывность смещения центров и рельсов
-                    let continuity_cost = ((xm - pred_xc).abs() + (xr - pred_xr).abs() + (xl - pred_xl).abs())
-                        * self.config.continuity_score;
+                    let continuity_cost =
+                        ((xm - pred_xc).abs() + (xr - pred_xr).abs() + (xl - pred_xl).abs())
+                            * self.config.continuity_score;
 
                     // 4. Перепад по высоте
                     let dz_cost = dz.abs() * self.config.delta_z_score;
 
-                    let jump_pen = (xm - pred_xc).abs() * self.config.continuity_score * 0.4 + (zm - pred_zc).abs() * self.config.continuity_score * 0.4;
+                    let jump_pen = (xm - pred_xc).abs() * self.config.continuity_score * 0.4
+                        + (zm - pred_zc).abs() * self.config.continuity_score * 0.4;
 
                     let score = intensity_cost + gauge_cost + continuity_cost + dz_cost - jump_pen;
 
@@ -763,8 +876,16 @@ impl RailOrtDetector {
         let (avg_i_l, avg_i_r) = if !best_points_pool.is_empty() {
             let n = best_points_pool.len() as f32;
             (
-                best_points_pool.iter().map(|p| p.intensity_left).sum::<f32>() / n,
-                best_points_pool.iter().map(|p| p.intensity_right).sum::<f32>() / n,
+                best_points_pool
+                    .iter()
+                    .map(|p| p.intensity_left)
+                    .sum::<f32>()
+                    / n,
+                best_points_pool
+                    .iter()
+                    .map(|p| p.intensity_right)
+                    .sum::<f32>()
+                    / n,
             )
         } else {
             (0.0, 0.0)
@@ -896,9 +1017,8 @@ pub fn detect_obstacles_direct(
 
         // Сужение/расширение габарита по дальности
         let dx_fwd = (dist_fwd - 2.0).max(0.0);
-        let cur_half_w = (clearance_width - cfg.clearance_narrowing_width * dx_fwd)
-            .max(min_w)
-            * 0.5;
+        let cur_half_w =
+            (clearance_width - cfg.clearance_narrowing_width * dx_fwd).max(min_w) * 0.5;
         let cur_h = (nom_h - cfg.clearance_narrowing_height * dx_fwd).max(min_h_thickness);
         let cur_min_h = center_h - cur_h * 0.5;
         let cur_max_h = center_h + cur_h * 0.5;
@@ -981,6 +1101,12 @@ pub fn detect_obstacles_direct(
         let size_y = (max_y - min_y).max(0.15);
         let size_z = (max_z - min_z).max(0.15);
 
+        let status = if is_critical {
+            crate::rail_detection::ObstacleStatus::Critical
+        } else {
+            crate::rail_detection::ObstacleStatus::ClearanceWarning
+        };
+
         obstacles.push(TrackObstacle {
             id: obs_id,
             distance_along_track: avg_dist,
@@ -992,6 +1118,9 @@ pub fn detect_obstacles_direct(
             points_count: cl.len(),
             is_critical,
             size_m: [size_x, size_y, size_z],
+            status,
+            hits: 1,
+            in_gauge: is_critical,
         });
 
         obs_id += 1;
@@ -1148,6 +1277,9 @@ mod tests {
         let p0 = strips[0][0];
         // X+ = left, Y- = forward, Z- = down
         assert!(p0[1] <= -1.5, "Y should be negative forward distance");
-        assert!(p0[0] > 0.0, "Left boundary X should be positive (X+ is left)");
+        assert!(
+            p0[0] > 0.0,
+            "Left boundary X should be positive (X+ is left)"
+        );
     }
 }
