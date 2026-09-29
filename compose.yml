@@ -1,6 +1,7 @@
 services:
   # 1. Сервис плеера датасета через ROS2 (проигрывает баг в цикле)
   ros2_dataset_player:
+    image: ghcr.io/foxstudiosteam/ldt-2026/ros2_dataset_player:latest
     build:
       context: .
       dockerfile: ./dataset/Dockerfile
@@ -24,6 +25,7 @@ services:
         ros2 bag play /app/dataset/cloud_with_fake_obj --loop --read-ahead-queue-size 30
       "
   ros2_stream_player:
+    image: ghcr.io/foxstudiosteam/ldt-2026/ros2_stream_player:latest
     build:
       context: .
       dockerfile: ./bag_player/Dockerfile
@@ -40,6 +42,7 @@ services:
     
   # 2. Rust-приложение детекции рельсов и препятствий + Rerun + публикация в /rail/error
   rust_viewer:
+    image: ghcr.io/foxstudiosteam/ldt-2026/rust_viewer:latest
     build:
       context: .
       dockerfile: ./rust_listener/Dockerfile
@@ -95,6 +98,7 @@ services:
   # Веб-панель доступна в любом браузере: http://localhost:6080
   # Запуск: docker compose up rail_tuner_2d
   rail_tuner_2d:
+    image: ghcr.io/foxstudiosteam/ldt-2026/rail_tuner_2d:latest
     build:
       context: .
       dockerfile: ./rail_tuner_2d/Dockerfile
@@ -119,6 +123,7 @@ services:
   # Запуск: docker compose run --rm rust_error_listener
   # Или в сыром JSON: docker compose run --rm rust_error_listener --raw
   rust_error_listener:
+    image: ghcr.io/foxstudiosteam/ldt-2026/rust_error_listener:latest
     build:
       context: .
       dockerfile: ./test_error_listener/Dockerfile
