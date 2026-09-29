@@ -15,7 +15,6 @@ services:
     env_file:
       - .env
     environment:
-      - ROS_DOMAIN_ID=42
       - ROS_LOCALHOST_ONLY=1
     volumes:
       - bag_data:/app/dataset:ro
@@ -32,7 +31,6 @@ services:
     network_mode: "host"
     ipc: "host"
     environment:
-      - ROS_DOMAIN_ID=42
       - ROS_LOCALHOST_ONLY=1
     env_file:
       - .env
@@ -62,7 +60,6 @@ services:
         soft: 1024
         hard: 65535
     environment:
-      - ROS_DOMAIN_ID=42
       - ROS_LOCALHOST_ONLY=1
       - ROS_ERROR_TOPIC=/rail/error
       - RERUN_URL=rerun+http://host.docker.internal:9876/proxy
@@ -86,7 +83,6 @@ services:
     env_file:
       - .env
     environment:
-      - ROS_DOMAIN_ID=42
       - ROS_LOCALHOST_ONLY=1
       - ROS_ERROR_TOPIC=/rail/error
       - PYTHONUNBUFFERED=1
@@ -107,7 +103,6 @@ services:
     env_file:
       - .env
     environment:
-      - ROS_DOMAIN_ID=42
       - ROS_LOCALHOST_ONLY=1
       - ROS_ERROR_TOPIC=/rail/error
     entrypoint: ["/app/test_error_listener"]

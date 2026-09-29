@@ -6,7 +6,7 @@
 use ros2_data_extraction::ros2_client::{
     Context, ContextOptions, MessageTypeName, Name, NodeName, NodeOptions,
 };
-use ros2_data_extraction::rustdds::{QosPolicyBuilder, qos::HasQoSPolicy};
+use ros2_data_extraction::rustdds::{Duration, QosPolicyBuilder, policy, qos::HasQoSPolicy};
 use shared::transport::StringMsg;
 
 #[tokio::main]
@@ -38,7 +38,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let topic = node.create_topic(
         &Name::parse(&topic_name)?,
         MessageTypeName::new("std_msgs", "String"),
-        &QosPolicyBuilder::new().build(),
+        &QosPolicyBuilder::new()
+            .reliability(policy::Reliability::Reliable {
+                max_blocking_time: Duration::from_millis(100),
+            })
+            .durability(policy::Durability::Volatile)
+            .history(policy::History::KeepLast { depth: 10 })
+            .build(),
     )?;
 
     let subscription = node.create_subscription::<StringMsg>(&topic, Some(topic.qos()))?;

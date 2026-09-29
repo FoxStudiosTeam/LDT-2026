@@ -53,7 +53,13 @@ pub fn create_string_publisher(
         .create_topic(
             &Name::parse(topic_name).map_err(|_| ErrorType::InvalidName("Invalid topic name"))?,
             ros2_client::MessageTypeName::new("std_msgs", "String"),
-            &rustdds::QosPolicyBuilder::new().build(),
+            &rustdds::QosPolicyBuilder::new()
+                .reliability(rustdds::policy::Reliability::Reliable {
+                    max_blocking_time: rustdds::Duration::from_millis(100),
+                })
+                .durability(rustdds::policy::Durability::Volatile)
+                .history(rustdds::policy::History::KeepLast { depth: 10 })
+                .build(),
         )
         .app_error()?;
 

@@ -12,6 +12,7 @@ env_config! {
         TEST_RERUN : bool = false,
         BEGIN_TIMESTAMP : i64 = 0,
         PREVIEW_FOV_X_DEG : f32 = 40.0,
-        RENDER_PATH : String = "".to_string()
+        RENDER_PATH : String = "".to_string(),
+        DETECTION_PRESET : shared::configs::DetectionPreset = shared::configs::DetectionPreset::DEFAULT_PRESET
     }
 }

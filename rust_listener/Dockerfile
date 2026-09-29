@@ -102,5 +102,6 @@ COPY --from=builder /app/target/release/test_error_listener /app/test_error_list
 
 # Оставляем системные пути для работы NVidia контейнера через драйвер хоста
 ENV LD_LIBRARY_PATH="/usr/local/cuda-12.2/lib64:${LD_LIBRARY_PATH}"
+ENV ROS_DISTRO=humble
 
 ENTRYPOINT ["/app/ros2_debug_viewer"]

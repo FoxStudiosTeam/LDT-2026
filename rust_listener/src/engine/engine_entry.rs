@@ -22,15 +22,16 @@ pub async fn entry(
     let recording_stream = Arc::new(recording_stream);
     let error_publisher = point_cloud_stream.error_publisher();
 
-    let initial_detector: RailTrackDetector = DetectionPreset::current().into();
+    let preset = ENV.DETECTION_PRESET;
+    let initial_detector: RailTrackDetector = preset.into();
     let rail_detector = Arc::new(Mutex::new(initial_detector));
 
     let mut processed_frames: u64 = 0;
     let mut begin_lock = ENV.BEGIN_TIMESTAMP > 0;
 
     info!(
-        "[ENGINE] Инициализация пайплайна (аналог rail_tuner_2d): FOV={}°, Rerun=ON, ErrorTopic={}",
-        ENV.PREVIEW_FOV_X_DEG, ENV.ROS_ERROR_TOPIC
+        "[ENGINE] Инициализация пайплайна (пресет {:?}): FOV={}°, Rerun=ON, ErrorTopic={}",
+        preset, ENV.PREVIEW_FOV_X_DEG, ENV.ROS_ERROR_TOPIC
     );
 
     while let Some(frame) = point_cloud_stream.next().await? {
@@ -52,7 +53,7 @@ pub async fn entry(
         }
 
         processed_frames += 1;
-        if processed_frames >= ENV.TOTAL_FRAMES {
+        if ENV.TOTAL_FRAMES > 0 && processed_frames >= ENV.TOTAL_FRAMES {
             info!("[ENGINE] Достигнут лимит кадров ({})", ENV.TOTAL_FRAMES);
             return Ok(());
         }

@@ -2,7 +2,7 @@ use crate::rail_detection::{LidarGeometry, RailTrackDetector};
 
 use crate as shared;
 
-#[derive(Default)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DetectionPreset {
     #[default]
     Default,
@@ -10,6 +10,36 @@ pub enum DetectionPreset {
     Anchored,
     Quiet,
     QuietPlus,
+}
+
+impl std::fmt::Display for DetectionPreset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Default => write!(f, "Default"),
+            Self::StrictRail => write!(f, "StrictRail"),
+            Self::Anchored => write!(f, "Anchored"),
+            Self::Quiet => write!(f, "Quiet"),
+            Self::QuietPlus => write!(f, "QuietPlus"),
+        }
+    }
+}
+
+impl std::str::FromStr for DetectionPreset {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let clean = s.trim().trim_matches('"').trim_matches('\'').trim();
+        match clean.to_ascii_lowercase().as_str() {
+            "default" => Ok(Self::Default),
+            "strictrail" | "strict_rail" | "strict" => Ok(Self::StrictRail),
+            "anchored" => Ok(Self::Anchored),
+            "quiet" => Ok(Self::Quiet),
+            "quietplus" | "quiet_plus" | "quiet+" => Ok(Self::QuietPlus),
+            other => Err(format!(
+                "Unknown DetectionPreset: '{other}'. Expected one of: Default, StrictRail, Anchored, Quiet, QuietPlus"
+            )),
+        }
+    }
 }
 
 impl Into<RailTrackDetector> for DetectionPreset {
@@ -233,8 +263,118 @@ impl Into<RailTrackDetector> for DetectionPreset {
     }
 }
 
+fn read_env_file_var(key: &str) -> Option<String> {
+    for path in &[".env", "../.env", "../../.env"] {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with('#') || trimmed.is_empty() {
+                    continue;
+                }
+                if let Some((k, v)) = trimmed.split_once('=') {
+                    if k.trim() == key {
+                        let val = v.trim().trim_matches('"').trim_matches('\'').trim();
+                        return Some(val.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 impl DetectionPreset {
+    /// Базовый пресет по умолчанию (`QuietPlus`)
+    pub const DEFAULT_PRESET: Self = DetectionPreset::QuietPlus;
+
+    /// Возвращает текущий пресет: считывает из переменной окружения `DETECTION_PRESET` (или файла `.env`),
+    /// а по умолчанию — `DetectionPreset::QuietPlus`.
     pub fn current() -> Self {
-        DetectionPreset::QuietPlus
+        Self::from_env()
+    }
+
+    /// Базовый пресет по умолчанию без учета env (`QuietPlus`)
+    pub fn current_default() -> Self {
+        Self::DEFAULT_PRESET
+    }
+
+    /// Считывает пресет из переменной окружения `DETECTION_PRESET` (или файла `.env`).
+    /// Если значение не задано или некорректно, возвращает пресет по умолчанию (`QuietPlus`).
+    pub fn from_env() -> Self {
+        Self::from_env_or(Self::DEFAULT_PRESET)
+    }
+
+    /// Считывает пресет из переменной окружения `DETECTION_PRESET` (или файла `.env`).
+    /// При отсутствии или некорректном значении возвращает указанный `fallback`.
+    pub fn from_env_or(fallback: Self) -> Self {
+        if let Ok(val) = std::env::var("DETECTION_PRESET") {
+            if let Ok(preset) = val.parse::<Self>() {
+                return preset;
+            }
+        }
+        if let Some(val) = read_env_file_var("DETECTION_PRESET") {
+            if let Ok(preset) = val.parse::<Self>() {
+                return preset;
+            }
+        }
+        fallback
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_detection_preset_from_str() {
+        assert_eq!(
+            "default".parse::<DetectionPreset>().unwrap(),
+            DetectionPreset::Default
+        );
+        assert_eq!(
+            "Default".parse::<DetectionPreset>().unwrap(),
+            DetectionPreset::Default
+        );
+        assert_eq!(
+            "StrictRail".parse::<DetectionPreset>().unwrap(),
+            DetectionPreset::StrictRail
+        );
+        assert_eq!(
+            "strict_rail".parse::<DetectionPreset>().unwrap(),
+            DetectionPreset::StrictRail
+        );
+        assert_eq!(
+            "strict".parse::<DetectionPreset>().unwrap(),
+            DetectionPreset::StrictRail
+        );
+        assert_eq!(
+            "Anchored".parse::<DetectionPreset>().unwrap(),
+            DetectionPreset::Anchored
+        );
+        assert_eq!(
+            "quiet".parse::<DetectionPreset>().unwrap(),
+            DetectionPreset::Quiet
+        );
+        assert_eq!(
+            "QuietPlus".parse::<DetectionPreset>().unwrap(),
+            DetectionPreset::QuietPlus
+        );
+        assert_eq!(
+            "\"QuietPlus\"".parse::<DetectionPreset>().unwrap(),
+            DetectionPreset::QuietPlus
+        );
+        assert_eq!(
+            "'quiet_plus'".parse::<DetectionPreset>().unwrap(),
+            DetectionPreset::QuietPlus
+        );
+        assert!("invalid_preset".parse::<DetectionPreset>().is_err());
+    }
+
+    #[test]
+    fn test_detection_preset_from_env_fallback() {
+        assert_eq!(
+            DetectionPreset::from_env_or(DetectionPreset::Anchored),
+            DetectionPreset::from_env_or(DetectionPreset::Anchored)
+        );
     }
 }

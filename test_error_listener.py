@@ -37,10 +37,10 @@ class RailErrorListener(Node):
 
         from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
         qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
+            reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.VOLATILE,
             history=HistoryPolicy.KEEP_LAST,
-            depth=50
+            depth=10
         )
 
         self.subscription = self.create_subscription(
@@ -110,11 +110,12 @@ def main():
     node = RailErrorListener(topic)
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
-        print("\n🛑 Stopped by user.")
+    except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
+        print("\n🛑 Stopped.")
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":
