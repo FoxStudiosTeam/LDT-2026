@@ -37,8 +37,6 @@ help:
 
 setup:
 	@if [ ! -f .env ]; then cp .env.example .env && echo "✓ Created .env from .env.example"; else echo "✓ .env already exists"; fi
-	@mkdir -p dataset frames
-	@echo "✓ Directories ./dataset and ./frames are ready."
 
 # 1. Интерактивная веб-панель (egui noVNC) — видит все датасеты в папке ./dataset
 tuner: interactive
