@@ -152,10 +152,8 @@ services:
       - WINDOW_MAXIMIZED=false
       - XDG_RUNTIME_DIR=/tmp/runtime-root
       - WINIT_UNIX_BACKEND=x11
-
     volumes:
       - ${DATASET_PATH:-./dataset}:/app/dataset:ro
-      - ./frames:/app/frames:ro
 
   # 5. Rust CLI слушатель топика /rail/error (высокопроизводительный слушатель телеметрии)
   # Запуск: docker compose run --rm rust_error_listener
