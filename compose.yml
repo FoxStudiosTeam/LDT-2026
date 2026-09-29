@@ -66,6 +66,8 @@ services:
         echo \"► [DATASET] Запуск: ros2 bag play \$$TARGET \$$ARGS\"
         exec ros2 bag play \"\$$TARGET\" \$$ARGS
       "
+
+  # Совместимость для windows
   ros2_stream_player:
     image: ghcr.io/foxstudiosteam/ldt-2026/ros2_stream_player:latest
     build:
