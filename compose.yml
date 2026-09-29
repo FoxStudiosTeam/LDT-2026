@@ -56,8 +56,6 @@ services:
       - .env
     cap_add:
       - NET_ADMIN
-    volumes:
-      - ./frames:/frames
     ulimits:
       nofile:
         soft: 1024

@@ -5,14 +5,13 @@
 
 ---
 
-# (временно) Запуск
+# Инструкция для запуска:
+1) cp .env.example .env
 1) Поместите датасет в папку /dataset
 2) Поменяйте volumes 
 1) docker compose up --build --
 3) Измените кома
-docker run --rm -v bag_data:/to -v "${PWD}/dataset/doubleT_obstacle:/from:ro" alpine sh -c "mkdir -p /to/doubleT_obstacle && cp -rv /from/* /to/doubleT_obstacle/"
-
-
+docker run --rm -v bag_data:/to -v "${PWD}/<DATASET>:/from:ro" alpine sh -c "mkdir -p /to/dataset && cp -rv /from/* /to/dataset/"
 
 
 
