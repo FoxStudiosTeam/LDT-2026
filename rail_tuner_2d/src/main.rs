@@ -64,7 +64,6 @@ fn turbo_rgb(x: f32) -> [u8; 3] {
 pub enum TrackSource {
     Db3Bag { dir: PathBuf, files: Vec<PathBuf> },
     Db3(PathBuf),
-    NpyDir(PathBuf),
 }
 
 #[derive(Hash, PartialEq, Eq)]
@@ -79,9 +78,6 @@ fn get_canonical_key(source: &TrackSource) -> TrackSourceKey {
     match source {
         TrackSource::Db3Bag { dir, .. } => {
             TrackSourceKey::Db3Bag(dir.canonicalize().unwrap_or_else(|_| dir.clone()))
-        }
-        TrackSource::NpyDir(p) => {
-            TrackSourceKey::NpyDir(p.canonicalize().unwrap_or_else(|_| p.clone()))
         }
         TrackSource::Db3(p) => TrackSourceKey::Db3(p.canonicalize().unwrap_or_else(|_| p.clone())),
     }
@@ -132,10 +128,6 @@ impl TrackSource {
                 } else {
                     format!("📁 [DB3] {} ({})", parent, stem)
                 }
-            }
-            TrackSource::NpyDir(p) => {
-                let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("npy");
-                format!("📂 [NPY] {}", name)
             }
         }
     }
@@ -251,15 +243,6 @@ fn scan_tracks_in_root(root: &Path, tracks: &mut Vec<TrackSource>) {
                     }
                     continue; // Не углубляемся внутрь росбага
                 }
-                // Проверяем, является ли папка коллекцией .npy кадров
-                let npy = scan_npy_frames(&p);
-                if !npy.is_empty() {
-                    let ts = TrackSource::NpyDir(p.clone());
-                    if !tracks.contains(&ts) {
-                        tracks.push(ts);
-                    }
-                    continue;
-                }
                 // Иначе запоминаем для рекурсивного обхода (например, dataset/)
                 subdirs.push(p);
             } else if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("db3") {
@@ -293,11 +276,6 @@ pub fn discover_available_tracks(cli_arg: Option<&str>) -> Vec<TrackSource> {
                     dir: p.clone(),
                     files,
                 });
-            } else {
-                let npy = scan_npy_frames(&p);
-                if !npy.is_empty() {
-                    tracks.push(TrackSource::NpyDir(p.clone()));
-                }
             }
         } else if p.is_file() {
             let fname = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
@@ -537,17 +515,6 @@ impl FrameDataset {
                     range_image: ri,
                 })
             }
-            TrackSource::NpyDir(_) => {
-                if idx >= self.npy_files.len() {
-                    return None;
-                }
-                let (_, path) = &self.npy_files[idx];
-                let ri = RangeImage::load_npy(path).ok()?;
-                Some(TunerFrame {
-                    idx,
-                    range_image: ri,
-                })
-            }
         }
     }
 
@@ -568,9 +535,6 @@ impl FrameDataset {
             }
             TrackSource::Db3(ref p) => {
                 Self::from_db3_files(source.clone(), vec![p.clone()], streaming, buffer_size)
-            }
-            TrackSource::NpyDir(ref p) => {
-                Self::from_npy_dir(source.clone(), p, streaming, buffer_size)
             }
         }
     }
@@ -3043,8 +3007,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut available_tracks = discover_available_tracks(cli_arg);
     if available_tracks.is_empty() {
-        println!("[!] No tracks found in standard paths, defaulting to 'frames'");
-        available_tracks.push(TrackSource::NpyDir(PathBuf::from("frames")));
+        println!("[!] No tracks found in standard paths");
     }
 
     println!("Found {} available tracks:", available_tracks.len());

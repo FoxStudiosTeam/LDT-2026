@@ -18,6 +18,7 @@ on:
         options:
           - all
           - rust_viewer
+          - rerun_viewer
           - rail_tuner_2d
           - rust_error_listener
           - ros2_stream_player
@@ -48,6 +49,10 @@ jobs:
             dockerfile: ./rust_listener/Dockerfile
             context: .
             description: "High-performance Rust LiDAR Rail & Obstacle Detector with Rerun streaming"
+          - name: rerun_viewer
+            dockerfile: ./rerun_viewer/Dockerfile
+            context: .
+            description: "Embedded Rerun Web Viewer Server for Zero-Install in-browser 3D/2D visualization"
           - name: rail_tuner_2d
             dockerfile: ./rail_tuner_2d/Dockerfile
             context: .

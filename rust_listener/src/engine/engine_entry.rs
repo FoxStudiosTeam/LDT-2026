@@ -3,15 +3,15 @@ use std::time::Instant;
 
 use rerun::{Color, Points3D, Radius, RecordingStream, TimeCell};
 use ros2_data_extraction::PointCloudStream;
-use shared::types::AppPointCloud;
-use shared::{
-    error::AppError,
-    types::ProcessingQueue,
-};
+use serde_json::json;
+use shared::error::AppError;
+use shared::rail_detection::{LidarGeometry, RailTrackDetector};
+use shared::range_image::{RangeImage, turbo_rgb};
+use shared::types::{AppPointCloud, ProcessingQueue};
 use tracing::*;
 
 use crate::ENV;
-use crate::debug::helper::DebugStream;
+use shared::debug_helper::DebugStream;
 
 pub async fn entry(
     mut point_cloud_stream: PointCloudStream,
@@ -19,13 +19,19 @@ pub async fn entry(
     point_cloud: Arc<RwLock<AppPointCloud>>,
 ) -> Result<(), AppError> {
     let recording_stream = Arc::new(recording_stream);
-    let mut initial_injector = crate::debug::injector::setup_obstacles();
-    if !ENV.OBSTACLES_CONFIG.is_empty() {
-        if let Some(loaded) = crate::debug::injector::ObstacleInjector::load_from_path(&ENV.OBSTACLES_CONFIG) {
-            initial_injector = loaded;
-        }
-    }
-    let injector = Arc::new(std::sync::Mutex::new(initial_injector));
+    let error_publisher = point_cloud_stream.error_publisher();
+
+    let preset = ENV.DETECTION_PRESET;
+    let initial_detector: RailTrackDetector = preset.into();
+    let rail_detector = Arc::new(Mutex::new(initial_detector));
+
+    let mut processed_frames: u64 = 0;
+    let mut begin_lock = ENV.BEGIN_TIMESTAMP > 0;
+
+    info!(
+        "[ENGINE] Инициализация пайплайна (пресет {:?}): FOV={}°, Rerun=ON, ErrorTopic={}",
+        preset, ENV.PREVIEW_FOV_X_DEG, ENV.ROS_ERROR_TOPIC
+    );
 
     while let Some(frame) = point_cloud_stream.next().await? {
         if begin_lock {
@@ -54,7 +60,7 @@ pub async fn entry(
         let frame_id = processed_frames;
         let point_cloud_lock = point_cloud.clone();
         let recording_stream = recording_stream.clone();
-        let injector = injector.clone();
+        let rail_detector_lock = rail_detector.clone();
 
         let err_payload = tokio::task::spawn_blocking(move || -> Option<String> {
             let frame_start = Instant::now();
@@ -67,36 +73,22 @@ pub async fn entry(
             }
             let swap_dur = swap_start.elapsed();
 
-            // 2. Инъекция препятствий, статистика, RangeImage под WRITE-локом буфера READ
-            let compute_start = std::time::Instant::now();
-            let (timestamp_ns, stats, rerun_points, range_image, gt_boxes) = {
-                let mut point_cloud = point_cloud_lock.write().expect(&format!(
-                    "⚠️ Мутекс отравился ☠️ {} {}",
-                    file!(),
-                    line!()
-                ));
-
+            // 2. Формируем 2D карту глубины (RangeImage) из организованного облака Pandar128
+            //    ПОД READ-ЛОКОМ, после чего НЕМЕДЛЕННО освобождаем лок.
+            let (timestamp_ns, crop_raw) = {
+                let point_cloud = point_cloud_lock.read().expect("Mutex poisoned");
                 let number = ProcessingQueue::READ;
-                let timestamp_ns = point_cloud.timestamp[number];
-
-                // Инъекция виртуальных препятствий
-                let gt_boxes = if let Ok(mut inj_guard) = injector.lock() {
-                    inj_guard.inject(&mut point_cloud, number, timestamp_ns, frame_id)
-                } else {
-                    Vec::new()
-                };
-
-                let stats = point_cloud.compute_stats(number);
-                let rerun_points: Vec<[f32; 3]> = point_cloud.to_rerun(number).collect();
-                let range_image = shared::range_image::RangeImage::from_pandar128_organized(
+                let timestamp_ns: i64 = point_cloud.timestamp[number];
+                let ri = RangeImage::from_pandar128_organized(
                     &point_cloud,
                     number,
                     1,
                 );
 
-                (timestamp_ns, stats, rerun_points, range_image, gt_boxes)
-            }; // <--- write-lock освобожден!
-            let compute_dur = compute_start.elapsed();
+                // Подготовка 2D карты глубины (Range Image)
+                let crop_raw = ri.crop_fov(ENV.PREVIEW_FOV_X_DEG);
+                (timestamp_ns, crop_raw)
+            }; // <--- read-lock point_cloud немедленно освобожден!
 
             let geo = LidarGeometry::new(
                 crop_raw.height,
@@ -144,15 +136,7 @@ pub async fn entry(
             if let Some(ref mut r) = real_result {
                 r.restore_real_coordinates();
             }
-            if !gt_boxes.is_empty() {
-                if let Err(e) = recording_stream.log_boxes_3d("ground_truth/obstacle_boxes", &gt_boxes) {
-                    error!("Ошибка логирования GT боксов препятствий в rerun: {e:?}");
-                }
-            }
-            debug!(
-                "[FRAME {frame_id}] Rerun 3D points & overlays send duration: {:?}",
-                rerun_cloud_start.elapsed()
-            );
+            let restore_dur = t_restore.elapsed();
 
             // 4. Отправка в Rerun
             let t_rerun = Instant::now();
@@ -193,13 +177,6 @@ pub async fn entry(
             // ─── ОКНО 2: 2D Карта глубины, путей, шейпкаста и препятствий ───
             let _ = recording_stream.log_rail_detection_2d(&active_ri, &geo, bent_result.as_ref());
             let rerun_dur = t_rerun.elapsed();
-
-            // 5. Сохранение сырых кадров без интерполяции для прототипирования на Python
-            if !ENV.RENDER_PATH.is_empty() {
-                let _ = std::fs::create_dir_all(&ENV.RENDER_PATH);
-                let file_path = format!("{}/frame_{frame_id:06}.npy", ENV.RENDER_PATH);
-                let _ = crop_raw.save_npy(&file_path);
-            }
 
             // 6. Формирование логов профилирования и статуса в консоль
             let rail_ms = real_result.as_ref().map(|r| r.timing_rail_ms).unwrap_or(0.0);

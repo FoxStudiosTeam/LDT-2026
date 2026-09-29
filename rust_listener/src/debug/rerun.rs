@@ -2,6 +2,7 @@
 
 use rerun::{RecordingStream, RecordingStreamBuilder};
 use shared::error::{AppError, ErrCtx};
+use shared::debug_helper::setup_rerun_layout;
 
 use crate::ENV;
 
@@ -9,7 +10,7 @@ pub async fn init_rerun() -> Result<RecordingStream, AppError> {
     let rec = RecordingStreamBuilder::new("point_cloud")
         .connect_grpc_opts(ENV.RERUN_URL.clone())
         .app_error()?;
-    let _ = shared::debug_helper::setup_rerun_layout(&rec);
+    let _ = setup_rerun_layout(&rec);
     Ok(rec)
 }
 

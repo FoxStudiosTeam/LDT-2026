@@ -38,6 +38,7 @@ RUN mkdir -p \
         data-extraction/src \
         rust_listener/src \
         rail_tuner_2d/src \
+        test_error_listener/src \
     && echo "fn main() {}" > rust_listener/src/main.rs \
     && echo "fn main() {}" > rail_tuner_2d/src/main.rs \
     && echo "fn main() {}" > test_error_listener/src/main.rs \
