@@ -90,7 +90,8 @@ services:
     environment:
       - ROS_LOCALHOST_ONLY=1
       - ROS_ERROR_TOPIC=/rail/error
-      - RERUN_URL=rerun+http://host.docker.internal:9876/proxy
+      - RERUN_URL=${RERUN_URL:-rerun+http://host.docker.internal:9876/proxy}
+      - DETECTION_PRESET=${DETECTION_PRESET:-QuietPlus}
     deploy:
       resources:
         reservations:
@@ -102,13 +103,14 @@ services:
   # 3. Встроенный Rerun Web Viewer (3D/2D визуализация прямо в браузере: http://127.0.0.1:9090/?url=rerun+http://localhost:9876/proxy)
   # Позволяет жюри и проверяющим просматривать облако точек, рельсы и препятствия без установки Rerun на хост
   rerun_viewer:
+    image: ghcr.io/foxstudiosteam/ldt-2026/rerun_viewer:latest
     build:
       context: .
       dockerfile: ./rerun_viewer/Dockerfile
     container_name: rerun_viewer
     ports:
-      - "9090:9090"
-      - "9876:9876"
+      - "0.0.0.0:9090:9090"
+      - "0.0.0.0:9876:9876"
     environment:
       - RERUN_LOG=info
     restart: unless-stopped
@@ -123,8 +125,8 @@ services:
       dockerfile: ./rail_tuner_2d/Dockerfile
     container_name: rail_tuner_2d
     ports:
-      - "6080:6080"
-      - "5900:5900"
+      - "0.0.0.0:6080:6080"
+      - "0.0.0.0:5900:5900"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ipc: "host"

@@ -1,4 +1,7 @@
-.PHONY: help setup up down logs play interactive tuner listen listen-raw stream
+.PHONY: help setup up up-50m up-58m up-quiet up-quietplus rerun down logs play interactive tuner listen listen-raw stream
+
+# Пресет детекции: Quiet (50m, высокая стабильность) или QuietPlus (58m, расширенная перспектива)
+PRESET ?= QuietPlus
 
 # Значения по умолчанию для плеера датасетов
 BAG ?=
@@ -13,10 +16,17 @@ help:
 	@echo "Основные команды:"
 	@echo "  make setup         — Подготовить окружение (.env и папку dataset)"
 	@echo "  make tuner         — Запустить веб-панель тюнера (http://localhost:6080)"
-	@echo "  make up            — Запустить детектор (rust_viewer)"
+	@echo "  make up            — Запустить детектор + Rerun Web (пресет QuietPlus 58m)"
+	@echo "  make up-50m        — Запустить детектор с пресетом Quiet (50m)"
+	@echo "  make up-58m        — Запустить детектор с пресетом QuietPlus (58m)"
+	@echo "  make rerun         — Запустить Rerun Web Viewer (http://localhost:9090)"
 	@echo "  make play          — Запустить воспроизведение датасета (auto/loop)"
 	@echo "  make listen        — Слушать топик ошибок /rail/error (Rust CLI)"
 	@echo "  make down          — Остановить все контейнеры"
+	@echo ""
+	@echo "Выбор пресета дальности и чувствительности:"
+	@echo "  make up PRESET=Quiet        # Стабильный режим (дальность до 50м)"
+	@echo "  make up PRESET=QuietPlus    # Расширенный режим (дальность до 58м, дефолт)"
 	@echo ""
 	@echo "Примеры воспроизведения датасетов:"
 	@echo "  make play                             # Автовыбор датасета в цикле"
@@ -36,10 +46,24 @@ interactive:
 	docker compose up -d rail_tuner_2d
 	@echo "🌐 Web panel is LIVE! Open browser at: http://localhost:6080"
 
-# 2. Основной детектор рельсов и препятствий
+# 2. Основной детектор рельсов и препятствий + Rerun Web Viewer
 up:
-	docker compose up -d rust_viewer
-	@echo "✓ Detector (rust_viewer) is running."
+	DETECTION_PRESET="$(PRESET)" docker compose up -d rust_viewer rerun_viewer
+	@echo "✓ Detector (rust_viewer) is running with preset [$(PRESET)]."
+	@echo "🌐 Rerun Web Viewer is LIVE! Open browser at: http://localhost:9090"
+
+up-50m: up-quiet
+up-quiet:
+	@$(MAKE) up PRESET=Quiet
+
+up-58m: up-quietplus
+up-quietplus:
+	@$(MAKE) up PRESET=QuietPlus
+
+# 2.1 Rerun Web Viewer отдельно
+rerun:
+	docker compose up -d rerun_viewer
+	@echo "🌐 Rerun Web Viewer is LIVE! Open browser at: http://localhost:9090"
 
 # 3. Плеер датасетов с умным автовыбором и кастомными флагами
 play:
@@ -54,7 +78,7 @@ listen-raw:
 
 # 5. Стриминговый режим (Python player + Rust viewer + Error listener)
 stream:
-	docker compose up -d ros2_stream_player rust_viewer
+	DETECTION_PRESET="$(PRESET)" docker compose up -d ros2_stream_player rust_viewer rerun_viewer
 	docker compose run --rm rust_error_listener
 
 # 6. Остановка
