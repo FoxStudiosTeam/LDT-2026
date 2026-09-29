@@ -21,6 +21,19 @@ git clone https://github.com/FoxStudiosTeam/LDT-2026.git
 cd LDT-2026
 make setup
 ```
+
+> [!NOTE]
+> # 🚨🚨firewall может блокировать ивенты rail/error🚨🚨
+> Нужно или отключить его на время:
+> ```bash
+> sudo ufw disable
+> ```
+>
+> или прокинуть правило:
+> ```bash
+> sudo ufw enable
+> sudo ufw allow in proto udp from <IP_или_подсеть_сервера> to any port 7400:7500 comment 'ROS2/DDS domain 0'
+ > ```
 *(Команда `make setup` создаст файл `.env` из шаблона `.env.example` и подготовит директорию `./dataset`)*
 
 ### 2. Добавление датасетов
