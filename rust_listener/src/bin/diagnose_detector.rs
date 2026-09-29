@@ -1,4 +1,3 @@
-use shared::configs::DetectionPreset;
 use shared::rail_detection::{LidarGeometry, RailTrackDetector};
 use shared::range_image::RangeImage;
 use std::path::Path;
@@ -13,7 +12,7 @@ fn main() {
     let raw_ri = RangeImage::load_npy(frame_path).expect("Failed to load npy");
     println!("Loaded RangeImage: {}x{}", raw_ri.width, raw_ri.height);
 
-    let mut detector: RailTrackDetector = DetectionPreset::current().into();
+    let mut detector: RailTrackDetector = rust_listener::ENV.DETECTION_PRESET.into();
     detector.geometry = LidarGeometry::new(raw_ri.height, raw_ri.width, 15.0, -25.0, 40.0);
     detector.row_end_pct = -0.50; // allow scanning all the way to row 0!
 

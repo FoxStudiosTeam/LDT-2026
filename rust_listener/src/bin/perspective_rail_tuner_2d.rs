@@ -21,7 +21,7 @@
 //!   cargo run --bin rail_tuner_2d
 //!   cargo run --bin rail_tuner_2d -- frames
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
@@ -32,9 +32,8 @@ use rayon::prelude::*;
 use rerun::{Color, Points3D, Radius, RecordingStream, RecordingStreamBuilder};
 use rusqlite::{Connection, OpenFlags};
 use rust_listener::debug::helper::DebugStream;
-use shared::configs::DetectionPreset;
 use shared::rail_detection::{
-    DetectionResult, LidarGeometry, ObstacleDetectionMode, RailTrackDetector,
+    DetectionResult, LidarGeometry, ObstacleDetectionMode, ObstacleStatus, RailTrackDetector,
 };
 use shared::range_image::RangeImage;
 use shared::transport::PointCloud2;
@@ -60,11 +59,31 @@ fn turbo_rgb(x: f32) -> [u8; 3] {
 }
 
 /// Источник трека данных (ROS2 .db3, мультифайловый росбаг или директория с .npy)
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TrackSource {
     Db3Bag { dir: PathBuf, files: Vec<PathBuf> },
     Db3(PathBuf),
     NpyDir(PathBuf),
+}
+
+#[derive(Hash, PartialEq, Eq)]
+enum TrackSourceKey {
+    Db3Bag(PathBuf),
+    NpyDir(PathBuf),
+    Db3(PathBuf),
+}
+
+// Вспомогательная функция для канонизации первого/основного пути источника
+fn get_canonical_key(source: &TrackSource) -> TrackSourceKey {
+    match source {
+        TrackSource::Db3Bag { dir, .. } => {
+            TrackSourceKey::Db3Bag(dir.canonicalize().unwrap_or_else(|_| dir.clone()))
+        }
+        TrackSource::NpyDir(p) => {
+            TrackSourceKey::NpyDir(p.canonicalize().unwrap_or_else(|_| p.clone()))
+        }
+        TrackSource::Db3(p) => TrackSourceKey::Db3(p.canonicalize().unwrap_or_else(|_| p.clone())),
+    }
 }
 
 impl TrackSource {
@@ -260,7 +279,7 @@ fn scan_tracks_in_root(root: &Path, tracks: &mut Vec<TrackSource>) {
     }
 }
 
-/// Находит доступные треки: ROS2 .db3 датасеты (включая мультифайловые) и .npy директории
+/// Находит доступные треки и гарантирует их уникальность
 pub fn discover_available_tracks(cli_arg: Option<&str>) -> Vec<TrackSource> {
     let mut tracks = Vec::new();
 
@@ -299,48 +318,57 @@ pub fn discover_available_tracks(cli_arg: Option<&str>) -> Vec<TrackSource> {
                                 files,
                             });
                         } else {
-                            tracks.push(TrackSource::Db3(p));
+                            tracks.push(TrackSource::Db3(p.clone()));
                         }
                     } else {
-                        tracks.push(TrackSource::Db3(p));
+                        tracks.push(TrackSource::Db3(p.clone()));
                     }
                 } else {
-                    tracks.push(TrackSource::Db3(p));
+                    tracks.push(TrackSource::Db3(p.clone()));
                 }
             }
         }
     }
 
     // 2. Сканирование папки dataset и текущей директории
-    let search_roots = [
+    let search_roots = deduplicate_paths(vec![
         PathBuf::from("dataset"),
         PathBuf::from("../dataset"),
         PathBuf::from("."),
-    ];
+    ]);
 
     for root in &search_roots {
         scan_tracks_in_root(root, &mut tracks);
     }
 
-    // 3. Сканирование известных папок с .npy кадрами
-    let npy_roots = [
-        PathBuf::from("frames"),
-        PathBuf::from("../frames"),
-        PathBuf::from("dev_pyrails/frames"),
-    ];
-    for n in &npy_roots {
-        if n.exists() && n.is_dir() {
-            let npy = scan_npy_frames(n);
-            if !npy.is_empty() {
-                let ts = TrackSource::NpyDir(n.clone());
-                if !tracks.contains(&ts) {
-                    tracks.push(ts);
-                }
+    // 3. Гарантия уникальности с сохранением первого найденного (приоритетного из CLI)
+    let mut seen = HashSet::new();
+    tracks.retain(|track| {
+        let key = get_canonical_key(track);
+        seen.insert(key) // insert возвращает false, если ключ уже присутствует
+    });
+
+    println!("{tracks:#?}");
+
+    tracks
+}
+
+fn deduplicate_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+
+    for path in paths {
+        if let Ok(canonical) = path.canonicalize() {
+            if seen.insert(canonical) {
+                result.push(path);
             }
         }
     }
 
-    tracks
+    println!("Seen: {seen:#?}");
+    println!("Res: {result:#?}");
+
+    result
 }
 
 /// Поиск ID топика PointCloud2 в SQLite базе rosbag2
@@ -457,14 +485,14 @@ impl FrameDataset {
         // 2. В режиме стриминга сообщаем фоновому потоку о новом положении скролла
         if self.is_streaming {
             self.request_frame(idx);
+        }
 
-            // 3. Синхронно загружаем запрошенный кадр при cache-miss, чтобы не моргать в UI
-            if let Some(f) = self.load_single_frame(idx) {
-                let mut w = self.frames.write().unwrap();
-                w.insert(idx, f.clone());
-                self.loaded_count.store(w.len(), Ordering::Relaxed);
-                return Some(f);
-            }
+        // 3. Синхронно загружаем запрошенный кадр при cache-miss (в стриминге или при автопрогоне)
+        if let Some(f) = self.load_single_frame(idx) {
+            let mut w = self.frames.write().unwrap();
+            w.insert(idx, f.clone());
+            self.loaded_count.store(w.len(), Ordering::Relaxed);
+            return Some(f);
         }
 
         None
@@ -1265,10 +1293,10 @@ impl EguiRangePainter {
                 draw_line_rgb(&mut rgb, out_w, out_h, &ext_r, [200, 50, 200], 1);
             }
 
-            // Clearance corridor shapecast 2D wireframe
-            let shapecast_2d = r.shapecast_wireframe_2d(geo);
-            let shapecast_col = r.shapecast_color();
-            for strip in &shapecast_2d {
+            // Clearance corridor shapecast 1 2D wireframe
+            let shapecast1_2d = r.shapecast1_wireframe_2d(geo);
+            let shapecast1_col = r.shapecast_color();
+            for strip in &shapecast1_2d {
                 let px_strip: Vec<(i32, i32)> = strip
                     .iter()
                     .map(|p| {
@@ -1278,7 +1306,25 @@ impl EguiRangePainter {
                         )
                     })
                     .collect();
-                draw_line_rgb(&mut rgb, out_w, out_h, &px_strip, shapecast_col, 1);
+                draw_line_rgb(&mut rgb, out_w, out_h, &px_strip, shapecast1_col, 1);
+            }
+
+            // Clearance corridor shapecast 2 2D wireframe (if enabled)
+            if r.shapecast2_enabled {
+                let shapecast2_2d = r.shapecast2_wireframe_2d(geo);
+                let shapecast2_col = r.shapecast2_color();
+                for strip in &shapecast2_2d {
+                    let px_strip: Vec<(i32, i32)> = strip
+                        .iter()
+                        .map(|p| {
+                            (
+                                (p[0] * self.scale as f32) as i32,
+                                (p[1] * self.scale as f32) as i32,
+                            )
+                        })
+                        .collect();
+                    draw_line_rgb(&mut rgb, out_w, out_h, &px_strip, shapecast2_col, 1);
+                }
             }
 
             // Detected discrete points
@@ -1609,7 +1655,7 @@ pub struct RailTuner2DApp {
     contrast_intensity: f32,
     blend: f32,
 
-    // Параметры детектора препятствий
+    // Параметры детектора препятствий (шейпкаст 1)
     obstacle_enabled: bool,
     obstacle_mode: ObstacleDetectionMode,
     clearance_width: f32,
@@ -1630,6 +1676,21 @@ pub struct RailTuner2DApp {
     track_match_dist_m: f32,
     track_match_lateral_m: f32,
 
+    // Параметры второго шейпкаста (кастится после первого)
+    shapecast2_enabled: bool,
+    clearance_width_2: f32,
+    clearance_narrowing_width_2: f32,
+    clearance_narrowing_height_2: f32,
+    clearance_height_end_shift_2: f32,
+    clearance_start_offset_2: f32,
+    min_height_above_rail_2: f32,
+    max_height_above_rail_2: f32,
+    min_points_2: usize,
+    cluster_depth_thresh_2: f32,
+    max_distance_m_2: f32,
+    depth_diff_thresh_2: f32,
+    upward_curvature_2: f32,
+
     // Rerun
     rec_stream: Option<RecordingStream>,
     stream_to_rerun: bool,
@@ -1646,6 +1707,12 @@ pub struct RailTuner2DApp {
     last_painted_frame: Option<usize>,
     copied_toast_time: Option<Instant>,
     profiling: PipelineProfiling,
+
+    // Автопрогон по датасетам
+    auto_run_active: bool,
+    auto_run_queue: Vec<usize>,
+    auto_run_queue_idx: usize,
+    auto_run_status_msg: Option<(String, Color32)>,
 }
 
 impl RailTuner2DApp {
@@ -1655,7 +1722,7 @@ impl RailTuner2DApp {
         dataset: FrameDataset,
         rec_stream: Option<RecordingStream>,
     ) -> Self {
-        let detector: RailTrackDetector = DetectionPreset::current().into();
+        let detector: RailTrackDetector = rust_listener::ENV.DETECTION_PRESET.into();
 
         Self {
             available_tracks,
@@ -1705,6 +1772,20 @@ impl RailTuner2DApp {
             track_match_dist_m: detector.obstacle_config.track_match_dist_m,
             track_match_lateral_m: detector.obstacle_config.track_match_lateral_m,
 
+            shapecast2_enabled: detector.obstacle_config.shapecast2_enabled,
+            clearance_width_2: detector.obstacle_config.clearance_width_2,
+            clearance_narrowing_width_2: detector.obstacle_config.clearance_narrowing_width_2,
+            clearance_narrowing_height_2: detector.obstacle_config.clearance_narrowing_height_2,
+            clearance_height_end_shift_2: detector.obstacle_config.clearance_height_end_shift_2,
+            clearance_start_offset_2: detector.obstacle_config.clearance_start_offset_2,
+            min_height_above_rail_2: detector.obstacle_config.min_height_above_rail_2,
+            max_height_above_rail_2: detector.obstacle_config.max_height_above_rail_2,
+            min_points_2: detector.obstacle_config.min_points_2,
+            cluster_depth_thresh_2: detector.obstacle_config.cluster_depth_thresh_2,
+            max_distance_m_2: detector.obstacle_config.max_distance_m_2,
+            depth_diff_thresh_2: detector.obstacle_config.depth_diff_thresh_2,
+            upward_curvature_2: detector.obstacle_config.upward_curvature_2,
+
             rec_stream,
             stream_to_rerun: true,
 
@@ -1723,6 +1804,399 @@ impl RailTuner2DApp {
             last_painted_frame: None,
             copied_toast_time: None,
             profiling: PipelineProfiling::default(),
+
+            auto_run_active: false,
+            auto_run_queue: Vec::new(),
+            auto_run_queue_idx: 0,
+            auto_run_status_msg: None,
+        }
+    }
+
+    /// Генерация конфигурационного кода Rust для детектора
+    pub fn generate_rust_config(&self) -> String {
+        format!(
+            "// Tuned RailTrackDetector Config\n\
+             let mut detector = RailTrackDetector::new(geo);\n\
+             detector.depth_step_thresh = {:.3};\n\
+             detector.max_depth_step_thresh = {:.3};\n\
+             detector.nominal_gauge = {:.3};\n\
+             detector.min_gauge = {:.3};\n\
+             detector.max_gauge = {:.3};\n\
+             detector.row_start_pct = {:.3};\n\
+             detector.row_end_pct = {:.3};\n\
+             detector.max_lateral_jump = {:.3};\n\
+             detector.max_lateral_rail_jump = {:.3};\n\
+             detector.extrapolate_m = {:.1};\n\
+             detector.smooth_n = {};\n\
+             detector.contrast_depth = {:.1};\n\
+             detector.contrast_intensity = {:.1};\n\
+             detector.blend = {:.2};\n\
+             detector.obstacle_config.enabled = {};\n\
+             detector.obstacle_config.mode = shared::rail_detection::ObstacleDetectionMode::{:?};\n\
+             detector.obstacle_config.clearance_width = {:.2};\n\
+             detector.obstacle_config.min_height_above_rail = {:.2};\n\
+             detector.obstacle_config.max_height_above_rail = {:.2};\n\
+             detector.obstacle_config.min_points = {};\n\
+             detector.obstacle_config.max_distance_m = {:.1};\n\
+             detector.obstacle_config.depth_diff_thresh = {:.2};\n\
+             detector.obstacle_config.upward_curvature = {:.5};\n\
+             detector.obstacle_config.clearance_narrowing_width = {:.4};\n\
+             detector.obstacle_config.clearance_narrowing_height = {:.4};\n\
+             detector.obstacle_config.clearance_height_end_shift = {:.3};\n\
+             detector.obstacle_config.clearance_start_offset = {:.3};\n\
+             detector.obstacle_config.cluster_depth_thresh = {:.2};\n\
+             detector.obstacle_config.temporal_tracking_enabled = {};\n\
+             detector.obstacle_config.min_hits_for_critical = {};\n\
+             detector.obstacle_config.max_missed_frames = {};\n\
+             detector.obstacle_config.track_match_dist_m = {:.2};\n\
+             detector.obstacle_config.track_match_lateral_m = {:.2};\n\
+             detector.obstacle_config.shapecast2_enabled = {};\n\
+             detector.obstacle_config.clearance_width_2 = {:.2};\n\
+             detector.obstacle_config.clearance_narrowing_width_2 = {:.4};\n\
+             detector.obstacle_config.clearance_narrowing_height_2 = {:.4};\n\
+             detector.obstacle_config.clearance_height_end_shift_2 = {:.3};\n\
+             detector.obstacle_config.clearance_start_offset_2 = {:.3};\n\
+             detector.obstacle_config.min_height_above_rail_2 = {:.2};\n\
+             detector.obstacle_config.max_height_above_rail_2 = {:.2};\n\
+             detector.obstacle_config.min_points_2 = {};\n\
+             detector.obstacle_config.cluster_depth_thresh_2 = {:.2};\n\
+             detector.obstacle_config.max_distance_m_2 = {:.1};\n\
+             detector.obstacle_config.depth_diff_thresh_2 = {:.2};\n\
+             detector.obstacle_config.upward_curvature_2 = {:.5};\n\
+             detector.temporal_jump_reject_enabled = {};\n\
+             detector.max_interframe_jump_m = {:.3};\n\
+             detector.max_outlier_frames = {};\n\
+             detector.far_anchor_enabled = {};",
+            self.depth_step_thresh,
+            self.max_depth_step_thresh,
+            self.nominal_gauge,
+            self.min_gauge,
+            self.max_gauge,
+            self.row_start_pct,
+            self.row_end_pct,
+            self.max_lateral_jump,
+            self.max_lateral_rail_jump,
+            self.extrapolate_m,
+            self.smooth_n,
+            self.contrast_depth,
+            self.contrast_intensity,
+            self.blend,
+            self.obstacle_enabled,
+            self.obstacle_mode,
+            self.clearance_width,
+            self.min_height_above_rail,
+            self.max_height_above_rail,
+            self.min_points,
+            self.max_distance_m,
+            self.depth_diff_thresh,
+            self.upward_curvature,
+            self.clearance_narrowing_width,
+            self.clearance_narrowing_height,
+            self.clearance_height_end_shift,
+            self.clearance_start_offset,
+            self.cluster_depth_thresh,
+            self.temporal_tracking_enabled,
+            self.min_hits_for_critical,
+            self.max_missed_frames,
+            self.track_match_dist_m,
+            self.track_match_lateral_m,
+            self.shapecast2_enabled,
+            self.clearance_width_2,
+            self.clearance_narrowing_width_2,
+            self.clearance_narrowing_height_2,
+            self.clearance_height_end_shift_2,
+            self.clearance_start_offset_2,
+            self.min_height_above_rail_2,
+            self.max_height_above_rail_2,
+            self.min_points_2,
+            self.cluster_depth_thresh_2,
+            self.max_distance_m_2,
+            self.depth_diff_thresh_2,
+            self.upward_curvature_2,
+            self.temporal_jump_reject_enabled,
+            self.max_interframe_jump_m,
+            self.max_outlier_frames,
+            self.far_anchor_enabled,
+        )
+    }
+
+    /// Проверяет, нужно ли игнорировать датасет в автопрогоне (cloud_with_fake_obj, doubleT_obstacle)
+    pub fn is_ignored_track(track: &TrackSource) -> bool {
+        let lbl = track.label().to_lowercase();
+        let path_str = match track {
+            TrackSource::Db3Bag { dir, .. } => dir.to_string_lossy().to_lowercase(),
+            TrackSource::Db3(p) => p.to_string_lossy().to_lowercase(),
+            TrackSource::NpyDir(p) => p.to_string_lossy().to_lowercase(),
+        };
+        path_str.contains("cloud_with_fake_obj")
+            || path_str.contains("doublet_obstacle")
+            || lbl.contains("cloud_with_fake_obj")
+            || lbl.contains("doublet_obstacle")
+    }
+
+    /// Проверяет, является ли трек большим датасетом new_data, который ставится в конец очереди
+    pub fn is_new_data_track(track: &TrackSource) -> bool {
+        let lbl = track.label().to_lowercase();
+        let path_str = match track {
+            TrackSource::Db3Bag { dir, .. } => dir.to_string_lossy().to_lowercase(),
+            TrackSource::Db3(p) => p.to_string_lossy().to_lowercase(),
+            TrackSource::NpyDir(p) => p.to_string_lossy().to_lowercase(),
+        };
+        path_str.contains("new_data") || lbl.contains("new_data")
+    }
+
+    /// Запуск последовательного автопрогона по всем валидным датасетам
+    pub fn start_auto_run(&mut self) {
+        let mut normal_queue = Vec::new();
+        let mut end_queue = Vec::new();
+
+        for (idx, track) in self.available_tracks.iter().enumerate() {
+            if Self::is_ignored_track(track) {
+                continue;
+            }
+            if Self::is_new_data_track(track) {
+                end_queue.push(idx);
+            } else {
+                normal_queue.push(idx);
+            }
+        }
+        normal_queue.extend(end_queue);
+
+        if normal_queue.is_empty() {
+            self.auto_run_status_msg = Some((
+                "⚠️ Нет доступных датасетов для автопрогона".to_string(),
+                Color32::YELLOW,
+            ));
+            return;
+        }
+
+        self.auto_run_queue = normal_queue;
+        self.auto_run_queue_idx = 0;
+        self.auto_run_active = true;
+        self.is_playing = false;
+
+        let first_idx = self.auto_run_queue[0];
+        let track_name = self.available_tracks[first_idx].label();
+        println!(
+            "[AUTO-RUN] 🚀 Старт автопрогона через {} датасетов. Начинаем с: {}",
+            self.auto_run_queue.len(),
+            track_name
+        );
+        self.open_track(first_idx);
+        self.current_frame_idx = 0;
+        self.detector.reset();
+        self.auto_run_status_msg = Some((
+            format!("🚀 [1/{}] {}", self.auto_run_queue.len(), track_name),
+            Color32::from_rgb(80, 200, 255),
+        ));
+    }
+
+    /// Остановка автопрогона
+    pub fn stop_auto_run(&mut self) {
+        if self.auto_run_active {
+            self.auto_run_active = false;
+            self.auto_run_status_msg =
+                Some(("⏹️ Автопрогон остановлен".to_string(), Color32::GRAY));
+        }
+    }
+
+    /// Возобновление автопрогона с текущего места
+    pub fn resume_auto_run(&mut self) {
+        if self.auto_run_queue.is_empty() {
+            self.start_auto_run();
+            return;
+        }
+
+        if self.auto_run_queue_idx >= self.auto_run_queue.len() {
+            self.auto_run_status_msg = Some((
+                "Все датасеты уже были пройдены. Запустите автопрогон заново.".to_string(),
+                Color32::YELLOW,
+            ));
+            return;
+        }
+
+        let target_track_idx = self.auto_run_queue[self.auto_run_queue_idx];
+        if self.selected_track_idx != target_track_idx {
+            self.open_track(target_track_idx);
+        }
+
+        let total = self.dataset.total_count.load(Ordering::Relaxed);
+        if self.current_frame_idx + 1 < total {
+            self.current_frame_idx += 1;
+        } else {
+            // Переход к следующему треку в очереди
+            self.auto_run_queue_idx += 1;
+            if self.auto_run_queue_idx < self.auto_run_queue.len() {
+                let next_idx = self.auto_run_queue[self.auto_run_queue_idx];
+                self.open_track(next_idx);
+                self.current_frame_idx = 0;
+                self.detector.reset();
+            } else {
+                self.auto_run_active = false;
+                self.is_playing = false;
+                rust_listener::audio::play_sound("sfx/music.mp3");
+                let win_msg = format!(
+                    "🎉 Все датасеты ({}) успешно пройдены без ложных срабатываний!",
+                    self.auto_run_queue.len()
+                );
+                println!("[AUTO-RUN] {}", win_msg);
+                self.auto_run_status_msg = Some((win_msg, Color32::from_rgb(80, 255, 120)));
+                return;
+            }
+        }
+
+        self.auto_run_active = true;
+        self.is_playing = false;
+
+        let track_name = self.available_tracks[self.selected_track_idx].label();
+        let total_frames = self.dataset.total_count.load(Ordering::Relaxed);
+        let msg = format!(
+            "▶️ [{}/{}] {}: кадр {}/{}",
+            self.auto_run_queue_idx + 1,
+            self.auto_run_queue.len(),
+            track_name,
+            self.current_frame_idx,
+            total_frames.saturating_sub(1)
+        );
+        println!("[AUTO-RUN] {}", msg);
+        self.auto_run_status_msg = Some((msg, Color32::from_rgb(80, 200, 255)));
+    }
+
+    /// Продвижение автопрогона к следующему кадру или треку
+    pub fn advance_auto_run(&mut self) {
+        if !self.auto_run_active {
+            return;
+        }
+
+        // Продвигаем только если текущий кадр уже был полностью обработан и проверен
+        if self.last_painted_frame != Some(self.current_frame_idx) {
+            return;
+        }
+
+        if self.auto_run_queue_idx >= self.auto_run_queue.len() {
+            self.auto_run_active = false;
+            self.is_playing = false;
+            rust_listener::audio::play_sound("sfx/music.mp3");
+            let win_msg = format!(
+                "🎉 Все датасеты ({}) успешно пройдены без ложных срабатываний!",
+                self.auto_run_queue.len()
+            );
+            println!("[AUTO-RUN] {}", win_msg);
+            self.auto_run_status_msg = Some((win_msg, Color32::from_rgb(80, 255, 120)));
+            return;
+        }
+
+        let target_track_idx = self.auto_run_queue[self.auto_run_queue_idx];
+        if self.selected_track_idx != target_track_idx {
+            self.open_track(target_track_idx);
+            self.current_frame_idx = 0;
+            self.detector.reset();
+            return;
+        }
+
+        let total = self.dataset.total_count.load(Ordering::Relaxed);
+        if total == 0 {
+            return;
+        }
+
+        let track_name = self.available_tracks[self.selected_track_idx].label();
+        if self.current_frame_idx + 1 < total {
+            self.current_frame_idx += 1;
+            self.auto_run_status_msg = Some((
+                format!(
+                    "🚀 [{}/{}] {}: кадр {}/{}",
+                    self.auto_run_queue_idx + 1,
+                    self.auto_run_queue.len(),
+                    track_name,
+                    self.current_frame_idx,
+                    total.saturating_sub(1)
+                ),
+                Color32::from_rgb(80, 200, 255),
+            ));
+        } else {
+            // Датасет успешно пройден!
+            println!(
+                "[AUTO-RUN] ✅ Датасет [{}/{}] '{}' полностью пройден ({} кадров)",
+                self.auto_run_queue_idx + 1,
+                self.auto_run_queue.len(),
+                track_name,
+                total
+            );
+            self.auto_run_queue_idx += 1;
+            if self.auto_run_queue_idx < self.auto_run_queue.len() {
+                let next_idx = self.auto_run_queue[self.auto_run_queue_idx];
+                let next_name = self.available_tracks[next_idx].label();
+                self.open_track(next_idx);
+                self.current_frame_idx = 0;
+                self.detector.reset();
+                self.auto_run_status_msg = Some((
+                    format!(
+                        "🚀 [{}/{}] Переход к: {}",
+                        self.auto_run_queue_idx + 1,
+                        self.auto_run_queue.len(),
+                        next_name
+                    ),
+                    Color32::from_rgb(80, 200, 255),
+                ));
+            } else {
+                // Все датасеты успешно пройдены!
+                self.auto_run_active = false;
+                self.is_playing = false;
+                rust_listener::audio::play_sound("sfx/music.mp3");
+                let win_msg = format!(
+                    "🎉 Все датасеты ({}) успешно пройдены без ложных срабатываний!",
+                    self.auto_run_queue.len()
+                );
+                println!("[AUTO-RUN] {}", win_msg);
+                self.auto_run_status_msg = Some((win_msg, Color32::from_rgb(80, 255, 120)));
+            }
+        }
+    }
+
+    /// Проверка результата детекции кадра при автопрогоне на наличие препятствий
+    pub fn check_auto_run_obstacle(&mut self) {
+        if !self.auto_run_active {
+            return;
+        }
+
+        let obstacle_found = self.last_res.as_ref().map_or(false, |r| {
+            r.obstacles.iter().any(|o| {
+                o.is_critical
+                    || o.status == ObstacleStatus::ClearanceWarning
+                    || o.status == ObstacleStatus::Critical
+            })
+        });
+
+        if obstacle_found {
+            self.auto_run_active = false;
+            self.is_playing = false;
+            rust_listener::audio::play_sound("sfx/pop.mp3");
+
+            let track_name = self.available_tracks[self.selected_track_idx].label();
+            let total = self.dataset.total_count.load(Ordering::Relaxed);
+            let num_crit = self.last_res.as_ref().map_or(0, |r| {
+                r.obstacles
+                    .iter()
+                    .filter(|o| o.is_critical || o.status == ObstacleStatus::Critical)
+                    .count()
+            });
+            let num_warn = self.last_res.as_ref().map_or(0, |r| {
+                r.obstacles
+                    .iter()
+                    .filter(|o| o.status == ObstacleStatus::ClearanceWarning)
+                    .count()
+            });
+
+            let alert_msg = format!(
+                "🚨 Препятствие! Трек '{}', кадр {}/{} (Критич: {}, Предупр: {})",
+                track_name,
+                self.current_frame_idx,
+                total.saturating_sub(1),
+                num_crit,
+                num_warn
+            );
+            println!("[AUTO-RUN] {}", alert_msg);
+            self.auto_run_status_msg = Some((alert_msg, Color32::from_rgb(255, 80, 80)));
         }
     }
 
@@ -1804,13 +2278,30 @@ impl RailTuner2DApp {
         self.detector.obstacle_config.max_missed_frames = self.max_missed_frames;
         self.detector.obstacle_config.track_match_dist_m = self.track_match_dist_m;
         self.detector.obstacle_config.track_match_lateral_m = self.track_match_lateral_m;
+
+        self.detector.obstacle_config.shapecast2_enabled = self.shapecast2_enabled;
+        self.detector.obstacle_config.clearance_width_2 = self.clearance_width_2;
+        self.detector.obstacle_config.clearance_narrowing_width_2 =
+            self.clearance_narrowing_width_2;
+        self.detector.obstacle_config.clearance_narrowing_height_2 =
+            self.clearance_narrowing_height_2;
+        self.detector.obstacle_config.clearance_height_end_shift_2 =
+            self.clearance_height_end_shift_2;
+        self.detector.obstacle_config.clearance_start_offset_2 = self.clearance_start_offset_2;
+        self.detector.obstacle_config.min_height_above_rail_2 = self.min_height_above_rail_2;
+        self.detector.obstacle_config.max_height_above_rail_2 = self.max_height_above_rail_2;
+        self.detector.obstacle_config.min_points_2 = self.min_points_2;
+        self.detector.obstacle_config.cluster_depth_thresh_2 = self.cluster_depth_thresh_2;
+        self.detector.obstacle_config.max_distance_m_2 = self.max_distance_m_2;
+        self.detector.obstacle_config.depth_diff_thresh_2 = self.depth_diff_thresh_2;
+        self.detector.obstacle_config.upward_curvature_2 = self.upward_curvature_2;
     }
 
-    fn process_current_frame(&mut self) {
+    fn process_current_frame(&mut self) -> bool {
         let frame_opt = self.dataset.get_frame(self.current_frame_idx);
 
         let Some(frame) = frame_opt else {
-            return;
+            return false;
         };
 
         let t_pipeline = Instant::now();
@@ -1943,6 +2434,7 @@ impl RailTuner2DApp {
         }
 
         self.profiling.calc_pipeline_ms = t_pipeline.elapsed().as_secs_f32() * 1000.0;
+        true
     }
 
     fn update_preview_texture(&mut self, ctx: &egui::Context) {
@@ -1983,19 +2475,32 @@ impl eframe::App for RailTuner2DApp {
         });
 
         if input.0 {
-            self.is_playing = !self.is_playing;
+            if self.auto_run_active {
+                self.stop_auto_run();
+            } else {
+                self.is_playing = !self.is_playing;
+            }
         }
         if input.1 && self.current_frame_idx > 0 {
+            if self.auto_run_active {
+                self.stop_auto_run();
+            }
             self.current_frame_idx -= 1;
             self.detector.reset();
         }
         let max_frames = self.dataset.max_available_frames();
         if input.2 && self.current_frame_idx + 1 < max_frames {
+            if self.auto_run_active {
+                self.stop_auto_run();
+            }
             self.current_frame_idx += 1;
         }
 
-        // Playback ticker
-        if self.is_playing && max_frames > 0 {
+        // Auto-run ticker or Playback ticker
+        if self.auto_run_active {
+            self.advance_auto_run();
+            ui.ctx().request_repaint();
+        } else if self.is_playing && max_frames > 0 {
             let interval = Duration::from_secs_f32(1.0 / self.fps.max(1.0));
             if self.last_tick.elapsed() >= interval {
                 self.last_tick = Instant::now();
@@ -2009,11 +2514,16 @@ impl eframe::App for RailTuner2DApp {
             ui.ctx().request_repaint();
         }
 
-        // Process frame if frame changed or not painted yet
+        // Process frame if frame changed or not painted yet (unified for manual, playback, and auto-run)
         if self.last_painted_frame != Some(self.current_frame_idx) && max_frames > 0 {
-            self.process_current_frame();
-            self.last_painted_frame = Some(self.current_frame_idx);
-            self.update_preview_texture(ui.ctx());
+            if self.process_current_frame() {
+                self.last_painted_frame = Some(self.current_frame_idx);
+                self.update_preview_texture(ui.ctx());
+
+                if self.auto_run_active {
+                    self.check_auto_run_obstacle();
+                }
+            }
         }
 
         // Main 2-column layout: Controls on Left, 2D Range View on Right
@@ -2112,84 +2622,7 @@ impl eframe::App for RailTuner2DApp {
                         }
                     }
                     if ui.button("📋 Copy Rust Config").clicked() {
-                        let cfg = format!(
-                            "// Tuned RailTrackDetector Config\n\
-                             let mut detector = RailTrackDetector::new(geo);\n\
-                             detector.depth_step_thresh = {:.3};\n\
-                             detector.max_depth_step_thresh = {:.3};\n\
-                             detector.nominal_gauge = {:.3};\n\
-                             detector.min_gauge = {:.3};\n\
-                             detector.max_gauge = {:.3};\n\
-                             detector.row_start_pct = {:.3};\n\
-                             detector.row_end_pct = {:.3};\n\
-                             detector.max_lateral_jump = {:.3};\n\
-                             detector.max_lateral_rail_jump = {:.3};\n\
-                             detector.extrapolate_m = {:.1};\n\
-                             detector.smooth_n = {};\n\
-                             detector.contrast_depth = {:.1};\n\
-                             detector.contrast_intensity = {:.1};\n\
-                             detector.blend = {:.2};\n\
-                             detector.obstacle_config.enabled = {};\n\
-                             detector.obstacle_config.mode = shared::rail_detection::ObstacleDetectionMode::{:?};\n\
-                             detector.obstacle_config.clearance_width = {:.2};\n\
-                             detector.obstacle_config.min_height_above_rail = {:.2};\n\
-                             detector.obstacle_config.max_height_above_rail = {:.2};\n\
-                             detector.obstacle_config.min_points = {};\n\
-                             detector.obstacle_config.max_distance_m = {:.1};\n\
-                             detector.obstacle_config.depth_diff_thresh = {:.2};\n\
-                             detector.obstacle_config.upward_curvature = {:.5};\n\
-                             detector.obstacle_config.clearance_narrowing_width = {:.4};\n\
-                             detector.obstacle_config.clearance_narrowing_height = {:.4};\n\
-                             detector.obstacle_config.clearance_height_end_shift = {:.3};\n\
-                             detector.obstacle_config.clearance_start_offset = {:.3};\n\
-                             detector.obstacle_config.cluster_depth_thresh = {:.2};\n\
-                             detector.obstacle_config.temporal_tracking_enabled = {};\n\
-                             detector.obstacle_config.min_hits_for_critical = {};\n\
-                             detector.obstacle_config.max_missed_frames = {};\n\
-                             detector.obstacle_config.track_match_dist_m = {:.2};\n\
-                             detector.obstacle_config.track_match_lateral_m = {:.2};\n\
-                             detector.temporal_jump_reject_enabled = {};\n\
-                             detector.max_interframe_jump_m = {:.3};\n\
-                             detector.max_outlier_frames = {};\n\
-                             detector.far_anchor_enabled = {};",
-                            self.depth_step_thresh,
-                            self.max_depth_step_thresh,
-                            self.nominal_gauge,
-                            self.min_gauge,
-                            self.max_gauge,
-                            self.row_start_pct,
-                            self.row_end_pct,
-                            self.max_lateral_jump,
-                            self.max_lateral_rail_jump,
-                            self.extrapolate_m,
-                            self.smooth_n,
-                            self.contrast_depth,
-                            self.contrast_intensity,
-                            self.blend,
-                            self.obstacle_enabled,
-                            self.obstacle_mode,
-                            self.clearance_width,
-                            self.min_height_above_rail,
-                            self.max_height_above_rail,
-                            self.min_points,
-                            self.max_distance_m,
-                            self.depth_diff_thresh,
-                            self.upward_curvature,
-                            self.clearance_narrowing_width,
-                            self.clearance_narrowing_height,
-                            self.clearance_height_end_shift,
-                            self.clearance_start_offset,
-                            self.cluster_depth_thresh,
-                            self.temporal_tracking_enabled,
-                            self.min_hits_for_critical,
-                            self.max_missed_frames,
-                            self.track_match_dist_m,
-                            self.track_match_lateral_m,
-                            self.temporal_jump_reject_enabled,
-                            self.max_interframe_jump_m,
-                            self.max_outlier_frames,
-                            self.far_anchor_enabled,
-                        );
+                        let cfg = self.generate_rust_config();
                         ui.ctx().copy_text(cfg.clone());
                         println!("\n{}\n", cfg);
                         self.copied_toast_time = Some(Instant::now());
@@ -2216,15 +2649,24 @@ impl eframe::App for RailTuner2DApp {
                             })
                             .clicked()
                         {
+                            if self.auto_run_active {
+                                self.stop_auto_run();
+                            }
                             self.is_playing = !self.is_playing;
                         }
                         if ui.button("⏮ Prev").clicked() && self.current_frame_idx > 0 {
+                            if self.auto_run_active {
+                                self.stop_auto_run();
+                            }
                             self.current_frame_idx -= 1;
                             self.detector.reset();
                         }
                         if ui.button("⏭ Next").clicked()
                             && self.current_frame_idx + 1 < max_frames
                         {
+                            if self.auto_run_active {
+                                self.stop_auto_run();
+                            }
                             self.current_frame_idx += 1;
                         }
                         ui.label(format!(
@@ -2232,6 +2674,38 @@ impl eframe::App for RailTuner2DApp {
                             self.current_frame_idx,
                             max_frames.saturating_sub(1)
                         ));
+                    });
+
+                    ui.horizontal(|ui| {
+                        if !self.auto_run_active {
+                            if ui
+                                .button("🚀 Автопрогон датасетов")
+                                .on_hover_text("Автоматический последовательный прогон всех датасетов (кроме cloud_with_fake_obj и doubleT_obstacle, new_data в конце) с остановкой при нахождении warn/critical объекта")
+                                .clicked()
+                            {
+                                self.start_auto_run();
+                            }
+
+                            if !self.auto_run_queue.is_empty()
+                                && self.auto_run_queue_idx < self.auto_run_queue.len()
+                            {
+                                if ui
+                                    .button("▶️ Продолжить")
+                                    .on_hover_text("Продолжить автопрогон со следующего кадра / текущего датасета")
+                                    .clicked()
+                                {
+                                    self.resume_auto_run();
+                                }
+                            }
+                        } else {
+                            if ui.button("⏹️ Стоп автопрогон").clicked() {
+                                self.stop_auto_run();
+                            }
+                        }
+
+                        if let Some((ref text, color)) = self.auto_run_status_msg {
+                            ui.colored_label(color, text);
+                        }
                     });
 
                     ui.horizontal(|ui| {
@@ -2603,6 +3077,129 @@ impl eframe::App for RailTuner2DApp {
                             }
 
                             ui.separator();
+                            ui.label(egui::RichText::new("📦 Второй шейпкаст (после первого)").strong());
+
+                            param_changed |= ui
+                                .checkbox(&mut self.shapecast2_enabled, "Включить второй шейпкаст")
+                                .on_hover_text("Кастится последовательно сразу за первым шейпкастом (начиная от max_distance_m первого + offset)")
+                                .changed();
+
+                            if self.shapecast2_enabled {
+                                ui.label("Clearance Width 2 (m):");
+                                param_changed |= ui
+                                    .add(egui::Slider::new(&mut self.clearance_width_2, 0.5..=4.0).step_by(0.05))
+                                    .changed();
+
+                                ui.label("Narrowing Width 2 (m/m):");
+                                param_changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut self.clearance_narrowing_width_2, 0.0..=0.030)
+                                            .step_by(0.001)
+                                            .custom_formatter(|val, _| {
+                                                let narr_50m = val * 50.0;
+                                                format!("{:.3} (-{:.2}m @50m)", val, narr_50m)
+                                            }),
+                                    )
+                                    .changed();
+
+                                ui.label("Narrowing Height 2 (m/m):");
+                                param_changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut self.clearance_narrowing_height_2, 0.0..=0.030)
+                                            .step_by(0.001)
+                                            .custom_formatter(|val, _| {
+                                                let narr_50m = val * 50.0;
+                                                format!("{:.3} (-{:.2}m @50m)", val, narr_50m)
+                                            }),
+                                    )
+                                    .changed();
+
+                                ui.label("Narrowing Height End Shift 2 (m):");
+                                param_changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut self.clearance_height_end_shift_2, -2.0..=2.0)
+                                            .step_by(0.05)
+                                            .custom_formatter(|val, _| {
+                                                if val.abs() < 1e-4 {
+                                                    "0.00 m (flat)".to_string()
+                                                } else {
+                                                    format!("{:+0.2} m @{:.0}m", val, self.max_distance_m_2)
+                                                }
+                                            }),
+                                    )
+                                    .on_hover_text("Вертикальный сдвиг (Z) высотного габарита второго шейпкаста на дальней дистанции (+ вверх, - вниз)")
+                                    .changed();
+
+                                ui.label("Min Height Above Rail 2 (m):");
+                                param_changed |= ui
+                                    .add(egui::Slider::new(&mut self.min_height_above_rail_2, 0.05..=0.50).step_by(0.01))
+                                    .changed();
+
+                                ui.label("Max Height Above Rail 2 (m):");
+                                param_changed |= ui
+                                    .add(egui::Slider::new(&mut self.max_height_above_rail_2, 1.5..=4.5).step_by(0.1))
+                                    .changed();
+
+                                ui.label("Min Cluster Points 2:");
+                                param_changed |= ui
+                                    .add(egui::Slider::new(&mut self.min_points_2, 2..=30))
+                                    .changed();
+
+                                ui.label("Cluster Max Depth Gap 2 (m):");
+                                param_changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut self.cluster_depth_thresh_2, 0.20..=5.00)
+                                            .step_by(0.10)
+                                            .custom_formatter(|val, _| {
+                                                if val <= 0.0 {
+                                                    "Disabled (2D only)".to_string()
+                                                } else {
+                                                    format!("{:.2} m", val)
+                                                }
+                                            }),
+                                    )
+                                    .changed();
+
+                                ui.label("Shapecast 2 Start Offset (m):");
+                                param_changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut self.clearance_start_offset_2, 0.0..=25.0)
+                                            .step_by(0.1)
+                                            .custom_formatter(|val, _| {
+                                                let start_m = self.max_distance_m as f64 + val;
+                                                format!("{:.1}m (starts @{:.1}m)", val, start_m)
+                                            }),
+                                    )
+                                    .on_hover_text("Оффсет начала второго шейпкаста от конца первого (max_distance_m + offset)")
+                                    .changed();
+
+                                ui.label("Shapecast 2 Length (m):");
+                                param_changed |= ui
+                                    .add(egui::Slider::new(&mut self.max_distance_m_2, 5.0..=120.0).step_by(1.0))
+                                    .on_hover_text("Длина зоны второго шейпкаста")
+                                    .changed();
+
+                                ui.label("Tunnel Upward Curve 2 (c_z):");
+                                param_changed |= ui
+                                    .add(
+                                        egui::Slider::new(&mut self.upward_curvature_2, 0.0..=0.0020)
+                                            .step_by(0.00005)
+                                            .custom_formatter(|val, _| {
+                                                let lift = val * 2500.0;
+                                                format!("{:.5} (+{:.1}m @50m)", val, lift)
+                                            }),
+                                    )
+                                    .changed();
+
+                                if self.obstacle_mode == ObstacleDetectionMode::DepthMatrix2D {
+                                    ui.label("Depth Matrix Diff Thresh 2 (m):");
+                                    param_changed |= ui
+                                        .add(egui::Slider::new(&mut self.depth_diff_thresh_2, 0.10..=1.00).step_by(0.05))
+                                        .changed();
+                                }
+                            }
+
+                            ui.separator();
                             ui.label(egui::RichText::new("🛡️ Smart Temporal Verification (Repetitions)").strong());
 
                             param_changed |= ui
@@ -2639,8 +3236,11 @@ impl eframe::App for RailTuner2DApp {
                 });
 
                 if param_changed {
-                    self.process_current_frame();
+                    let _ = self.process_current_frame();
                     self.update_preview_texture(left.ctx());
+                    let cfg = self.generate_rust_config();
+                    left.ctx().copy_text(cfg);
+                    self.copied_toast_time = Some(Instant::now());
                 }
 
                 left.add_space(4.0);
@@ -2886,7 +3486,10 @@ impl eframe::App for RailTuner2DApp {
                                 ui.colored_label(Color32::from_rgb(0, 255, 60), "■ Centerline");
                                 ui.colored_label(Color32::from_rgb(255, 0, 255), "■ Extrapolation");
                                 ui.colored_label(Color32::from_rgb(180, 220, 180), "■ Sleepers");
-                                ui.colored_label(Color32::from_rgb(0, 220, 220), "⬚ Shapecast");
+                                ui.colored_label(Color32::from_rgb(0, 220, 220), "⬚ Shapecast 1");
+                                if self.shapecast2_enabled {
+                                    ui.colored_label(Color32::from_rgb(120, 160, 255), "⬚ Shapecast 2");
+                                }
                                 ui.colored_label(Color32::RED, "■ Critical Obstacle");
                                 ui.colored_label(Color32::from_rgb(255, 170, 0), "■ Clearance Intrusion");
                             });
@@ -3056,5 +3659,54 @@ mod tests {
             .expect("frame 100 should load");
         assert_eq!(f100.idx, 100);
         dataset.stop();
+    }
+
+    #[test]
+    fn test_autorun_track_filtering_and_ordering() {
+        let fake = TrackSource::Db3(PathBuf::from("dataset/cloud_with_fake_obj/data.db3"));
+        let double_t_obs = TrackSource::Db3(PathBuf::from("dataset/doubleT_obstacle/data.db3"));
+        let normal1 = TrackSource::Db3(PathBuf::from("dataset/roundT_doubleT/data.db3"));
+        let normal2 = TrackSource::Db3(PathBuf::from("dataset/squareT_platform/data.db3"));
+        let big_new_data = TrackSource::Db3Bag {
+            dir: PathBuf::from("dataset/new_data"),
+            files: vec![PathBuf::from("new_data_0.db3")],
+        };
+
+        // 1. Проверка игнорируемых датасетов
+        assert!(RailTuner2DApp::is_ignored_track(&fake));
+        assert!(RailTuner2DApp::is_ignored_track(&double_t_obs));
+        assert!(!RailTuner2DApp::is_ignored_track(&normal1));
+        assert!(!RailTuner2DApp::is_ignored_track(&normal2));
+        assert!(!RailTuner2DApp::is_ignored_track(&big_new_data));
+
+        // 2. Проверка распознавания new_data
+        assert!(!RailTuner2DApp::is_new_data_track(&normal1));
+        assert!(RailTuner2DApp::is_new_data_track(&big_new_data));
+
+        // 3. Формирование очереди: игнорируемые исключаются, new_data в конце
+        let all_tracks = vec![
+            fake,
+            normal1.clone(),
+            big_new_data.clone(),
+            double_t_obs,
+            normal2.clone(),
+        ];
+
+        let mut normal_queue = Vec::new();
+        let mut end_queue = Vec::new();
+        for (idx, track) in all_tracks.iter().enumerate() {
+            if RailTuner2DApp::is_ignored_track(track) {
+                continue;
+            }
+            if RailTuner2DApp::is_new_data_track(track) {
+                end_queue.push(idx);
+            } else {
+                normal_queue.push(idx);
+            }
+        }
+        normal_queue.extend(end_queue);
+
+        // Должны остаться только индексы 1 (normal1), 4 (normal2), 2 (big_new_data)
+        assert_eq!(normal_queue, vec![1, 4, 2]);
     }
 }

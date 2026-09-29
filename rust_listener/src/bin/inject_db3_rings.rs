@@ -1,5 +1,4 @@
 use rusqlite::{Connection, OpenFlags};
-use shared::configs::DetectionPreset;
 use shared::rail_detection::{LidarGeometry, RailTrackDetector};
 use shared::range_image::RangeImage;
 use shared::transport::PointCloud2;
@@ -47,7 +46,7 @@ fn test_file(path_str: &str) {
         }
     };
 
-    let mut detector: RailTrackDetector = DetectionPreset::current().into();
+    let mut detector: RailTrackDetector = rust_listener::ENV.DETECTION_PRESET.into();
     let mut frame_idx = 0;
     let mut obstacles_found = 0;
 

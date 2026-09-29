@@ -248,7 +248,7 @@ pub struct DetectionResult {
     pub avg_intensity_right: f32,
     // Препятствия на пути и в габарите
     pub obstacles: Vec<TrackObstacle>,
-    // Параметры габарита приближения (шейпкаст / бокскаст)
+    // Параметры габарита приближения (шейпкаст / бокскаст 1)
     pub clearance_width: f32,
     pub min_height_above_rail: f32,
     pub max_height_above_rail: f32,
@@ -263,6 +263,17 @@ pub struct DetectionResult {
     /// Оффсет начала шейпкаста по глубине относительно начальной плоскости (м)
     pub clearance_start_offset: f32,
     pub obstacle_enabled: bool,
+    // Параметры второго габарита приближения (шейпкаст 2, кастится после первого)
+    pub shapecast2_enabled: bool,
+    pub clearance_width_2: f32,
+    pub min_height_above_rail_2: f32,
+    pub max_height_above_rail_2: f32,
+    pub max_distance_m_2: f32,
+    pub upward_curvature_2: f32,
+    pub clearance_narrowing_width_2: f32,
+    pub clearance_narrowing_height_2: f32,
+    pub clearance_height_end_shift_2: f32,
+    pub clearance_start_offset_2: f32,
     /// Флаг истинных (восстановленных) координат в реальном физическом пространстве
     pub is_real_coordinates: bool,
     /// Режим удержания траектории (coasting) при отбрасывании скачка
@@ -304,14 +315,28 @@ impl DetectionResult {
         self.is_real_coordinates = true;
     }
 
-    /// Возвращает цвет RGB для шейпкаста: Красный при критическом препятствии на колее,
+    /// Возвращает цвет RGB для первого шейпкаста: Красный при критическом препятствии на колее,
     /// Янтарный при препятствии в габарите, Бирюзовый/Циан при свободном пути.
     pub fn shapecast_color(&self) -> [u8; 3] {
-        let num_crit = self.obstacles.iter().filter(|o| o.is_critical).count();
+        let x_sc2_start = if self.shapecast2_enabled {
+            (self.max_distance_m + self.clearance_start_offset_2).max(self.max_distance_m)
+        } else {
+            f32::MAX
+        };
+        let num_crit = self
+            .obstacles
+            .iter()
+            .filter(|o| {
+                (o.is_critical || o.status == ObstacleStatus::Critical)
+                    && o.distance_along_track < x_sc2_start
+            })
+            .count();
         let num_warn = self
             .obstacles
             .iter()
-            .filter(|o| o.status == ObstacleStatus::ClearanceWarning)
+            .filter(|o| {
+                o.status == ObstacleStatus::ClearanceWarning && o.distance_along_track < x_sc2_start
+            })
             .count();
         if num_crit > 0 {
             [255, 30, 30] // Alert Red
@@ -322,22 +347,52 @@ impl DetectionResult {
         }
     }
 
-    /// Генерирует 3D полилинии (wireframe strips) для визуализации шейпкаста габарита приближения:
-    /// Коридор шейпкаста строится непосредственно вдоль аналитической кривой пути
-    /// от x_min (2.0 м перед лидаром) до x_max = max_distance_m:
-    /// - В реальных координатах (is_real_coordinates = true) строго следует профилю полотна poly_z[0]*X + poly_z[1]
-    /// - В искривленных координатах (is_real_coordinates = false) добавляет upward_curvature * X^2 для точной проекции в warped RangeImage
-    /// - 4 продольные грани туннеля (нижняя левая/правая, верхняя левая/правая)
-    /// - Поперечные прямоугольные рамки (шпангоуты) с шагом ~4 м вдоль кривой
-    /// - Торцевые диагональные крестовины (порталы входа и выхода)
-    pub fn shapecast_wireframe_3d(&self) -> Vec<Vec<[f32; 3]>> {
-        let x_min = (2.0 + self.clearance_start_offset).max(0.1);
-        let x_max = self.max_distance_m;
-        if !self.obstacle_enabled || x_max <= x_min || self.clearance_width <= 0.0 {
+    /// Возвращает цвет RGB для второго шейпкаста: Красный при критическом препятствии,
+    /// Янтарный при предупреждении, Светло-голубой при свободном пути.
+    pub fn shapecast2_color(&self) -> [u8; 3] {
+        let x_base = self.max_distance_m;
+        let x_min = (x_base + self.clearance_start_offset_2).max(x_base);
+        let num_crit = self
+            .obstacles
+            .iter()
+            .filter(|o| {
+                (o.is_critical || o.status == ObstacleStatus::Critical)
+                    && o.distance_along_track >= x_min
+            })
+            .count();
+        let num_warn = self
+            .obstacles
+            .iter()
+            .filter(|o| {
+                o.status == ObstacleStatus::ClearanceWarning && o.distance_along_track >= x_min
+            })
+            .count();
+        if num_crit > 0 {
+            [255, 30, 30] // Alert Red
+        } else if num_warn > 0 {
+            [255, 170, 0] // Warning Amber
+        } else {
+            [120, 160, 255] // Calm Light Blue / Second Shapecast distinct color
+        }
+    }
+
+    /// Базовый генератор 3D полилиний (wireframe strips) для коридора габарита приближения:
+    fn generate_corridor_wireframe_3d(
+        &self,
+        x_min: f32,
+        x_max: f32,
+        clearance_width: f32,
+        clearance_narrowing_width: f32,
+        clearance_narrowing_height: f32,
+        clearance_height_end_shift: f32,
+        min_height_above_rail: f32,
+        max_height_above_rail: f32,
+        upward_curvature: f32,
+    ) -> Vec<Vec<[f32; 3]>> {
+        if x_max <= x_min || clearance_width <= 0.0 {
             return Vec::new();
         }
 
-        // Дискретизация вдоль аналитической траектории пути с шагом 0.5 м
         let step_m = 0.5_f32;
         let num_steps = ((x_max - x_min) / step_m).round().max(10.0) as usize;
 
@@ -347,26 +402,24 @@ impl DetectionResult {
         let mut line_tr = Vec::with_capacity(num_steps + 1);
         let mut frames = Vec::new();
 
-        // Поперечные рамки-шпангоуты примерно каждые 4 метра
         let hoop_dist_m = 4.0_f32;
         let hoop_step = ((hoop_dist_m / step_m).round().max(1.0)) as usize;
 
-        let min_w = self.gauge.max(1.0).min(self.clearance_width);
-        let nom_h = (self.max_height_above_rail - self.min_height_above_rail).max(0.1);
-        let center_h = (self.min_height_above_rail + self.max_height_above_rail) * 0.5;
+        let min_w = self.gauge.max(1.0).min(clearance_width);
+        let nom_h = (max_height_above_rail - min_height_above_rail).max(0.1);
+        let center_h = (min_height_above_rail + max_height_above_rail) * 0.5;
         let min_h_thickness = 0.30_f32.min(nom_h);
 
         for i in 0..=num_steps {
             let t = (i as f32) / (num_steps as f32);
             let x = x_min + t * (x_max - x_min);
 
-            // Сужение габарита по мере удаления (центрированно по ширине и высоте):
             let dx = (x - x_min).max(0.0);
-            let cur_w = (self.clearance_width - self.clearance_narrowing_width * dx).max(min_w);
-            let cur_h = (nom_h - self.clearance_narrowing_height * dx).max(min_h_thickness);
+            let cur_w = (clearance_width - clearance_narrowing_width * dx).max(min_w);
+            let cur_h = (nom_h - clearance_narrowing_height * dx).max(min_h_thickness);
             let range_x = (x_max - x_min).max(1.0);
             let t_norm = (dx / range_x).min(2.0);
-            let h_shift = self.clearance_height_end_shift * t_norm * t_norm;
+            let h_shift = clearance_height_end_shift * t_norm * t_norm;
             let half_w = cur_w * 0.5;
             let half_h = cur_h * 0.5;
             let cur_min_h = center_h + h_shift - half_h;
@@ -376,7 +429,7 @@ impl DetectionResult {
             let z_surf = if self.is_real_coordinates {
                 self.poly_z[0] * x + self.poly_z[1]
             } else {
-                self.poly_z[0] * x + self.poly_z[1] + self.upward_curvature * x * x
+                self.poly_z[0] * x + self.poly_z[1] + upward_curvature * x * x
             };
             let dy_dx = 2.0 * self.poly_y[0] * x + self.poly_y[1];
             let theta = dy_dx.atan();
@@ -419,9 +472,63 @@ impl DetectionResult {
         strips
     }
 
-    /// Проецирует 3D полилинии шейпкаста габарита на 2D Range Image в пиксели [col, row].
-    pub fn shapecast_wireframe_2d(&self, geo: &LidarGeometry) -> Vec<Vec<[f32; 2]>> {
-        let strips_3d = self.shapecast_wireframe_3d();
+    /// Генерирует 3D полилинии (wireframe strips) для первого шейпкаста
+    pub fn shapecast1_wireframe_3d(&self) -> Vec<Vec<[f32; 3]>> {
+        let x_min = (2.0 + self.clearance_start_offset).max(0.1);
+        let x_max = self.max_distance_m;
+        if !self.obstacle_enabled || x_max <= x_min || self.clearance_width <= 0.0 {
+            return Vec::new();
+        }
+        self.generate_corridor_wireframe_3d(
+            x_min,
+            x_max,
+            self.clearance_width,
+            self.clearance_narrowing_width,
+            self.clearance_narrowing_height,
+            self.clearance_height_end_shift,
+            self.min_height_above_rail,
+            self.max_height_above_rail,
+            self.upward_curvature,
+        )
+    }
+
+    /// Генерирует 3D полилинии (wireframe strips) для второго шейпкаста (кастится после первого)
+    pub fn shapecast2_wireframe_3d(&self) -> Vec<Vec<[f32; 3]>> {
+        if !self.obstacle_enabled || !self.shapecast2_enabled {
+            return Vec::new();
+        }
+        let x_base = self.max_distance_m;
+        let x_min = (x_base + self.clearance_start_offset_2).max(x_base);
+        let x_max = x_min + self.max_distance_m_2;
+        if x_max <= x_min || self.clearance_width_2 <= 0.0 {
+            return Vec::new();
+        }
+        self.generate_corridor_wireframe_3d(
+            x_min,
+            x_max,
+            self.clearance_width_2,
+            self.clearance_narrowing_width_2,
+            self.clearance_narrowing_height_2,
+            self.clearance_height_end_shift_2,
+            self.min_height_above_rail_2,
+            self.max_height_above_rail_2,
+            self.upward_curvature_2,
+        )
+    }
+
+    /// Генерирует 3D полилинии для всех активных шейпкастов
+    pub fn shapecast_wireframe_3d(&self) -> Vec<Vec<[f32; 3]>> {
+        let mut strips = self.shapecast1_wireframe_3d();
+        if self.shapecast2_enabled {
+            strips.extend(self.shapecast2_wireframe_3d());
+        }
+        strips
+    }
+
+    fn project_strips_to_2d(
+        strips_3d: &[Vec<[f32; 3]>],
+        geo: &LidarGeometry,
+    ) -> Vec<Vec<[f32; 2]>> {
         let h = geo.height;
         let w = geo.width;
         let mut strips_2d = Vec::new();
@@ -446,6 +553,25 @@ impl DetectionResult {
         }
 
         strips_2d
+    }
+
+    /// Проецирует 3D полилинии первого шейпкаста на 2D Range Image в пиксели [col, row].
+    pub fn shapecast1_wireframe_2d(&self, geo: &LidarGeometry) -> Vec<Vec<[f32; 2]>> {
+        Self::project_strips_to_2d(&self.shapecast1_wireframe_3d(), geo)
+    }
+
+    /// Проецирует 3D полилинии второго шейпкаста на 2D Range Image в пиксели [col, row].
+    pub fn shapecast2_wireframe_2d(&self, geo: &LidarGeometry) -> Vec<Vec<[f32; 2]>> {
+        Self::project_strips_to_2d(&self.shapecast2_wireframe_3d(), geo)
+    }
+
+    /// Проецирует 3D полилинии всех активных шейпкастов габарита на 2D Range Image в пиксели [col, row].
+    pub fn shapecast_wireframe_2d(&self, geo: &LidarGeometry) -> Vec<Vec<[f32; 2]>> {
+        let mut strips = self.shapecast1_wireframe_2d(geo);
+        if self.shapecast2_enabled {
+            strips.extend(self.shapecast2_wireframe_2d(geo));
+        }
+        strips
     }
 }
 
@@ -515,6 +641,34 @@ pub struct ObstacleConfig {
     pub track_match_dist_m: f32,
     /// Допустимое латеральное смещение между кадрами для одного объекта (м), default: 0.80 м
     pub track_match_lateral_m: f32,
+
+    // ─── Второй шейпкаст (кастится после первого) ───
+    /// Включение второго шейпкаста габарита (отдельный bool флаг, кастится после первого)
+    pub shapecast2_enabled: bool,
+    /// Ширина габарита для второго шейпкаста (м), default: 2.40 м
+    pub clearance_width_2: f32,
+    /// Минимальная высота над рельсом для второго шейпкаста (м), default: 0.15 м
+    pub min_height_above_rail_2: f32,
+    /// Максимальная высота габарита для второго шейпкаста (м), default: 3.20 м
+    pub max_height_above_rail_2: f32,
+    /// Минимальное количество точек лидара в кластере для второго шейпкаста, default: 6
+    pub min_points_2: usize,
+    /// Максимальная дальность / протяженность второго шейпкаста (м), default: 30.0 м
+    pub max_distance_m_2: f32,
+    /// Порог перепада глубины для второго шейпкаста (м), default: 0.25 м
+    pub depth_diff_thresh_2: f32,
+    /// Коэффициент квадратичного искривления вверх для второго шейпкаста (1/м), default: 0.0004
+    pub upward_curvature_2: f32,
+    /// Коэффициент сужения ширины для второго шейпкаста (м/м), default: 0.0
+    pub clearance_narrowing_width_2: f32,
+    /// Коэффициент снижения высоты для второго шейпкаста (м/м), default: 0.0
+    pub clearance_narrowing_height_2: f32,
+    /// Вертикальный сдвиг конца второго шейпкаста по высоте (м), default: 0.0
+    pub clearance_height_end_shift_2: f32,
+    /// Оффсет начала второго шейпкаста относительно конца первого (м), default: 0.0
+    pub clearance_start_offset_2: f32,
+    /// Порог разрыва по дальности для кластеризации второго шейпкаста (м), default: 1.20 м
+    pub cluster_depth_thresh_2: f32,
 }
 
 impl Default for ObstacleConfig {
@@ -539,6 +693,20 @@ impl Default for ObstacleConfig {
             max_missed_frames: 1,
             track_match_dist_m: 2.50,
             track_match_lateral_m: 0.80,
+
+            shapecast2_enabled: false,
+            clearance_width_2: 2.40,
+            min_height_above_rail_2: 0.15,
+            max_height_above_rail_2: 3.20,
+            min_points_2: 6,
+            max_distance_m_2: 30.0,
+            depth_diff_thresh_2: 0.25,
+            upward_curvature_2: 0.0004,
+            clearance_narrowing_width_2: 0.0,
+            clearance_narrowing_height_2: 0.0,
+            clearance_height_end_shift_2: 0.0,
+            clearance_start_offset_2: 0.0,
+            cluster_depth_thresh_2: 1.20,
         }
     }
 }
@@ -1503,6 +1671,16 @@ impl RailTrackDetector {
             max_distance_m: self.obstacle_config.max_distance_m,
             upward_curvature: self.obstacle_config.upward_curvature,
             obstacle_enabled: self.obstacle_config.enabled,
+            shapecast2_enabled: self.obstacle_config.shapecast2_enabled,
+            clearance_width_2: self.obstacle_config.clearance_width_2,
+            min_height_above_rail_2: self.obstacle_config.min_height_above_rail_2,
+            max_height_above_rail_2: self.obstacle_config.max_height_above_rail_2,
+            max_distance_m_2: self.obstacle_config.max_distance_m_2,
+            upward_curvature_2: self.obstacle_config.upward_curvature_2,
+            clearance_narrowing_width_2: self.obstacle_config.clearance_narrowing_width_2,
+            clearance_narrowing_height_2: self.obstacle_config.clearance_narrowing_height_2,
+            clearance_height_end_shift_2: self.obstacle_config.clearance_height_end_shift_2,
+            clearance_start_offset_2: self.obstacle_config.clearance_start_offset_2,
             is_real_coordinates: false,
             is_coasting,
             outlier_streak: self.outlier_streak,
@@ -1543,6 +1721,21 @@ impl RailTrackDetector {
         let x_min = (2.0 + config.clearance_start_offset).max(0.1);
         let x_max = config.max_distance_m;
 
+        let sc2_enabled = config.shapecast2_enabled;
+        let x_base_2 = x_max;
+        let x_min_2 = (x_base_2 + config.clearance_start_offset_2).max(x_base_2);
+        let x_max_2 = x_min_2 + config.max_distance_m_2;
+        let min_w_2 = gauge.max(1.0).min(config.clearance_width_2);
+        let nom_h_2 = (config.max_height_above_rail_2 - config.min_height_above_rail_2).max(0.1);
+        let center_h_2 = (config.min_height_above_rail_2 + config.max_height_above_rail_2) * 0.5;
+        let min_h_thickness_2 = 0.30_f32.min(nom_h_2);
+
+        let max_scan_x = if sc2_enabled {
+            x_max_2.max(x_max)
+        } else {
+            x_max
+        };
+
         let get_xyz_real = |row: usize, col: usize, r: f32| -> (f32, f32, f32) {
             let idx = row * w + col;
             if let Some((pc, queue)) = cloud {
@@ -1571,139 +1764,125 @@ impl RailTrackDetector {
 
         let mut is_intrusion = vec![false; total];
 
-        match config.mode {
-            ObstacleDetectionMode::Boxcast3D => {
-                // Способ 1: Прямой 3D бокскаст кинематического габарита вдоль аналитической кривой
-                for row in 0..h {
-                    let r_off = row * w;
-                    for col in 0..w {
-                        let r = frame.data[r_off + col];
-                        if r < 0.5 || r > x_max * 1.5 {
-                            continue;
-                        }
-                        let (x, y, z_real) = get_xyz_real(row, col, r);
+        for row in 0..h {
+            let r_off = row * w;
+            for col in 0..w {
+                let r = frame.data[r_off + col];
+                if r < 0.5 || r > max_scan_x * 1.5 {
+                    continue;
+                }
+                let (x, y, z_real) = get_xyz_real(row, col, r);
 
-                        let (xc, _theta, d_lat, z_surf_real) =
-                            project_point_to_track(x, y, poly_y, poly_z);
-                        if xc < x_min || xc > x_max {
-                            continue;
-                        }
+                let (xc, _theta, d_lat, z_surf_real) = project_point_to_track(x, y, poly_y, poly_z);
 
-                        let dx = (xc - x_min).max(0.0);
-                        let cur_half_w = (config.clearance_width
-                            - config.clearance_narrowing_width * dx)
-                            .max(min_w)
+                // 1. Проверяем первый шейпкаст
+                if xc >= x_min && xc <= x_max {
+                    let dx = (xc - x_min).max(0.0);
+                    let cur_half_w =
+                        (config.clearance_width - config.clearance_narrowing_width * dx).max(min_w)
                             * 0.5;
-                        let cur_h =
-                            (nom_h - config.clearance_narrowing_height * dx).max(min_h_thickness);
-                        let range_x = (x_max - x_min).max(1.0);
-                        let t_norm = (dx / range_x).min(2.0);
-                        let h_shift = config.clearance_height_end_shift * t_norm * t_norm;
-                        let cur_half_h = cur_h * 0.5;
-                        let cur_min_h = center_h + h_shift - cur_half_h;
-                        let cur_max_h = center_h + h_shift + cur_half_h;
-                        let dz = z_real - z_surf_real;
+                    let cur_h =
+                        (nom_h - config.clearance_narrowing_height * dx).max(min_h_thickness);
+                    let range_x = (x_max - x_min).max(1.0);
+                    let t_norm = (dx / range_x).min(2.0);
+                    let h_shift = config.clearance_height_end_shift * t_norm * t_norm;
+                    let cur_half_h = cur_h * 0.5;
+                    let cur_min_h = center_h + h_shift - cur_half_h;
+                    let cur_max_h = center_h + h_shift + cur_half_h;
+                    let dz = z_real - z_surf_real;
 
-                        if d_lat.abs() <= cur_half_w && dz >= cur_min_h && dz <= cur_max_h {
-                            is_intrusion[r_off + col] = true;
+                    match config.mode {
+                        ObstacleDetectionMode::Boxcast3D => {
+                            if d_lat.abs() <= cur_half_w && dz >= cur_min_h && dz <= cur_max_h {
+                                is_intrusion[r_off + col] = true;
+                                continue;
+                            }
+                        }
+                        ObstacleDetectionMode::DepthMatrix2D => {
+                            if d_lat.abs() <= cur_half_w {
+                                let idx = r_off + col;
+                                let dir_z = self.geometry.dir_z[idx];
+                                let z_surf_ref = if is_warped {
+                                    z_surf_real + config.upward_curvature * xc * xc
+                                } else {
+                                    z_surf_real
+                                };
+                                let r_ground = if dir_z < -0.01 {
+                                    z_surf_ref / dir_z
+                                } else {
+                                    (x * x + y * y + z_surf_ref * z_surf_ref).sqrt()
+                                };
+                                let depth_diff = r_ground - r;
+
+                                if depth_diff >= config.depth_diff_thresh
+                                    && dz >= cur_min_h
+                                    && dz <= cur_max_h
+                                {
+                                    is_intrusion[r_off + col] = true;
+                                    continue;
+                                }
+                            }
+                        }
+                        ObstacleDetectionMode::HybridGrid => {
+                            if d_lat.abs() <= cur_half_w && dz >= cur_min_h && dz <= cur_max_h {
+                                is_intrusion[r_off + col] = true;
+                                continue;
+                            }
                         }
                     }
                 }
-            }
-            ObstacleDetectionMode::DepthMatrix2D => {
-                // Способ 2: Матричный анализ перепадов дальности над полотном в 2D коридоре путей
-                for row in 0..h {
-                    let r_off = row * w;
-                    for col in 0..w {
-                        let r = frame.data[r_off + col];
-                        if r < 0.5 || r > x_max * 1.5 {
-                            continue;
+
+                // 2. Проверяем второй шейпкаст (кастится после первого)
+                if sc2_enabled && xc >= x_min_2 && xc <= x_max_2 {
+                    let dx = (xc - x_min_2).max(0.0);
+                    let cur_half_w = (config.clearance_width_2
+                        - config.clearance_narrowing_width_2 * dx)
+                        .max(min_w_2)
+                        * 0.5;
+                    let cur_h =
+                        (nom_h_2 - config.clearance_narrowing_height_2 * dx).max(min_h_thickness_2);
+                    let range_x = (x_max_2 - x_min_2).max(1.0);
+                    let t_norm = (dx / range_x).min(2.0);
+                    let h_shift = config.clearance_height_end_shift_2 * t_norm * t_norm;
+                    let cur_half_h = cur_h * 0.5;
+                    let cur_min_h = center_h_2 + h_shift - cur_half_h;
+                    let cur_max_h = center_h_2 + h_shift + cur_half_h;
+                    let dz = z_real - z_surf_real;
+
+                    match config.mode {
+                        ObstacleDetectionMode::Boxcast3D => {
+                            if d_lat.abs() <= cur_half_w && dz >= cur_min_h && dz <= cur_max_h {
+                                is_intrusion[r_off + col] = true;
+                            }
                         }
-                        let (x, y, z_real) = get_xyz_real(row, col, r);
+                        ObstacleDetectionMode::DepthMatrix2D => {
+                            if d_lat.abs() <= cur_half_w {
+                                let idx = r_off + col;
+                                let dir_z = self.geometry.dir_z[idx];
+                                let z_surf_ref = if is_warped {
+                                    z_surf_real + config.upward_curvature_2 * xc * xc
+                                } else {
+                                    z_surf_real
+                                };
+                                let r_ground = if dir_z < -0.01 {
+                                    z_surf_ref / dir_z
+                                } else {
+                                    (x * x + y * y + z_surf_ref * z_surf_ref).sqrt()
+                                };
+                                let depth_diff = r_ground - r;
 
-                        let (xc, _theta, d_lat, z_surf_real) =
-                            project_point_to_track(x, y, poly_y, poly_z);
-                        if xc < x_min || xc > x_max {
-                            continue;
+                                if depth_diff >= config.depth_diff_thresh_2
+                                    && dz >= cur_min_h
+                                    && dz <= cur_max_h
+                                {
+                                    is_intrusion[r_off + col] = true;
+                                }
+                            }
                         }
-
-                        let dx = (xc - x_min).max(0.0);
-                        let cur_half_w = (config.clearance_width
-                            - config.clearance_narrowing_width * dx)
-                            .max(min_w)
-                            * 0.5;
-                        let cur_h =
-                            (nom_h - config.clearance_narrowing_height * dx).max(min_h_thickness);
-                        let range_x = (x_max - x_min).max(1.0);
-                        let t_norm = (dx / range_x).min(2.0);
-                        let h_shift = config.clearance_height_end_shift * t_norm * t_norm;
-                        let cur_half_h = cur_h * 0.5;
-                        let cur_min_h = center_h + h_shift - cur_half_h;
-                        let cur_max_h = center_h + h_shift + cur_half_h;
-                        if d_lat.abs() > cur_half_w {
-                            continue;
-                        }
-
-                        let dz = z_real - z_surf_real;
-
-                        let idx = r_off + col;
-                        let dir_z = self.geometry.dir_z[idx];
-                        let z_surf_ref = if is_warped {
-                            z_surf_real + config.upward_curvature * xc * xc
-                        } else {
-                            z_surf_real
-                        };
-                        let r_ground = if dir_z < -0.01 {
-                            z_surf_ref / dir_z
-                        } else {
-                            (x * x + y * y + z_surf_ref * z_surf_ref).sqrt()
-                        };
-                        let depth_diff = r_ground - r;
-
-                        if depth_diff >= config.depth_diff_thresh
-                            && dz >= cur_min_h
-                            && dz <= cur_max_h
-                        {
-                            is_intrusion[r_off + col] = true;
-                        }
-                    }
-                }
-            }
-            ObstacleDetectionMode::HybridGrid => {
-                // Способ 3 (Гибридный, наиболее эффективный):
-                // Точная 3D фильтрация по нормали к траектории пути с верификацией высотного габарита
-                for row in 0..h {
-                    let r_off = row * w;
-                    for col in 0..w {
-                        let r = frame.data[r_off + col];
-                        if r < 0.5 || r > x_max * 1.5 {
-                            continue;
-                        }
-                        let (x, y, z_real) = get_xyz_real(row, col, r);
-
-                        let (xc, _theta, d_lat, z_surf_real) =
-                            project_point_to_track(x, y, poly_y, poly_z);
-                        if xc < x_min || xc > x_max {
-                            continue;
-                        }
-
-                        let dx = (xc - x_min).max(0.0);
-                        let cur_half_w = (config.clearance_width
-                            - config.clearance_narrowing_width * dx)
-                            .max(min_w)
-                            * 0.5;
-                        let cur_h =
-                            (nom_h - config.clearance_narrowing_height * dx).max(min_h_thickness);
-                        let range_x = (x_max - x_min).max(1.0);
-                        let t_norm = (dx / range_x).min(2.0);
-                        let h_shift = config.clearance_height_end_shift * t_norm * t_norm;
-                        let cur_half_h = cur_h * 0.5;
-                        let cur_min_h = center_h + h_shift - cur_half_h;
-                        let cur_max_h = center_h + h_shift + cur_half_h;
-                        let dz = z_real - z_surf_real;
-
-                        if d_lat.abs() <= cur_half_w && dz >= cur_min_h && dz <= cur_max_h {
-                            is_intrusion[r_off + col] = true;
+                        ObstacleDetectionMode::HybridGrid => {
+                            if d_lat.abs() <= cur_half_w && dz >= cur_min_h && dz <= cur_max_h {
+                                is_intrusion[r_off + col] = true;
+                            }
                         }
                     }
                 }
@@ -1742,8 +1921,13 @@ impl RailTrackDetector {
                                 let n_idx = (nr as usize) * w + (nc as usize);
                                 if is_intrusion[n_idx] && !visited[n_idx] {
                                     let r_next = frame.data[n_idx];
-                                    let depth_ok = if config.cluster_depth_thresh > 0.0 {
-                                        (r_next - r_curr).abs() <= config.cluster_depth_thresh
+                                    let cur_depth_thresh = if sc2_enabled && r_curr >= x_min_2 {
+                                        config.cluster_depth_thresh_2
+                                    } else {
+                                        config.cluster_depth_thresh
+                                    };
+                                    let depth_ok = if cur_depth_thresh > 0.0 {
+                                        (r_next - r_curr).abs() <= cur_depth_thresh
                                     } else {
                                         true
                                     };
@@ -1757,7 +1941,12 @@ impl RailTrackDetector {
                     }
                 }
 
-                if cluster_cells.len() < config.min_points {
+                let early_min_pts = if sc2_enabled {
+                    config.min_points.min(config.min_points_2)
+                } else {
+                    config.min_points
+                };
+                if cluster_cells.len() < early_min_pts {
                     continue;
                 }
 
@@ -1800,6 +1989,15 @@ impl RailTrackDetector {
                     min_track_dist = min_track_dist.min(xc);
                     sum_lat_off += d_lat;
                     max_dz = max_dz.max(z_real - z_surf_real);
+                }
+
+                let req_min_points = if sc2_enabled && min_track_dist >= x_min_2 {
+                    config.min_points_2
+                } else {
+                    config.min_points
+                };
+                if cluster_cells.len() < req_min_points {
+                    continue;
                 }
 
                 let n_pts = cluster_cells.len() as f32;
@@ -2172,6 +2370,16 @@ mod tests {
             max_distance_m: 52.0,
             upward_curvature: 0.0,
             obstacle_enabled: true,
+            shapecast2_enabled: false,
+            clearance_width_2: 2.40,
+            min_height_above_rail_2: 0.15,
+            max_height_above_rail_2: 3.20,
+            max_distance_m_2: 30.0,
+            upward_curvature_2: 0.0,
+            clearance_narrowing_width_2: 0.0,
+            clearance_narrowing_height_2: 0.0,
+            clearance_height_end_shift_2: 0.0,
+            clearance_start_offset_2: 0.0,
             is_real_coordinates: true,
             is_coasting: false,
             outlier_streak: 0,
@@ -2225,7 +2433,7 @@ mod tests {
         let poly_y = [0.0_f32, 0.0_f32, 0.0_f32];
         let poly_z = [0.0_f32, 0.0_f32];
 
-        let mut res = DetectionResult {
+        let res = DetectionResult {
             frame_idx: 0,
             points: Vec::new(),
             gauge: 1.52,
@@ -2268,6 +2476,16 @@ mod tests {
             max_distance_m: 50.0,
             upward_curvature: 0.0,
             obstacle_enabled: true,
+            shapecast2_enabled: false,
+            clearance_width_2: 2.40,
+            min_height_above_rail_2: 0.15,
+            max_height_above_rail_2: 3.20,
+            max_distance_m_2: 30.0,
+            upward_curvature_2: 0.0,
+            clearance_narrowing_width_2: 0.0,
+            clearance_narrowing_height_2: 0.0,
+            clearance_height_end_shift_2: 0.0,
+            clearance_start_offset_2: 0.0,
             is_real_coordinates: true,
             is_coasting: false,
             outlier_streak: 0,
@@ -2287,5 +2505,103 @@ mod tests {
             "Shapecast wireframe should start at x=5.5m with offset=3.5m, got {}",
             pt_near[0]
         );
+    }
+
+    #[test]
+    fn test_second_shapecast_casts_after_first() {
+        let poly_y = [0.0_f32, 0.0_f32, 0.0_f32];
+        let poly_z = [0.0_f32, 0.0_f32];
+
+        let res = DetectionResult {
+            frame_idx: 0,
+            points: Vec::new(),
+            gauge: 1.52,
+            curvature_a: 0.0,
+            heading_b: 0.0,
+            offset_c: 0.0,
+            turn_radius: 99999.0,
+            turn_direction: "STRAIGHT".to_string(),
+            lateral_shift_15m: 0.0,
+            poly_y,
+            poly_z,
+            x_curve: Vec::new(),
+            y_center: Vec::new(),
+            z_center: Vec::new(),
+            x_left: Vec::new(),
+            y_left: Vec::new(),
+            x_right: Vec::new(),
+            y_right: Vec::new(),
+            confidence: 1.0,
+            extrapolate_m: 0.0,
+            smooth_n: 1,
+            x_ext: Vec::new(),
+            y_ext: Vec::new(),
+            z_ext: Vec::new(),
+            x_ext_l: Vec::new(),
+            y_ext_l: Vec::new(),
+            x_ext_r: Vec::new(),
+            y_ext_r: Vec::new(),
+            has_intensity: false,
+            avg_intensity_left: 0.0,
+            avg_intensity_right: 0.0,
+            obstacles: Vec::new(),
+            // Первый шейпкаст: от 2.0м до 30.0м
+            clearance_width: 2.40,
+            clearance_narrowing_width: 0.0,
+            clearance_narrowing_height: 0.0,
+            clearance_height_end_shift: 0.0,
+            clearance_start_offset: 0.0,
+            min_height_above_rail: 0.15,
+            max_height_above_rail: 3.0,
+            max_distance_m: 30.0,
+            upward_curvature: 0.0,
+            obstacle_enabled: true,
+            // Второй шейпкаст: кастится после первого со сдвигом 2.0м и длиной 25.0м
+            shapecast2_enabled: true,
+            clearance_width_2: 2.20,
+            min_height_above_rail_2: 0.20,
+            max_height_above_rail_2: 3.20,
+            max_distance_m_2: 25.0,
+            upward_curvature_2: 0.0,
+            clearance_narrowing_width_2: 0.0,
+            clearance_narrowing_height_2: 0.0,
+            clearance_height_end_shift_2: 0.0,
+            clearance_start_offset_2: 2.0,
+            is_real_coordinates: true,
+            is_coasting: false,
+            outlier_streak: 0,
+            far_anchor_active: false,
+            timing_rail_ms: 0.0,
+            timing_obstacles_ms: 0.0,
+            timing_total_ms: 0.0,
+        };
+
+        // 1. Первый шейпкаст
+        let strips1 = res.shapecast1_wireframe_3d();
+        assert!(!strips1.is_empty());
+        let pt1_start = strips1[0].first().unwrap();
+        let pt1_end = strips1[0].last().unwrap();
+        assert!((pt1_start[0] - 2.0).abs() < 1e-2);
+        assert!((pt1_end[0] - 30.0).abs() < 1e-2);
+
+        // 2. Второй шейпкаст: должен каститься после первого (30.0м + 2.0м = 32.0м, до 32.0 + 25.0 = 57.0м)
+        let strips2 = res.shapecast2_wireframe_3d();
+        assert!(!strips2.is_empty());
+        let pt2_start = strips2[0].first().unwrap();
+        let pt2_end = strips2[0].last().unwrap();
+        assert!(
+            (pt2_start[0] - 32.0).abs() < 1e-2,
+            "Shapecast 2 should start at 32.0m, got {}",
+            pt2_start[0]
+        );
+        assert!(
+            (pt2_end[0] - 57.0).abs() < 1e-2,
+            "Shapecast 2 should end at 57.0m, got {}",
+            pt2_end[0]
+        );
+
+        // 3. Общий shapecast_wireframe_3d должен объединять оба шейпкаста
+        let strips_all = res.shapecast_wireframe_3d();
+        assert_eq!(strips_all.len(), strips1.len() + strips2.len());
     }
 }

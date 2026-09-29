@@ -4,7 +4,6 @@ use std::time::Instant;
 use rerun::{Color, Points3D, Radius, RecordingStream, TimeCell};
 use ros2_data_extraction::PointCloudStream;
 use serde_json::json;
-use shared::configs::DetectionPreset;
 use shared::error::AppError;
 use shared::rail_detection::{LidarGeometry, RailTrackDetector};
 use shared::range_image::{RangeImage, turbo_rgb};
@@ -22,15 +21,15 @@ pub async fn entry(
     let recording_stream = Arc::new(recording_stream);
     let error_publisher = point_cloud_stream.error_publisher();
 
-    let initial_detector: RailTrackDetector = DetectionPreset::current().into();
+    let initial_detector: RailTrackDetector = ENV.DETECTION_PRESET.into();
     let rail_detector = Arc::new(Mutex::new(initial_detector));
 
     let mut processed_frames: u64 = 0;
     let mut begin_lock = ENV.BEGIN_TIMESTAMP > 0;
 
     info!(
-        "[ENGINE] Инициализация пайплайна (аналог rail_tuner_2d): FOV={}°, Rerun=ON, ErrorTopic={}",
-        ENV.PREVIEW_FOV_X_DEG, ENV.ROS_ERROR_TOPIC
+        "[ENGINE] Инициализация пайплайна (аналог rail_tuner_2d): Preset={:?}, FOV={}°, Rerun=ON, ErrorTopic={}",
+        ENV.DETECTION_PRESET, ENV.PREVIEW_FOV_X_DEG, ENV.ROS_ERROR_TOPIC
     );
 
     while let Some(frame) = point_cloud_stream.next().await? {

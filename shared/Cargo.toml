@@ -11,4 +11,5 @@ serde = { version = "1.0.229", features = ["derive"] }
 rerun = "0.37.2"
 tracing = "0.1.44"
 rayon = "1.12.0"
+dotenvy = "0.15"
 
