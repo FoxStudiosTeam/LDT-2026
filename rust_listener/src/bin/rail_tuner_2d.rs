@@ -21,9 +21,10 @@
 //!   cargo run --bin rail_tuner_2d
 //!   cargo run --bin rail_tuner_2d -- frames
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, ColorImage, Key, TextureHandle, TextureOptions};
@@ -58,9 +59,10 @@ fn turbo_rgb(x: f32) -> [u8; 3] {
     ]
 }
 
-/// Источник трека данных (ROS2 .db3 или директория с .npy)
+/// Источник трека данных (ROS2 .db3, мультифайловый росбаг или директория с .npy)
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TrackSource {
+    Db3Bag { dir: PathBuf, files: Vec<PathBuf> },
     Db3(PathBuf),
     NpyDir(PathBuf),
 }
@@ -68,6 +70,34 @@ pub enum TrackSource {
 impl TrackSource {
     pub fn label(&self) -> String {
         match self {
+            TrackSource::Db3Bag { dir, files } => {
+                let folder_name = dir.file_name().and_then(|s| s.to_str()).unwrap_or("bag");
+                if files.len() > 1 {
+                    let total_bytes: u64 = files
+                        .iter()
+                        .filter_map(|p| std::fs::metadata(p).ok().map(|m| m.len()))
+                        .sum();
+                    if total_bytes > 1_000_000_000 {
+                        format!(
+                            "📁 [BAG] {} ({} файлов, {:.1} ГБ)",
+                            folder_name,
+                            files.len(),
+                            total_bytes as f64 / 1e9
+                        )
+                    } else if total_bytes > 1_000_000 {
+                        format!(
+                            "📁 [BAG] {} ({} файлов, {:.0} МБ)",
+                            folder_name,
+                            files.len(),
+                            total_bytes as f64 / 1e6
+                        )
+                    } else {
+                        format!("📁 [BAG] {} ({} файлов)", folder_name, files.len())
+                    }
+                } else {
+                    format!("📁 [DB3] {}", folder_name)
+                }
+            }
             TrackSource::Db3(p) => {
                 let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("db3");
                 let parent = p
@@ -91,67 +121,205 @@ impl TrackSource {
     }
 }
 
-/// Рекурсивно находит файлы .db3 с размером > 1 МБ (исключая пустые заглушки)
-fn scan_db3_in_dir(dir: &Path, out: &mut Vec<PathBuf>) {
+/// Парсит relative_file_paths из metadata.yaml росбага
+fn parse_rosbag2_metadata_files(meta_path: &Path) -> Option<Vec<PathBuf>> {
+    let content = std::fs::read_to_string(meta_path).ok()?;
+    let mut files = Vec::new();
+    let mut in_rel_paths = false;
+    let base_dir = meta_path.parent().unwrap_or_else(|| Path::new("."));
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("relative_file_paths:") {
+            in_rel_paths = true;
+            continue;
+        }
+        if in_rel_paths {
+            if let Some(rest) = trimmed.strip_prefix("- ") {
+                let fname = rest.trim();
+                if !fname.is_empty() {
+                    let full = base_dir.join(fname);
+                    if full.exists() {
+                        files.push(full);
+                    }
+                }
+            } else if !trimmed.is_empty() && !trimmed.starts_with('#') {
+                break;
+            }
+        }
+    }
+
+    if files.is_empty() { None } else { Some(files) }
+}
+
+/// Находит все файлы .db3 непосредственно в директории dir и сортирует их по естественному номеру
+fn scan_db3_files_in_dir(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let p = entry.path();
-            if p.is_dir() {
-                scan_db3_in_dir(&p, out);
-            } else if p.extension().and_then(|s| s.to_str()) == Some("db3") {
+            if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("db3") {
                 if let Ok(meta) = std::fs::metadata(&p) {
                     if meta.len() > 1024 * 1024 {
-                        out.push(p);
+                        files.push(p);
                     }
                 }
             }
         }
     }
+
+    // Естественная сортировка: name_0.db3, name_1.db3, ..., name_10.db3
+    files.sort_by(|a, b| {
+        let stem_a = a.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        let stem_b = b.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        let num_a = stem_a
+            .rsplit_once('_')
+            .and_then(|(_, s)| s.parse::<usize>().ok());
+        let num_b = stem_b
+            .rsplit_once('_')
+            .and_then(|(_, s)| s.parse::<usize>().ok());
+        match (num_a, num_b) {
+            (Some(na), Some(nb)) => na.cmp(&nb),
+            _ => a.cmp(b),
+        }
+    });
+
+    files
 }
 
-/// Находит доступные треки: .db3 датасеты и .npy директории
+/// Проверяет, является ли директория ROS2 bag-ом (по metadata.yaml или наличию файлов .db3)
+fn inspect_rosbag2_dir(dir: &Path) -> Option<Vec<PathBuf>> {
+    let meta_path = dir.join("metadata.yaml");
+    if meta_path.exists() {
+        if let Some(files) = parse_rosbag2_metadata_files(&meta_path) {
+            return Some(files);
+        }
+    }
+    let meta_yml = dir.join("metadata.yml");
+    if meta_yml.exists() {
+        if let Some(files) = parse_rosbag2_metadata_files(&meta_yml) {
+            return Some(files);
+        }
+    }
+    let files = scan_db3_files_in_dir(dir);
+    if !files.is_empty() { Some(files) } else { None }
+}
+
+/// Рекурсивно сканирует директорию на наличие треков: росбаги (папки с .db3), папки с .npy или одиночные .db3
+fn scan_tracks_in_root(root: &Path, tracks: &mut Vec<TrackSource>) {
+    if !root.exists() || !root.is_dir() {
+        return;
+    }
+
+    if let Ok(entries) = std::fs::read_dir(root) {
+        let mut subdirs = Vec::new();
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                let dir_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                if dir_name.starts_with('.') || dir_name == "target" || dir_name == "src" {
+                    continue;
+                }
+                // Проверяем, является ли папка ROS2 bag-ом
+                if let Some(files) = inspect_rosbag2_dir(&p) {
+                    let ts = TrackSource::Db3Bag {
+                        dir: p.clone(),
+                        files,
+                    };
+                    if !tracks.contains(&ts) {
+                        tracks.push(ts);
+                    }
+                    continue; // Не углубляемся внутрь росбага
+                }
+                // Проверяем, является ли папка коллекцией .npy кадров
+                let npy = scan_npy_frames(&p);
+                if !npy.is_empty() {
+                    let ts = TrackSource::NpyDir(p.clone());
+                    if !tracks.contains(&ts) {
+                        tracks.push(ts);
+                    }
+                    continue;
+                }
+                // Иначе запоминаем для рекурсивного обхода (например, dataset/)
+                subdirs.push(p);
+            } else if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("db3") {
+                if let Ok(meta) = std::fs::metadata(&p) {
+                    if meta.len() > 1024 * 1024 {
+                        let ts = TrackSource::Db3(p);
+                        if !tracks.contains(&ts) {
+                            tracks.push(ts);
+                        }
+                    }
+                }
+            }
+        }
+
+        for sub in subdirs {
+            scan_tracks_in_root(&sub, tracks);
+        }
+    }
+}
+
+/// Находит доступные треки: ROS2 .db3 датасеты (включая мультифайловые) и .npy директории
 pub fn discover_available_tracks(cli_arg: Option<&str>) -> Vec<TrackSource> {
     let mut tracks = Vec::new();
 
     // 1. Приоритетный путь из аргументов командной строки
     if let Some(arg) = cli_arg {
         let p = PathBuf::from(arg);
-        if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("db3") {
-            tracks.push(TrackSource::Db3(p));
-        } else if p.is_dir() {
-            let npy = scan_npy_frames(&p);
-            if !npy.is_empty() {
-                tracks.push(TrackSource::NpyDir(p.clone()));
+        if p.is_dir() {
+            if let Some(files) = inspect_rosbag2_dir(&p) {
+                tracks.push(TrackSource::Db3Bag {
+                    dir: p.clone(),
+                    files,
+                });
+            } else {
+                let npy = scan_npy_frames(&p);
+                if !npy.is_empty() {
+                    tracks.push(TrackSource::NpyDir(p.clone()));
+                }
             }
-            let mut db3s = Vec::new();
-            scan_db3_in_dir(&p, &mut db3s);
-            for d in db3s {
-                tracks.push(TrackSource::Db3(d));
+        } else if p.is_file() {
+            let fname = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if fname == "metadata.yaml" || fname == "metadata.yml" {
+                if let Some(parent) = p.parent() {
+                    if let Some(files) = inspect_rosbag2_dir(parent) {
+                        tracks.push(TrackSource::Db3Bag {
+                            dir: parent.to_path_buf(),
+                            files,
+                        });
+                    }
+                }
+            } else if p.extension().and_then(|s| s.to_str()) == Some("db3") {
+                if let Some(parent) = p.parent() {
+                    if let Some(files) = inspect_rosbag2_dir(parent) {
+                        if files.len() > 1 {
+                            tracks.push(TrackSource::Db3Bag {
+                                dir: parent.to_path_buf(),
+                                files,
+                            });
+                        } else {
+                            tracks.push(TrackSource::Db3(p));
+                        }
+                    } else {
+                        tracks.push(TrackSource::Db3(p));
+                    }
+                } else {
+                    tracks.push(TrackSource::Db3(p));
+                }
             }
         }
     }
 
-    // 2. Сканирование папки dataset и текущей директории на наличие db3
+    // 2. Сканирование папки dataset и текущей директории
     let search_roots = [
         PathBuf::from("dataset"),
         PathBuf::from("../dataset"),
         PathBuf::from("."),
     ];
 
-    let mut db3_found = Vec::new();
     for root in &search_roots {
-        if root.exists() && root.is_dir() {
-            scan_db3_in_dir(root, &mut db3_found);
-        }
-    }
-    db3_found.sort();
-    db3_found.dedup();
-
-    for d in db3_found {
-        let ts = TrackSource::Db3(d);
-        if !tracks.contains(&ts) {
-            tracks.push(ts);
-        }
+        scan_tracks_in_root(root, &mut tracks);
     }
 
     // 3. Сканирование известных папок с .npy кадрами
@@ -239,142 +407,348 @@ pub struct TunerFrame {
     pub range_image: RangeImage,
 }
 
-/// Хранилище загруженных кадров в оперативной памяти (RAM)
+/// Ссылка на конкретное сообщение в одном из .db3 файлов датасета
+#[derive(Clone, Copy, Debug)]
+pub struct Db3MsgRef {
+    pub file_idx: u16,
+    pub msg_id: i64,
+}
+
+pub const DEFAULT_STREAM_BUFFER_CAPACITY: usize = 50;
+
+/// Хранилище загруженных кадров в оперативной памяти (RAM) с поддержкой стриминга и буферизации
 pub struct FrameDataset {
     pub source: TrackSource,
-    pub frames: Arc<RwLock<Vec<TunerFrame>>>,
+    pub is_streaming: bool,
+    pub buffer_capacity: usize,
+    pub frames: Arc<RwLock<BTreeMap<usize, TunerFrame>>>,
     pub is_loading: Arc<AtomicBool>,
     pub loaded_count: Arc<AtomicUsize>,
     pub total_count: Arc<AtomicUsize>,
     pub cancel_flag: Arc<AtomicBool>,
+    pub req_frame_idx: Arc<AtomicUsize>,
+    pub req_notify: Arc<(Mutex<bool>, Condvar)>,
+    pub db3_files: Arc<Vec<PathBuf>>,
+    pub db3_index: Arc<Vec<Db3MsgRef>>,
+    pub npy_files: Arc<Vec<(usize, PathBuf)>>,
 }
 
 impl FrameDataset {
     /// Сигнализирует фоновому потоку остановить чтение кадров
     pub fn stop(&self) {
         self.cancel_flag.store(true, Ordering::SeqCst);
-    }
-
-    /// Загружает датасет из указанного источника (db3 или npy директория)
-    pub fn from_source(source: TrackSource) -> Self {
-        match source {
-            TrackSource::Db3(ref p) => Self::from_db3(source.clone(), p),
-            TrackSource::NpyDir(ref p) => Self::from_npy_dir(source.clone(), p),
+        let (lock, cvar) = &*self.req_notify;
+        if let Ok(mut ready) = lock.lock() {
+            *ready = true;
+            cvar.notify_all();
         }
     }
 
-    /// Потоковая фоновая загрузка .db3 файла в RAM с параллельной конвертацией в RangeImage
-    pub fn from_db3(source: TrackSource, path: &Path) -> Self {
-        let frames = Arc::new(RwLock::new(Vec::new()));
+    /// Получает кадр по индексу (сначала из кэша буфера, при cache-miss в режиме стриминга загружает синхронно)
+    pub fn get_frame(&self, idx: usize) -> Option<TunerFrame> {
+        // 1. Быстрый поиск в кэше/буфере
+        {
+            let r = self.frames.read().unwrap();
+            if let Some(f) = r.get(&idx) {
+                return Some(f.clone());
+            }
+        }
+
+        // 2. В режиме стриминга сообщаем фоновому потоку о новом положении скролла
+        if self.is_streaming {
+            self.request_frame(idx);
+
+            // 3. Синхронно загружаем запрошенный кадр при cache-miss, чтобы не моргать в UI
+            if let Some(f) = self.load_single_frame(idx) {
+                let mut w = self.frames.write().unwrap();
+                w.insert(idx, f.clone());
+                self.loaded_count.store(w.len(), Ordering::Relaxed);
+                return Some(f);
+            }
+        }
+
+        None
+    }
+
+    /// Оповещает фоновый воркер о текущем воспроизводимом кадре
+    pub fn request_frame(&self, idx: usize) {
+        if self.is_streaming {
+            self.req_frame_idx.store(idx, Ordering::Relaxed);
+            let (lock, cvar) = &*self.req_notify;
+            if let Ok(mut ready) = lock.lock() {
+                *ready = true;
+                cvar.notify_one();
+            }
+        }
+    }
+
+    /// Возвращает максимальное количество кадров, доступных для воспроизведения и скраббинга
+    pub fn max_available_frames(&self) -> usize {
+        if self.is_streaming {
+            self.total_count.load(Ordering::Relaxed)
+        } else {
+            self.loaded_count.load(Ordering::Relaxed)
+        }
+    }
+
+    /// Синхронная загрузка одиночного кадра напрямую с диска
+    pub fn load_single_frame(&self, idx: usize) -> Option<TunerFrame> {
+        match &self.source {
+            TrackSource::Db3(_) | TrackSource::Db3Bag { .. } => {
+                if idx >= self.db3_index.len() {
+                    return None;
+                }
+                let msg_ref = self.db3_index[idx];
+                let file_path = self.db3_files.get(msg_ref.file_idx as usize)?;
+                let conn = Connection::open_with_flags(file_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+                    .ok()?;
+                let mut stmt = conn
+                    .prepare("SELECT data FROM messages WHERE id = ?")
+                    .ok()?;
+                let raw_data: Vec<u8> = stmt.query_row([msg_ref.msg_id], |row| row.get(0)).ok()?;
+                let cloud: PointCloud2 = cdr::deserialize(&raw_data).ok()?;
+                let ri = RangeImage::from_pandar128_point_cloud2(&cloud, Some(40.0))?;
+                Some(TunerFrame {
+                    idx,
+                    range_image: ri,
+                })
+            }
+            TrackSource::NpyDir(_) => {
+                if idx >= self.npy_files.len() {
+                    return None;
+                }
+                let (_, path) = &self.npy_files[idx];
+                let ri = RangeImage::load_npy(path).ok()?;
+                Some(TunerFrame {
+                    idx,
+                    range_image: ri,
+                })
+            }
+        }
+    }
+
+    /// Загружает датасет из источника
+    pub fn from_source(source: TrackSource, streaming: bool) -> Self {
+        Self::from_source_with_buffer(source, streaming, DEFAULT_STREAM_BUFFER_CAPACITY)
+    }
+
+    /// Загружает датасет с настраиваемым размером буфера
+    pub fn from_source_with_buffer(
+        source: TrackSource,
+        streaming: bool,
+        buffer_size: usize,
+    ) -> Self {
+        match source {
+            TrackSource::Db3Bag { ref files, .. } => {
+                Self::from_db3_files(source.clone(), files.clone(), streaming, buffer_size)
+            }
+            TrackSource::Db3(ref p) => {
+                Self::from_db3_files(source.clone(), vec![p.clone()], streaming, buffer_size)
+            }
+            TrackSource::NpyDir(ref p) => {
+                Self::from_npy_dir(source.clone(), p, streaming, buffer_size)
+            }
+        }
+    }
+
+    /// Инициализация датасета из одного .db3 файла
+    pub fn from_db3(source: TrackSource, path: &Path, streaming: bool, buffer_size: usize) -> Self {
+        Self::from_db3_files(source, vec![path.to_path_buf()], streaming, buffer_size)
+    }
+
+    /// Инициализация датасета из набора .db3 файлов (включая мультифайловые ROS2 bag-и)
+    pub fn from_db3_files(
+        source: TrackSource,
+        db3_files: Vec<PathBuf>,
+        streaming: bool,
+        buffer_size: usize,
+    ) -> Self {
+        let frames = Arc::new(RwLock::new(BTreeMap::new()));
         let is_loading = Arc::new(AtomicBool::new(true));
         let loaded_count = Arc::new(AtomicUsize::new(0));
         let total_count = Arc::new(AtomicUsize::new(0));
         let cancel_flag = Arc::new(AtomicBool::new(false));
+        let req_frame_idx = Arc::new(AtomicUsize::new(0));
+        let req_notify = Arc::new((Mutex::new(false), Condvar::new()));
 
-        let mut total_messages = 0usize;
-        if let Ok(conn) = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
-            let topic_id = find_pointcloud_topic_id(&conn).unwrap_or(1);
-            if let Ok(mut stmt) = conn.prepare("SELECT count(*) FROM messages WHERE topic_id = ?") {
-                if let Ok(count) = stmt.query_row([topic_id], |row| row.get::<_, i64>(0)) {
-                    total_messages = count as usize;
+        println!(
+            "[FrameDataset] Быстрая индексация {} .db3 файлов...",
+            db3_files.len()
+        );
+        let t_idx_start = Instant::now();
+
+        // Параллельное чтение topic_id и списка id сообщений из всех .db3 файлов
+        let per_file_ids: Vec<(usize, Vec<i64>)> = db3_files
+            .par_iter()
+            .enumerate()
+            .map(|(file_idx, path)| {
+                let mut ids = Vec::new();
+                if let Ok(conn) =
+                    Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+                {
+                    let topic_id = find_pointcloud_topic_id(&conn).unwrap_or(1);
+                    if let Ok(mut stmt) =
+                        conn.prepare("SELECT id FROM messages WHERE topic_id = ? ORDER BY id")
+                    {
+                        if let Ok(rows) = stmt.query_map([topic_id], |row| row.get::<_, i64>(0)) {
+                            ids = rows.filter_map(|r| r.ok()).collect();
+                        }
+                    }
                 }
+                (file_idx, ids)
+            })
+            .collect();
+
+        let mut db3_index = Vec::new();
+        for (file_idx, ids) in per_file_ids {
+            let f_u16 = file_idx as u16;
+            for msg_id in ids {
+                db3_index.push(Db3MsgRef {
+                    file_idx: f_u16,
+                    msg_id,
+                });
             }
         }
-        total_count.store(total_messages, Ordering::Relaxed);
 
-        let bg_path = path.to_path_buf();
+        let total = db3_index.len();
+        total_count.store(total, Ordering::Relaxed);
+        println!(
+            "[FrameDataset] Индексация завершена за {:.1} ms: найдено {} кадров в {} файлах",
+            t_idx_start.elapsed().as_secs_f32() * 1000.0,
+            total,
+            db3_files.len()
+        );
+
+        let arc_db3_files = Arc::new(db3_files);
+        let arc_db3_index = Arc::new(db3_index);
+
+        let bg_files = Arc::clone(&arc_db3_files);
+        let bg_index = Arc::clone(&arc_db3_index);
         let bg_frames = Arc::clone(&frames);
         let bg_is_loading = Arc::clone(&is_loading);
         let bg_loaded_count = Arc::clone(&loaded_count);
         let bg_cancel = Arc::clone(&cancel_flag);
+        let bg_req = Arc::clone(&req_frame_idx);
+        let bg_notify = Arc::clone(&req_notify);
 
-        std::thread::spawn(move || {
-            let conn = match Connection::open_with_flags(&bg_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-            {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!(
-                        "[-] Не удалось открыть SQLite {}: {:?}",
-                        bg_path.display(),
-                        e
-                    );
-                    bg_is_loading.store(false, Ordering::SeqCst);
-                    return;
-                }
-            };
+        if streaming {
+            std::thread::spawn(move || {
+                println!(
+                    "[FrameDataset] Запущен стриминг .db3 (буфер {} кадров, файлов {}, всего {} кадров)",
+                    buffer_size,
+                    bg_files.len(),
+                    total
+                );
 
-            let topic_id = find_pointcloud_topic_id(&conn).unwrap_or(1);
-            let mut stmt =
-                match conn.prepare("SELECT data FROM messages WHERE topic_id = ? ORDER BY id") {
-                    Ok(s) => s,
-                    Err(e) => {
-                        eprintln!("[-] Ошибка подготовки запроса к messages: {:?}", e);
-                        bg_is_loading.store(false, Ordering::SeqCst);
-                        return;
+                let mut current_conn: Option<(usize, Connection)> = None;
+
+                while !bg_cancel.load(Ordering::Relaxed) {
+                    let req = bg_req.load(Ordering::Relaxed);
+                    let win_start = req.saturating_sub(5);
+                    let win_end = (win_start + buffer_size).min(total);
+                    let win_start = if win_end == total && total >= buffer_size {
+                        total - buffer_size
+                    } else {
+                        win_start
+                    };
+
+                    // 1. Очистка старых кадров за пределами активного окна
+                    {
+                        let mut w = bg_frames.write().unwrap();
+                        if w.len() >= buffer_size {
+                            let to_remove: Vec<usize> = w
+                                .keys()
+                                .filter(|&&k| k < win_start || k >= win_end)
+                                .cloned()
+                                .collect();
+                            for k in to_remove {
+                                w.remove(&k);
+                                if w.len() < buffer_size {
+                                    break;
+                                }
+                            }
+                        }
+                        bg_loaded_count.store(w.len(), Ordering::Relaxed);
                     }
-                };
 
-            let mut rows = match stmt.query([topic_id]) {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("[-] Ошибка выполнения запроса к messages: {:?}", e);
-                    bg_is_loading.store(false, Ordering::SeqCst);
-                    return;
-                }
-            };
+                    // 2. Поиск недостающих кадров в окне
+                    let missing: Vec<usize> = {
+                        let r = bg_frames.read().unwrap();
+                        (win_start..win_end)
+                            .filter(|k| !r.contains_key(k))
+                            .collect()
+                    };
 
-            println!("[FrameDataset] Загрузка .db3 в RAM: {}", bg_path.display());
+                    if missing.is_empty() {
+                        bg_is_loading.store(false, Ordering::Relaxed);
+                        let (lock, cvar) = &*bg_notify;
+                        let mut ready = lock.lock().unwrap();
+                        while !*ready && !bg_cancel.load(Ordering::Relaxed) {
+                            let res = cvar.wait_timeout(ready, Duration::from_millis(50)).unwrap();
+                            ready = res.0;
+                            if res.1.timed_out() {
+                                break;
+                            }
+                        }
+                        *ready = false;
+                        continue;
+                    }
 
-            const BATCH_SIZE: usize = 16;
-            let mut batch: Vec<(usize, Vec<u8>)> = Vec::with_capacity(BATCH_SIZE);
-            let mut global_idx = 0usize;
+                    bg_is_loading.store(true, Ordering::Relaxed);
 
-            while let Ok(Some(row)) = rows.next() {
-                if bg_cancel.load(Ordering::Relaxed) {
-                    println!("[FrameDataset] Загрузка отменена: {}", bg_path.display());
-                    return;
-                }
+                    // 3. Загружаем пачку недостающих кадров (до 16 за итерацию)
+                    let chunk_size = 16.min(missing.len());
+                    let target_indices = &missing[..chunk_size];
 
-                let raw_data: Vec<u8> = match row.get(0) {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                };
-                batch.push((global_idx, raw_data));
-                global_idx += 1;
+                    let mut raw_batch: Vec<(usize, Vec<u8>)> = Vec::with_capacity(chunk_size);
+                    for &idx in target_indices {
+                        if bg_cancel.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        if idx < bg_index.len() {
+                            let msg_ref = bg_index[idx];
+                            let f_idx = msg_ref.file_idx as usize;
 
-                if batch.len() >= BATCH_SIZE {
+                            let conn = match &mut current_conn {
+                                Some((cached_idx, conn)) if *cached_idx == f_idx => conn,
+                                _ => {
+                                    if f_idx < bg_files.len() {
+                                        if let Ok(c) = Connection::open_with_flags(
+                                            &bg_files[f_idx],
+                                            OpenFlags::SQLITE_OPEN_READ_ONLY,
+                                        ) {
+                                            current_conn = Some((f_idx, c));
+                                            &mut current_conn.as_mut().unwrap().1
+                                        } else {
+                                            continue;
+                                        }
+                                    } else {
+                                        continue;
+                                    }
+                                }
+                            };
+
+                            if let Ok(mut stmt) =
+                                conn.prepare("SELECT data FROM messages WHERE id = ?")
+                            {
+                                if let Ok(data) =
+                                    stmt.query_row([msg_ref.msg_id], |row| row.get::<_, Vec<u8>>(0))
+                                {
+                                    raw_batch.push((idx, data));
+                                }
+                            }
+                        }
+                    }
+
                     let cancel = Arc::clone(&bg_cancel);
-                    let parsed: Vec<TunerFrame> = batch
+                    let parsed: Vec<TunerFrame> = raw_batch
                         .into_par_iter()
                         .filter_map(|(idx, raw_bytes)| {
                             if cancel.load(Ordering::Relaxed) {
                                 return None;
                             }
-                            let cloud: PointCloud2 = match cdr::deserialize(&raw_bytes) {
-                                Ok(c) => c,
-                                Err(e) => {
-                                    if idx < 3 {
-                                        eprintln!(
-                                            "[-] Frame {} CDR deserialize error: {:?}",
-                                            idx, e
-                                        );
-                                    }
-                                    return None;
-                                }
-                            };
-                            let ri =
-                                match RangeImage::from_pandar128_point_cloud2(&cloud, Some(40.0)) {
-                                    Some(r) => r,
-                                    None => {
-                                        if idx < 3 {
-                                            eprintln!(
-                                                "[-] Frame {} RangeImage conversion returned None",
-                                                idx
-                                            );
-                                        }
-                                        return None;
-                                    }
-                                };
+                            let cloud: PointCloud2 = cdr::deserialize(&raw_bytes).ok()?;
+                            let ri = RangeImage::from_pandar128_point_cloud2(&cloud, Some(40.0))?;
                             Some(TunerFrame {
                                 idx,
                                 range_image: ri,
@@ -388,129 +762,351 @@ impl FrameDataset {
 
                     {
                         let mut w = bg_frames.write().unwrap();
-                        w.extend(parsed);
+                        for f in parsed {
+                            w.insert(f.idx, f);
+                        }
                         bg_loaded_count.store(w.len(), Ordering::Relaxed);
                     }
-                    batch = Vec::with_capacity(BATCH_SIZE);
                 }
-            }
+                bg_is_loading.store(false, Ordering::SeqCst);
+            });
+        } else {
+            // Full RAM loading mode
+            std::thread::spawn(move || {
+                println!(
+                    "[FrameDataset] Полная загрузка .db3 в RAM: {} кадров из {} файлов...",
+                    total,
+                    bg_files.len()
+                );
+                let mut global_idx = 0usize;
 
-            if !batch.is_empty() && !bg_cancel.load(Ordering::Relaxed) {
-                let cancel = Arc::clone(&bg_cancel);
-                let parsed: Vec<TunerFrame> = batch
-                    .into_par_iter()
-                    .filter_map(|(idx, raw_bytes)| {
-                        if cancel.load(Ordering::Relaxed) {
-                            return None;
-                        }
-                        let cloud: PointCloud2 = match cdr::deserialize(&raw_bytes) {
+                for path in bg_files.iter() {
+                    if bg_cancel.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    let conn =
+                        match Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
                             Ok(c) => c,
                             Err(e) => {
-                                if idx < 3 {
-                                    eprintln!("[-] Frame {} CDR deserialize error: {:?}", idx, e);
-                                }
-                                return None;
+                                eprintln!(
+                                    "[-] Не удалось открыть SQLite {}: {:?}",
+                                    path.display(),
+                                    e
+                                );
+                                continue;
                             }
                         };
-                        let ri = match RangeImage::from_pandar128_point_cloud2(&cloud, Some(40.0)) {
-                            Some(r) => r,
-                            None => {
-                                if idx < 3 {
-                                    eprintln!(
-                                        "[-] Frame {} RangeImage conversion returned None",
-                                        idx
-                                    );
-                                }
-                                return None;
-                            }
-                        };
-                        Some(TunerFrame {
-                            idx,
-                            range_image: ri,
-                        })
-                    })
-                    .collect();
 
-                if !bg_cancel.load(Ordering::Relaxed) {
-                    let mut w = bg_frames.write().unwrap();
-                    w.extend(parsed);
-                    bg_loaded_count.store(w.len(), Ordering::Relaxed);
+                    let topic_id = find_pointcloud_topic_id(&conn).unwrap_or(1);
+                    let mut stmt = match conn
+                        .prepare("SELECT data FROM messages WHERE topic_id = ? ORDER BY id")
+                    {
+                        Ok(s) => s,
+                        Err(e) => {
+                            eprintln!("[-] Ошибка подготовки запроса к messages: {:?}", e);
+                            continue;
+                        }
+                    };
+
+                    let mut rows = match stmt.query([topic_id]) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            eprintln!("[-] Ошибка выполнения запроса к messages: {:?}", e);
+                            continue;
+                        }
+                    };
+
+                    const BATCH_SIZE: usize = 16;
+                    let mut batch: Vec<(usize, Vec<u8>)> = Vec::with_capacity(BATCH_SIZE);
+
+                    while let Ok(Some(row)) = rows.next() {
+                        if bg_cancel.load(Ordering::Relaxed) {
+                            return;
+                        }
+
+                        let raw_data: Vec<u8> = match row.get(0) {
+                            Ok(v) => v,
+                            Err(_) => continue,
+                        };
+                        batch.push((global_idx, raw_data));
+                        global_idx += 1;
+
+                        if batch.len() >= BATCH_SIZE {
+                            let cancel = Arc::clone(&bg_cancel);
+                            let parsed: Vec<TunerFrame> = batch
+                                .into_par_iter()
+                                .filter_map(|(idx, raw_bytes)| {
+                                    if cancel.load(Ordering::Relaxed) {
+                                        return None;
+                                    }
+                                    let cloud: PointCloud2 = cdr::deserialize(&raw_bytes).ok()?;
+                                    let ri = RangeImage::from_pandar128_point_cloud2(
+                                        &cloud,
+                                        Some(40.0),
+                                    )?;
+                                    Some(TunerFrame {
+                                        idx,
+                                        range_image: ri,
+                                    })
+                                })
+                                .collect();
+
+                            if bg_cancel.load(Ordering::Relaxed) {
+                                return;
+                            }
+
+                            {
+                                let mut w = bg_frames.write().unwrap();
+                                for f in parsed {
+                                    w.insert(f.idx, f);
+                                }
+                                bg_loaded_count.store(w.len(), Ordering::Relaxed);
+                            }
+                            batch = Vec::with_capacity(BATCH_SIZE);
+                        }
+                    }
+
+                    if !batch.is_empty() && !bg_cancel.load(Ordering::Relaxed) {
+                        let cancel = Arc::clone(&bg_cancel);
+                        let parsed: Vec<TunerFrame> = batch
+                            .into_par_iter()
+                            .filter_map(|(idx, raw_bytes)| {
+                                if cancel.load(Ordering::Relaxed) {
+                                    return None;
+                                }
+                                let cloud: PointCloud2 = cdr::deserialize(&raw_bytes).ok()?;
+                                let ri =
+                                    RangeImage::from_pandar128_point_cloud2(&cloud, Some(40.0))?;
+                                Some(TunerFrame {
+                                    idx,
+                                    range_image: ri,
+                                })
+                            })
+                            .collect();
+
+                        if !bg_cancel.load(Ordering::Relaxed) {
+                            let mut w = bg_frames.write().unwrap();
+                            for f in parsed {
+                                w.insert(f.idx, f);
+                            }
+                            bg_loaded_count.store(w.len(), Ordering::Relaxed);
+                        }
+                    }
                 }
-            }
 
-            bg_is_loading.store(false, Ordering::SeqCst);
-            println!(
-                "[FrameDataset] Загрузка завершена: {} кадров",
-                bg_loaded_count.load(Ordering::Relaxed)
-            );
-        });
+                bg_is_loading.store(false, Ordering::SeqCst);
+                println!(
+                    "[FrameDataset] Загрузка .db3 завершена: {} кадров",
+                    bg_loaded_count.load(Ordering::Relaxed)
+                );
+            });
+        }
 
         Self {
             source,
+            is_streaming: streaming,
+            buffer_capacity: buffer_size,
             frames,
             is_loading,
             loaded_count,
             total_count,
             cancel_flag,
+            req_frame_idx,
+            req_notify,
+            db3_files: arc_db3_files,
+            db3_index: arc_db3_index,
+            npy_files: Arc::new(Vec::new()),
         }
     }
 
-    /// Фоновая загрузка кадров из папки с .npy файлами
-    pub fn from_npy_dir(source: TrackSource, dir: &Path) -> Self {
+    /// Инициализация датасета из .npy папки
+    pub fn from_npy_dir(
+        source: TrackSource,
+        dir: &Path,
+        streaming: bool,
+        buffer_size: usize,
+    ) -> Self {
         let npy_files = scan_npy_frames(dir);
         let total = npy_files.len();
-        let frames = Arc::new(RwLock::new(Vec::with_capacity(total)));
+        let frames = Arc::new(RwLock::new(BTreeMap::new()));
         let is_loading = Arc::new(AtomicBool::new(true));
         let loaded_count = Arc::new(AtomicUsize::new(0));
         let total_count = Arc::new(AtomicUsize::new(total));
         let cancel_flag = Arc::new(AtomicBool::new(false));
+        let req_frame_idx = Arc::new(AtomicUsize::new(0));
+        let req_notify = Arc::new((Mutex::new(false), Condvar::new()));
+
+        let arc_npy_files = Arc::new(npy_files);
 
         let bg_frames = Arc::clone(&frames);
         let bg_is_loading = Arc::clone(&is_loading);
         let bg_loaded_count = Arc::clone(&loaded_count);
         let bg_cancel = Arc::clone(&cancel_flag);
+        let bg_req = Arc::clone(&req_frame_idx);
+        let bg_notify = Arc::clone(&req_notify);
+        let bg_npy = Arc::clone(&arc_npy_files);
+        let dir_buf = dir.to_path_buf();
 
-        std::thread::spawn(move || {
-            const BATCH_SIZE: usize = 16;
-            for chunk in npy_files.chunks(BATCH_SIZE) {
-                if bg_cancel.load(Ordering::Relaxed) {
-                    return;
-                }
-                let cancel = Arc::clone(&bg_cancel);
-                let parsed: Vec<TunerFrame> = chunk
-                    .par_iter()
-                    .filter_map(|(idx, path)| {
-                        if cancel.load(Ordering::Relaxed) {
-                            return None;
+        if streaming {
+            std::thread::spawn(move || {
+                println!(
+                    "[FrameDataset] Запущен стриминг .npy (буфер {} кадров, всего {}): {}",
+                    buffer_size,
+                    total,
+                    dir_buf.display()
+                );
+
+                while !bg_cancel.load(Ordering::Relaxed) {
+                    let req = bg_req.load(Ordering::Relaxed);
+                    let win_start = req.saturating_sub(5);
+                    let win_end = (win_start + buffer_size).min(total);
+                    let win_start = if win_end == total && total >= buffer_size {
+                        total - buffer_size
+                    } else {
+                        win_start
+                    };
+
+                    // 1. Очистка старых кадров за пределами окна
+                    {
+                        let mut w = bg_frames.write().unwrap();
+                        if w.len() >= buffer_size {
+                            let to_remove: Vec<usize> = w
+                                .keys()
+                                .filter(|&&k| k < win_start || k >= win_end)
+                                .cloned()
+                                .collect();
+                            for k in to_remove {
+                                w.remove(&k);
+                                if w.len() < buffer_size {
+                                    break;
+                                }
+                            }
                         }
-                        let ri = RangeImage::load_npy(path).ok()?;
-                        Some(TunerFrame {
-                            idx: *idx,
-                            range_image: ri,
+                        bg_loaded_count.store(w.len(), Ordering::Relaxed);
+                    }
+
+                    // 2. Поиск недостающих кадров
+                    let missing: Vec<usize> = {
+                        let r = bg_frames.read().unwrap();
+                        (win_start..win_end)
+                            .filter(|k| !r.contains_key(k))
+                            .collect()
+                    };
+
+                    if missing.is_empty() {
+                        bg_is_loading.store(false, Ordering::Relaxed);
+                        let (lock, cvar) = &*bg_notify;
+                        let mut ready = lock.lock().unwrap();
+                        while !*ready && !bg_cancel.load(Ordering::Relaxed) {
+                            let res = cvar.wait_timeout(ready, Duration::from_millis(50)).unwrap();
+                            ready = res.0;
+                            if res.1.timed_out() {
+                                break;
+                            }
+                        }
+                        *ready = false;
+                        continue;
+                    }
+
+                    bg_is_loading.store(true, Ordering::Relaxed);
+
+                    let chunk_size = 16.min(missing.len());
+                    let target_indices = &missing[..chunk_size];
+
+                    let cancel = Arc::clone(&bg_cancel);
+                    let parsed: Vec<TunerFrame> = target_indices
+                        .par_iter()
+                        .filter_map(|&idx| {
+                            if cancel.load(Ordering::Relaxed) {
+                                return None;
+                            }
+                            if idx < bg_npy.len() {
+                                let (_, path) = &bg_npy[idx];
+                                let ri = RangeImage::load_npy(path).ok()?;
+                                Some(TunerFrame {
+                                    idx,
+                                    range_image: ri,
+                                })
+                            } else {
+                                None
+                            }
                         })
-                    })
-                    .collect();
+                        .collect();
 
-                if bg_cancel.load(Ordering::Relaxed) {
-                    return;
-                }
+                    if bg_cancel.load(Ordering::Relaxed) {
+                        return;
+                    }
 
-                {
-                    let mut w = bg_frames.write().unwrap();
-                    w.extend(parsed);
-                    bg_loaded_count.store(w.len(), Ordering::Relaxed);
+                    {
+                        let mut w = bg_frames.write().unwrap();
+                        for f in parsed {
+                            w.insert(f.idx, f);
+                        }
+                        bg_loaded_count.store(w.len(), Ordering::Relaxed);
+                    }
                 }
-            }
-            bg_is_loading.store(false, Ordering::SeqCst);
-        });
+            });
+        } else {
+            // Full RAM loading mode
+            std::thread::spawn(move || {
+                println!(
+                    "[FrameDataset] Полная загрузка .npy в RAM: {}",
+                    dir_buf.display()
+                );
+                const BATCH_SIZE: usize = 16;
+                for chunk in bg_npy.chunks(BATCH_SIZE) {
+                    if bg_cancel.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    let cancel = Arc::clone(&bg_cancel);
+                    let parsed: Vec<TunerFrame> = chunk
+                        .par_iter()
+                        .filter_map(|(idx, path)| {
+                            if cancel.load(Ordering::Relaxed) {
+                                return None;
+                            }
+                            let ri = RangeImage::load_npy(path).ok()?;
+                            Some(TunerFrame {
+                                idx: *idx,
+                                range_image: ri,
+                            })
+                        })
+                        .collect();
+
+                    if bg_cancel.load(Ordering::Relaxed) {
+                        return;
+                    }
+
+                    {
+                        let mut w = bg_frames.write().unwrap();
+                        for f in parsed {
+                            w.insert(f.idx, f);
+                        }
+                        bg_loaded_count.store(w.len(), Ordering::Relaxed);
+                    }
+                }
+                bg_is_loading.store(false, Ordering::SeqCst);
+                println!(
+                    "[FrameDataset] Загрузка .npy завершена: {} кадров",
+                    bg_loaded_count.load(Ordering::Relaxed)
+                );
+            });
+        }
 
         Self {
             source,
+            is_streaming: streaming,
+            buffer_capacity: buffer_size,
             frames,
             is_loading,
             loaded_count,
             total_count,
             cancel_flag,
+            req_frame_idx,
+            req_notify,
+            db3_files: Arc::new(Vec::new()),
+            db3_index: Arc::new(Vec::new()),
+            npy_files: arc_npy_files,
         }
     }
 }
@@ -985,6 +1581,7 @@ pub struct RailTuner2DApp {
     dataset: FrameDataset,
     current_frame_idx: usize,
     is_playing: bool,
+    streaming_mode: bool,
     fps: f32,
     last_tick: Instant,
 
@@ -1019,6 +1616,7 @@ pub struct RailTuner2DApp {
     clearance_narrowing_width: f32,
     clearance_narrowing_height: f32,
     clearance_height_end_shift: f32,
+    clearance_start_offset: f32,
     min_height_above_rail: f32,
     max_height_above_rail: f32,
     min_points: usize,
@@ -1062,6 +1660,7 @@ impl RailTuner2DApp {
         Self {
             available_tracks,
             selected_track_idx,
+            streaming_mode: dataset.is_streaming,
             dataset,
             current_frame_idx: 0,
             is_playing: false,
@@ -1092,6 +1691,7 @@ impl RailTuner2DApp {
             clearance_narrowing_width: detector.obstacle_config.clearance_narrowing_width,
             clearance_narrowing_height: detector.obstacle_config.clearance_narrowing_height,
             clearance_height_end_shift: detector.obstacle_config.clearance_height_end_shift,
+            clearance_start_offset: detector.obstacle_config.clearance_start_offset,
             min_height_above_rail: detector.obstacle_config.min_height_above_rail,
             max_height_above_rail: detector.obstacle_config.max_height_above_rail,
             min_points: detector.obstacle_config.min_points,
@@ -1136,8 +1736,12 @@ impl RailTuner2DApp {
 
         // 2. Освобождаем память предыдущего датасета и начинаем загрузку нового
         let source = self.available_tracks[track_idx].clone();
-        println!("[RailTuner2D] Смена трека на: {}", source.label());
-        self.dataset = FrameDataset::from_source(source);
+        println!(
+            "[RailTuner2D] Смена трека на: {} (стриминг: {})",
+            source.label(),
+            self.streaming_mode
+        );
+        self.dataset = FrameDataset::from_source(source, self.streaming_mode);
         self.selected_track_idx = track_idx;
 
         // 3. Сбрасываем плеер, превью и детектор
@@ -1150,6 +1754,12 @@ impl RailTuner2DApp {
         self.last_bent_res = None;
         self.profiling = PipelineProfiling::default();
         self.detector.reset();
+    }
+
+    /// Перезагружает текущий трек с переключением режима стриминга
+    pub fn reload_current_track_with_streaming(&mut self, streaming: bool) {
+        self.streaming_mode = streaming;
+        self.open_track(self.selected_track_idx);
     }
 
     fn sync_detector_params(&mut self) {
@@ -1187,6 +1797,7 @@ impl RailTuner2DApp {
         self.detector.obstacle_config.clearance_narrowing_width = self.clearance_narrowing_width;
         self.detector.obstacle_config.clearance_narrowing_height = self.clearance_narrowing_height;
         self.detector.obstacle_config.clearance_height_end_shift = self.clearance_height_end_shift;
+        self.detector.obstacle_config.clearance_start_offset = self.clearance_start_offset;
         self.detector.obstacle_config.cluster_depth_thresh = self.cluster_depth_thresh;
         self.detector.obstacle_config.temporal_tracking_enabled = self.temporal_tracking_enabled;
         self.detector.obstacle_config.min_hits_for_critical = self.min_hits_for_critical;
@@ -1196,14 +1807,7 @@ impl RailTuner2DApp {
     }
 
     fn process_current_frame(&mut self) {
-        let frame_opt = {
-            let lock = self.dataset.frames.read().unwrap();
-            if lock.is_empty() || self.current_frame_idx >= lock.len() {
-                None
-            } else {
-                Some(lock[self.current_frame_idx].clone())
-            }
-        };
+        let frame_opt = self.dataset.get_frame(self.current_frame_idx);
 
         let Some(frame) = frame_opt else {
             return;
@@ -1243,7 +1847,7 @@ impl RailTuner2DApp {
         let bent_res = self
             .detector
             .detect_with_raw(&active_ri, Some(raw_ri), None, frame.idx);
-        if let Some(r) = &bent_res {
+        if let Some(_r) = &bent_res {
             // println!("Radius: {}", r.turn_radius);
             // 400 - max
             // self.detector.obstacle_config.clearance_narrowing_width = r.turn_radius;
@@ -1342,9 +1946,7 @@ impl RailTuner2DApp {
     }
 
     fn update_preview_texture(&mut self, ctx: &egui::Context) {
-        let lock = self.dataset.frames.read().unwrap();
-        if self.current_frame_idx < lock.len() {
-            let f = &lock[self.current_frame_idx];
+        if let Some(f) = self.dataset.get_frame(self.current_frame_idx) {
             let active_ri = self.active_range_image.as_ref().unwrap_or(&f.range_image);
 
             let t_paint = Instant::now();
@@ -1387,17 +1989,17 @@ impl eframe::App for RailTuner2DApp {
             self.current_frame_idx -= 1;
             self.detector.reset();
         }
-        let total_loaded = self.dataset.loaded_count.load(Ordering::Relaxed);
-        if input.2 && self.current_frame_idx + 1 < total_loaded {
+        let max_frames = self.dataset.max_available_frames();
+        if input.2 && self.current_frame_idx + 1 < max_frames {
             self.current_frame_idx += 1;
         }
 
         // Playback ticker
-        if self.is_playing && total_loaded > 0 {
+        if self.is_playing && max_frames > 0 {
             let interval = Duration::from_secs_f32(1.0 / self.fps.max(1.0));
             if self.last_tick.elapsed() >= interval {
                 self.last_tick = Instant::now();
-                if self.current_frame_idx + 1 < total_loaded {
+                if self.current_frame_idx + 1 < max_frames {
                     self.current_frame_idx += 1;
                 } else {
                     self.current_frame_idx = 0;
@@ -1408,7 +2010,7 @@ impl eframe::App for RailTuner2DApp {
         }
 
         // Process frame if frame changed or not painted yet
-        if self.last_painted_frame != Some(self.current_frame_idx) && total_loaded > 0 {
+        if self.last_painted_frame != Some(self.current_frame_idx) && max_frames > 0 {
             self.process_current_frame();
             self.last_painted_frame = Some(self.current_frame_idx);
             self.update_preview_texture(ui.ctx());
@@ -1446,24 +2048,44 @@ impl eframe::App for RailTuner2DApp {
                     }
                 }
 
-                ui.separator();
-
-                let is_loading = self.dataset.is_loading.load(Ordering::Relaxed);
-                let loaded = self.dataset.loaded_count.load(Ordering::Relaxed);
-                let total = self.dataset.total_count.load(Ordering::Relaxed);
-                let approx_mb = (loaded * 400) / 1024;
-                if is_loading {
-                    let pct = if total > 0 { (loaded * 100) / total } else { 0 };
+                if self.dataset.is_streaming {
+                    let buffered = self.dataset.loaded_count.load(Ordering::Relaxed);
+                    let total = self.dataset.total_count.load(Ordering::Relaxed);
+                    let approx_mb = (buffered * 400) / 1024;
+                    let is_loading = self.dataset.is_loading.load(Ordering::Relaxed);
+                    let status_icon = if is_loading { "⏳" } else { "⚡" };
                     ui.colored_label(
-                        Color32::from_rgb(255, 190, 50),
-                        format!("⏳ RAM: {}/{} кадров ({}%)", loaded, total, pct),
+                        Color32::from_rgb(80, 200, 255),
+                        format!("{} Буфер: {}/{} кадров (~{} МБ) | Всего: {}", status_icon, buffered, self.dataset.buffer_capacity, approx_mb, total),
                     );
-                    ui.ctx().request_repaint_after(Duration::from_millis(50));
                 } else {
-                    ui.colored_label(
-                        Color32::from_rgb(80, 220, 100),
-                        format!("💾 RAM: {} кадров (~{} МБ)", loaded, approx_mb),
-                    );
+                    let is_loading = self.dataset.is_loading.load(Ordering::Relaxed);
+                    let loaded = self.dataset.loaded_count.load(Ordering::Relaxed);
+                    let total = self.dataset.total_count.load(Ordering::Relaxed);
+                    let approx_mb = (loaded * 400) / 1024;
+                    if is_loading {
+                        let pct = if total > 0 { (loaded * 100) / total } else { 0 };
+                        ui.colored_label(
+                            Color32::from_rgb(255, 190, 50),
+                            format!("⏳ RAM: {}/{} кадров ({}%)", loaded, total, pct),
+                        );
+                        ui.ctx().request_repaint_after(Duration::from_millis(50));
+                    } else {
+                        ui.colored_label(
+                            Color32::from_rgb(80, 220, 100),
+                            format!("💾 RAM: {} кадров (~{} МБ)", loaded, approx_mb),
+                        );
+                    }
+                }
+
+                ui.separator();
+                let mut stream_toggle = self.streaming_mode;
+                if ui
+                    .checkbox(&mut stream_toggle, "⚡ Стриминг (буфер 50)")
+                    .on_hover_text("Потоковая загрузка с буфером в 50 кадров вместо полной загрузки всего датасета в RAM")
+                    .changed()
+                {
+                    self.reload_current_track_with_streaming(stream_toggle);
                 }
 
                 ui.separator();
@@ -1519,6 +2141,7 @@ impl eframe::App for RailTuner2DApp {
                              detector.obstacle_config.clearance_narrowing_width = {:.4};\n\
                              detector.obstacle_config.clearance_narrowing_height = {:.4};\n\
                              detector.obstacle_config.clearance_height_end_shift = {:.3};\n\
+                             detector.obstacle_config.clearance_start_offset = {:.3};\n\
                              detector.obstacle_config.cluster_depth_thresh = {:.2};\n\
                              detector.obstacle_config.temporal_tracking_enabled = {};\n\
                              detector.obstacle_config.min_hits_for_critical = {};\n\
@@ -1555,6 +2178,7 @@ impl eframe::App for RailTuner2DApp {
                             self.clearance_narrowing_width,
                             self.clearance_narrowing_height,
                             self.clearance_height_end_shift,
+                            self.clearance_start_offset,
                             self.cluster_depth_thresh,
                             self.temporal_tracking_enabled,
                             self.min_hits_for_critical,
@@ -1599,14 +2223,14 @@ impl eframe::App for RailTuner2DApp {
                             self.detector.reset();
                         }
                         if ui.button("⏭ Next").clicked()
-                            && self.current_frame_idx + 1 < total_loaded
+                            && self.current_frame_idx + 1 < max_frames
                         {
                             self.current_frame_idx += 1;
                         }
                         ui.label(format!(
                             "Frame {} / {}",
                             self.current_frame_idx,
-                            total_loaded.saturating_sub(1)
+                            max_frames.saturating_sub(1)
                         ));
                     });
 
@@ -1615,11 +2239,11 @@ impl eframe::App for RailTuner2DApp {
                         ui.add(egui::Slider::new(&mut self.fps, 1.0..=60.0).step_by(1.0));
                     });
 
-                    if total_loaded > 1 {
+                    if max_frames > 1 {
                         let mut slider_idx = self.current_frame_idx;
                         if ui
                             .add(
-                                egui::Slider::new(&mut slider_idx, 0..=total_loaded - 1)
+                                egui::Slider::new(&mut slider_idx, 0..=max_frames - 1)
                                     .text("Scrub"),
                             )
                             .changed()
@@ -1939,6 +2563,19 @@ impl eframe::App for RailTuner2DApp {
                                             }
                                         }),
                                 )
+                                .changed();
+
+                            ui.label("Shapecast Start Offset (m):");
+                            param_changed |= ui
+                                .add(
+                                    egui::Slider::new(&mut self.clearance_start_offset, 0.0..=25.0)
+                                        .step_by(0.1)
+                                        .custom_formatter(|val, _| {
+                                            let start_m = 2.0 + val;
+                                            format!("{:.1}m (starts @{:.1}m)", val, start_m)
+                                        }),
+                                )
+                                .on_hover_text("Оффсет начала шейпкаста: игнорирование точек ближе N метров по глубине относительно начальной плоскости (2.0м)")
                                 .changed();
 
                             ui.label("Max Distance (m):");
@@ -2265,7 +2902,11 @@ impl eframe::App for RailTuner2DApp {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
-    let cli_arg = args.get(1).map(|s| s.as_str());
+    let cli_arg = args
+        .iter()
+        .skip(1)
+        .find(|s| !s.starts_with("--"))
+        .map(|s| s.as_str());
 
     println!("============================================================");
     println!("🛤️  RAIL TUNER 2D — Starting Range Image Rail Detector GUI");
@@ -2283,11 +2924,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let initial_track_idx = 0;
+    let streaming = !args.iter().any(|a| a == "--full-ram" || a == "--no-stream");
+    let buffer_size = args
+        .windows(2)
+        .find(|w| w[0] == "--buffer")
+        .and_then(|w| w[1].parse::<usize>().ok())
+        .unwrap_or(DEFAULT_STREAM_BUFFER_CAPACITY);
+
     println!(
-        "Loading initial track: {}",
+        "Loading initial track (streaming: {}, buffer: {}): {}",
+        streaming,
+        buffer_size,
         available_tracks[initial_track_idx].label()
     );
-    let dataset = FrameDataset::from_source(available_tracks[initial_track_idx].clone());
+    let dataset = FrameDataset::from_source_with_buffer(
+        available_tracks[initial_track_idx].clone(),
+        streaming,
+        buffer_size,
+    );
 
     // Подключение к Rerun (или запуск viewer)
     println!("[*] Connecting / Spawning Rerun viewer...");
@@ -2312,4 +2966,95 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_inspect_rosbag2_new_data() {
+        let p = if Path::new("dataset/new_data").exists() {
+            PathBuf::from("dataset/new_data")
+        } else if Path::new("../dataset/new_data").exists() {
+            PathBuf::from("../dataset/new_data")
+        } else {
+            return;
+        };
+        let files = inspect_rosbag2_dir(&p).expect("should inspect new_data");
+        assert_eq!(files.len(), 221, "new_data should have 221 db3 files");
+        assert!(files[0].ends_with("new_data_0.db3"));
+        assert!(files[220].ends_with("new_data_220.db3"));
+    }
+
+    #[test]
+    fn test_discover_tracks_groups_new_data() {
+        let arg = if Path::new("dataset/new_data").exists() {
+            "dataset/new_data"
+        } else if Path::new("../dataset/new_data").exists() {
+            "../dataset/new_data"
+        } else {
+            return;
+        };
+        let tracks = discover_available_tracks(Some(arg));
+        assert!(!tracks.is_empty());
+        match &tracks[0] {
+            TrackSource::Db3Bag { dir, files } => {
+                assert!(dir.to_string_lossy().contains("new_data"));
+                assert_eq!(files.len(), 221);
+            }
+            other => panic!("Expected Db3Bag for new_data, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_natural_sorting_order() {
+        let mut paths = vec![
+            PathBuf::from("bag_10.db3"),
+            PathBuf::from("bag_0.db3"),
+            PathBuf::from("bag_2.db3"),
+            PathBuf::from("bag_1.db3"),
+        ];
+        paths.sort_by(|a, b| {
+            let stem_a = a.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let stem_b = b.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let num_a = stem_a
+                .rsplit_once('_')
+                .and_then(|(_, s)| s.parse::<usize>().ok());
+            let num_b = stem_b
+                .rsplit_once('_')
+                .and_then(|(_, s)| s.parse::<usize>().ok());
+            match (num_a, num_b) {
+                (Some(na), Some(nb)) => na.cmp(&nb),
+                _ => a.cmp(b),
+            }
+        });
+        assert_eq!(paths[0], PathBuf::from("bag_0.db3"));
+        assert_eq!(paths[1], PathBuf::from("bag_1.db3"));
+        assert_eq!(paths[2], PathBuf::from("bag_2.db3"));
+        assert_eq!(paths[3], PathBuf::from("bag_10.db3"));
+    }
+
+    #[test]
+    fn test_load_frame_from_new_data_multi_db3() {
+        let arg = if Path::new("dataset/new_data").exists() {
+            "dataset/new_data"
+        } else if Path::new("../dataset/new_data").exists() {
+            "../dataset/new_data"
+        } else {
+            return;
+        };
+        let tracks = discover_available_tracks(Some(arg));
+        assert!(!tracks.is_empty());
+        let dataset = FrameDataset::from_source_with_buffer(tracks[0].clone(), true, 50);
+        assert_eq!(dataset.max_available_frames(), 11271);
+        let f0 = dataset.load_single_frame(0).expect("frame 0 should load");
+        assert_eq!(f0.idx, 0);
+        // Кадр 100 находится во 2-м файле (new_data_1.db3 или new_data_2.db3)
+        let f100 = dataset
+            .load_single_frame(100)
+            .expect("frame 100 should load");
+        assert_eq!(f100.idx, 100);
+        dataset.stop();
+    }
 }

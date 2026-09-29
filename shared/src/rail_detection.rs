@@ -260,6 +260,8 @@ pub struct DetectionResult {
     pub clearance_narrowing_height: f32,
     /// Вертикальный сдвиг конечной точки искривления габарита по высоте на дальней дистанции (м)
     pub clearance_height_end_shift: f32,
+    /// Оффсет начала шейпкаста по глубине относительно начальной плоскости (м)
+    pub clearance_start_offset: f32,
     pub obstacle_enabled: bool,
     /// Флаг истинных (восстановленных) координат в реальном физическом пространстве
     pub is_real_coordinates: bool,
@@ -329,13 +331,9 @@ impl DetectionResult {
     /// - Поперечные прямоугольные рамки (шпангоуты) с шагом ~4 м вдоль кривой
     /// - Торцевые диагональные крестовины (порталы входа и выхода)
     pub fn shapecast_wireframe_3d(&self) -> Vec<Vec<[f32; 3]>> {
-        if !self.obstacle_enabled || self.max_distance_m <= 2.0 || self.clearance_width <= 0.0 {
-            return Vec::new();
-        }
-
-        let x_min = 2.0_f32;
+        let x_min = (2.0 + self.clearance_start_offset).max(0.1);
         let x_max = self.max_distance_m;
-        if x_max <= x_min {
+        if !self.obstacle_enabled || x_max <= x_min || self.clearance_width <= 0.0 {
             return Vec::new();
         }
 
@@ -502,6 +500,8 @@ pub struct ObstacleConfig {
     /// Вертикальный сдвиг конечной точки искривления габарита по высоте на дальней дистанции (м)
     /// Смещает центр габарита по высоте на дистанции max_distance_m (+ вверх, - вниз)
     pub clearance_height_end_shift: f32,
+    /// Оффсет начала шейпкаста / габарита приближения (м) — игнорирование точек ближе чем этот сдвиг относительно начальной плоскости, default: 0.0 м
+    pub clearance_start_offset: f32,
     /// Максимальный разрыв по дальности (м) между соседними точками для объединения в один кластер, default: 1.20 м
     /// Предотвращает склейку разноудаленных объектов на одной линии визирования
     pub cluster_depth_thresh: f32,
@@ -532,6 +532,7 @@ impl Default for ObstacleConfig {
             clearance_narrowing_width: 0.0,
             clearance_narrowing_height: 0.0,
             clearance_height_end_shift: 0.0,
+            clearance_start_offset: 0.0,
             cluster_depth_thresh: 1.20,
             temporal_tracking_enabled: true,
             min_hits_for_critical: 2,
@@ -1496,6 +1497,7 @@ impl RailTrackDetector {
             clearance_narrowing_width: self.obstacle_config.clearance_narrowing_width,
             clearance_narrowing_height: self.obstacle_config.clearance_narrowing_height,
             clearance_height_end_shift: self.obstacle_config.clearance_height_end_shift,
+            clearance_start_offset: self.obstacle_config.clearance_start_offset,
             min_height_above_rail: self.obstacle_config.min_height_above_rail,
             max_height_above_rail: self.obstacle_config.max_height_above_rail,
             max_distance_m: self.obstacle_config.max_distance_m,
@@ -1538,7 +1540,7 @@ impl RailTrackDetector {
         let center_h = (config.min_height_above_rail + config.max_height_above_rail) * 0.5;
         let min_h_thickness = 0.30_f32.min(nom_h);
         let half_g = gauge * 0.5;
-        let x_min = 2.0_f32;
+        let x_min = (2.0 + config.clearance_start_offset).max(0.1);
         let x_max = config.max_distance_m;
 
         let get_xyz_real = |row: usize, col: usize, r: f32| -> (f32, f32, f32) {
@@ -2164,6 +2166,7 @@ mod tests {
             clearance_narrowing_width: 0.0,
             clearance_narrowing_height: 0.0,
             clearance_height_end_shift: 0.50, // +0.50m shift at far station
+            clearance_start_offset: 0.0,
             min_height_above_rail: 0.15,
             max_height_above_rail: 3.05,
             max_distance_m: 52.0,
@@ -2214,6 +2217,75 @@ mod tests {
             (pt_far_tl[2] - 2.55).abs() < 1e-3,
             "Far top should be lifted by 0.50m to 2.55, got {}",
             pt_far_tl[2]
+        );
+    }
+
+    #[test]
+    fn test_clearance_start_offset() {
+        let poly_y = [0.0_f32, 0.0_f32, 0.0_f32];
+        let poly_z = [0.0_f32, 0.0_f32];
+
+        let mut res = DetectionResult {
+            frame_idx: 0,
+            points: Vec::new(),
+            gauge: 1.52,
+            curvature_a: 0.0,
+            heading_b: 0.0,
+            offset_c: 0.0,
+            turn_radius: 99999.0,
+            turn_direction: "STRAIGHT".to_string(),
+            lateral_shift_15m: 0.0,
+            poly_y,
+            poly_z,
+            x_curve: Vec::new(),
+            y_center: Vec::new(),
+            z_center: Vec::new(),
+            x_left: Vec::new(),
+            y_left: Vec::new(),
+            x_right: Vec::new(),
+            y_right: Vec::new(),
+            confidence: 1.0,
+            extrapolate_m: 0.0,
+            smooth_n: 1,
+            x_ext: Vec::new(),
+            y_ext: Vec::new(),
+            z_ext: Vec::new(),
+            x_ext_l: Vec::new(),
+            y_ext_l: Vec::new(),
+            x_ext_r: Vec::new(),
+            y_ext_r: Vec::new(),
+            has_intensity: false,
+            avg_intensity_left: 0.0,
+            avg_intensity_right: 0.0,
+            obstacles: Vec::new(),
+            clearance_width: 2.40,
+            clearance_narrowing_width: 0.0,
+            clearance_narrowing_height: 0.0,
+            clearance_height_end_shift: 0.0,
+            clearance_start_offset: 3.5, // Сдвиг начала на 3.5м вперед (2.0 + 3.5 = 5.5м)
+            min_height_above_rail: 0.15,
+            max_height_above_rail: 3.0,
+            max_distance_m: 50.0,
+            upward_curvature: 0.0,
+            obstacle_enabled: true,
+            is_real_coordinates: true,
+            is_coasting: false,
+            outlier_streak: 0,
+            far_anchor_active: false,
+            timing_rail_ms: 0.0,
+            timing_obstacles_ms: 0.0,
+            timing_total_ms: 0.0,
+        };
+
+        let strips = res.shapecast_wireframe_3d();
+        assert!(!strips.is_empty());
+        let line_bl = &strips[0];
+        let pt_near = line_bl.first().unwrap();
+        // Начальная плоскость шейпкаста должна начинаться точно с x = 2.0 + 3.5 = 5.5м
+        assert!(
+            (pt_near[0] - 5.5).abs() < 1e-2,
+            "Shapecast wireframe should start at x=5.5m with offset=3.5m, got {}",
+            pt_near[0]
         );
     }
 }
