@@ -114,6 +114,9 @@ services:
       - RERUN_URL=rerun+http://host.docker.internal:9876/proxy
       - SCREEN_WIDTH=1600
       - SCREEN_HEIGHT=900
+      - XDG_RUNTIME_DIR=/tmp/runtime-root
+      - WINIT_UNIX_BACKEND=x11
+
     volumes:
       - bag_data:/app/dataset:ro
       - ./frames:/app/frames:ro

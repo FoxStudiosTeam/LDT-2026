@@ -7,6 +7,15 @@ export SCREEN_WIDTH=${SCREEN_WIDTH:-1600}
 export SCREEN_HEIGHT=${SCREEN_HEIGHT:-900}
 export SCREEN_DEPTH=${SCREEN_DEPTH:-24}
 
+# XDG & Winit configuration for headless X11
+export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/tmp/runtime-root}
+mkdir -p "$XDG_RUNTIME_DIR"
+chmod 0700 "$XDG_RUNTIME_DIR"
+
+export WINIT_UNIX_BACKEND=x11
+export LIBGL_ALWAYS_SOFTWARE=${LIBGL_ALWAYS_SOFTWARE:-1}
+
+
 echo "=========================================================="
 echo "🚀 Starting Rail Tuner 2D Container Environment"
 echo "=========================================================="
