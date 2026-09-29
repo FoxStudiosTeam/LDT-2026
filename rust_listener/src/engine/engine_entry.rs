@@ -73,19 +73,9 @@ pub async fn entry(
             }
             let swap_dur = swap_start.elapsed();
 
-            // 2. строим RangeImage и производим детекцию рельсов с прямым доступом
-            //    к облаку точек (zero-copy) ПОД READ-ЛОКОМ, после чего НЕМЕДЛЕННО освобождаем лок.
-            let compute_start = std::time::Instant::now();
-            let (
-                timestamp_ns,
-                crop_raw,
-                active_ri,
-                geo,
-                c_z,
-                bent_result,
-                warp_dur,
-                detect_dur,
-            ) = {
+            // 2. Формируем 2D карту глубины (RangeImage) из организованного облака Pandar128
+            //    ПОД READ-ЛОКОМ, после чего НЕМЕДЛЕННО освобождаем лок.
+            let (timestamp_ns, crop_raw) = {
                 let point_cloud = point_cloud_lock.read().expect("Mutex poisoned");
                 let number = ProcessingQueue::READ;
                 let timestamp_ns: i64 = point_cloud.timestamp[number];
@@ -95,55 +85,50 @@ pub async fn entry(
                     1,
                 );
 
-                // Подготовка 2D карты глубины (Range Image) и геометрии лидара
+                // Подготовка 2D карты глубины (Range Image)
                 let crop_raw = ri.crop_fov(ENV.PREVIEW_FOV_X_DEG);
-                let geo = LidarGeometry::new(
-                    crop_raw.height,
-                    crop_raw.width,
-                    15.0,
-                    -25.0,
-                    ENV.PREVIEW_FOV_X_DEG,
-                );
+                (timestamp_ns, crop_raw)
+            }; // <--- read-lock point_cloud немедленно освобожден!
 
-                // Искривление всех точек тоннеля и карты глубины: Z_bent = Z + c_z * X^2
-                let c_z = {
-                    let detector = rail_detector_lock.lock().unwrap();
-                    detector.obstacle_config.upward_curvature
-                };
-                let t_warp = Instant::now();
-                let active_ri = if c_z.abs() > 1e-7 {
-                    crop_raw.warp_curvature(&geo, c_z)
-                } else {
-                    crop_raw.clone()
-                };
-                let warp_dur = t_warp.elapsed();
+            let geo = LidarGeometry::new(
+                crop_raw.height,
+                crop_raw.width,
+                15.0,
+                -25.0,
+                ENV.PREVIEW_FOV_X_DEG,
+            );
 
-                // Детекция путей на искривленном представлении и препятствий
-                let t_detect = Instant::now();
-                let bent_result = {
-                    let mut detector = rail_detector_lock.lock().unwrap();
-                    if detector.geometry.height != active_ri.height || detector.geometry.width != active_ri.width {
-                        detector.geometry = geo.clone();
-                    }
-                    detector.detect_with_raw(
-                        &active_ri,
-                        Some(&crop_raw),
-                        Some((&point_cloud, number)),
-                        frame_id as usize,
-                    )
-                };
-                let detect_dur = t_detect.elapsed();
-                (
-                    timestamp_ns,
-                    crop_raw,
-                    active_ri,
-                    geo,
-                    c_z,
-                    bent_result,
-                    warp_dur,
-                    detect_dur
+            // Искривление всех точек тоннеля и карты глубины: Z_bent = Z + c_z * X^2
+            let c_z = {
+                let detector = rail_detector_lock.lock().unwrap();
+                detector.obstacle_config.upward_curvature
+            };
+            let t_warp = Instant::now();
+            let active_ri = if c_z.abs() > 1e-7 {
+                crop_raw.warp_curvature(&geo, c_z)
+            } else {
+                crop_raw.clone()
+            };
+            let warp_dur = t_warp.elapsed();
+
+            // Детекция путей на искривленном представлении и препятствий (полный аналог rail_tuner_2d)
+            let t_detect = Instant::now();
+            let bent_result = {
+                let mut detector = rail_detector_lock.lock().unwrap();
+                if detector.geometry.height != geo.height
+                    || detector.geometry.width != geo.width
+                    || (detector.geometry.fov_h_rad - geo.fov_h_rad).abs() > 1e-4
+                {
+                    detector.geometry = geo.clone();
+                }
+                detector.detect_with_raw(
+                    &active_ri,
+                    Some(&crop_raw),
+                    None,
+                    frame_id as usize,
                 )
-            }; // <--- read-lock освобожден!
+            };
+            let detect_dur = t_detect.elapsed();
 
             // 3. Восстановление истинных координат для Rerun и 3D сцены: Z_real = Z_bent - c_z * X^2
             let t_restore = Instant::now();
@@ -188,6 +173,16 @@ pub async fn entry(
                     .with_colors(colors.clone())
                     .with_radii([Radius::new_ui_points(1.2)]),
             );
+
+            // Искривленные точки тоннеля (как в rail_tuner_2d):
+            if c_z.abs() > 1e-7 {
+                let _ = recording_stream.log(
+                    "lidar/point_cloud_bent",
+                    &Points3D::new(&pts_bent)
+                        .with_colors(colors)
+                        .with_radii([Radius::new_ui_points(1.2)]),
+                );
+            }
 
             // 3D рельсы с ВОССТАНОВЛЕННЫМ реальным положением:
             let _ = recording_stream.log_rail_detection(real_result.as_ref());
