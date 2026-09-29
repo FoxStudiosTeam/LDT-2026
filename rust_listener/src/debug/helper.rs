@@ -159,6 +159,11 @@ pub trait DebugStream {
         &self,
         res: Option<&shared::rail_detection::DetectionResult>,
     ) -> Result<(), AppError>;
+    
+    fn log_ort_detection_3d(
+        &self,
+        res: Option<&shared::rail_ort::DetectionResultOrt>,
+    );
 
     // ─── Визуализация детектора рельсов на 2D карте глубины ───
     fn log_rail_detection_2d(
@@ -821,6 +826,141 @@ impl DebugStream for RecordingStream {
         }
 
         Ok(())
+    }
+
+    /// Визуализация 3D кривых и габарита для RailOrt (золотисто-янтарная цветовая гамма)
+    fn log_ort_detection_3d(
+        &self,
+        res: Option<&shared::rail_ort::DetectionResultOrt>,
+    ) {
+        if let Some(r) = res {
+            // 1. Центральная линия 3D (ярко-золотой)
+            let center_pts: Vec<[f32; 3]> = (0..r.x_curve.len())
+                .map(|i| [r.x_curve[i], r.y_center[i], r.z_center[i]])
+                .collect();
+            let _ = self.log(
+                "tracks_ort/3d/centerline",
+                &LineStrips3D::new([center_pts])
+                    .with_colors([Color::from_rgb(255, 215, 0)])
+                    .with_radii([Radius::new_ui_points(2.5)]),
+            );
+
+            // 2. Левый рельс 3D (янтарный)
+            let left_pts: Vec<[f32; 3]> = (0..r.x_left.len())
+                .map(|i| [r.x_left[i], r.y_left[i], r.z_center[i]])
+                .collect();
+            let _ = self.log(
+                "tracks_ort/3d/left_rail",
+                &LineStrips3D::new([left_pts])
+                    .with_colors([Color::from_rgb(255, 170, 0)])
+                    .with_radii([Radius::new_ui_points(2.5)]),
+            );
+
+            // 3. Правый рельс 3D (кораллово-розовый)
+            let right_pts: Vec<[f32; 3]> = (0..r.x_right.len())
+                .map(|i| [r.x_right[i], r.y_right[i], r.z_center[i]])
+                .collect();
+            let _ = self.log(
+                "tracks_ort/3d/right_rail",
+                &LineStrips3D::new([right_pts])
+                    .with_colors([Color::from_rgb(255, 90, 160)])
+                    .with_radii([Radius::new_ui_points(2.5)]),
+            );
+
+            // 4. Шпалы (светло-песочный)
+            let mut sleepers: Vec<Vec<[f32; 3]>> = Vec::new();
+            for i in (0..r.x_curve.len()).step_by(4) {
+                sleepers.push(vec![
+                    [r.x_left[i], r.y_left[i], r.z_center[i]],
+                    [r.x_right[i], r.y_right[i], r.z_center[i]],
+                ]);
+            }
+            let _ = self.log(
+                "tracks_ort/3d/sleepers",
+                &LineStrips3D::new(sleepers)
+                    .with_colors([Color::from_rgb(220, 200, 160)])
+                    .with_radii([Radius::new_ui_points(1.2)]),
+            );
+
+            // 5. Детектированные точки (Центр, Левый и Правый рельс)
+            let pts_c: Vec<[f32; 3]> = r
+                .points
+                .iter()
+                .map(|p| [p.x_center, p.y_center, p.z_center])
+                .collect();
+            let _ = self.log(
+                "tracks_ort/3d/points_center",
+                &Points3D::new(pts_c)
+                    .with_colors([Color::from_rgb(255, 255, 50)])
+                    .with_radii([Radius::new_ui_points(2.2)]),
+            );
+
+            let pts_l: Vec<[f32; 3]> = r
+                .points
+                .iter()
+                .map(|p| [p.x_left, p.y_left, p.z_left])
+                .collect();
+            let _ = self.log(
+                "tracks_ort/3d/points_left",
+                &Points3D::new(pts_l)
+                    .with_colors([Color::from_rgb(255, 170, 0)])
+                    .with_radii([Radius::new_ui_points(2.5)]),
+            );
+
+            let pts_r: Vec<[f32; 3]> = r
+                .points
+                .iter()
+                .map(|p| [p.x_right, p.y_right, p.z_right])
+                .collect();
+            let _ = self.log(
+                "tracks_ort/3d/points_right",
+                &Points3D::new(pts_r)
+                    .with_colors([Color::from_rgb(255, 90, 160)])
+                    .with_radii([Radius::new_ui_points(2.5)]),
+            );
+
+            // 6. Экстраполяция (фиолетовый)
+            if !r.x_ext.is_empty() {
+                let ext_c: Vec<[f32; 3]> = (0..r.x_ext.len())
+                    .map(|i| [r.x_ext[i], r.y_ext[i], r.z_ext[i]])
+                    .collect();
+                let _ = self.log(
+                    "tracks_ort/3d/extrapolation_center",
+                    &LineStrips3D::new([ext_c])
+                        .with_colors([Color::from_rgb(220, 50, 220)])
+                        .with_radii([Radius::new_ui_points(2.0)]),
+                );
+            }
+
+            // 7. Shapecast / Boxcast проволочный габарит
+            let shapecast_3d = r.shapecast_wireframe_3d();
+            if !shapecast_3d.is_empty() {
+                let col = r.shapecast_color();
+                let _ = self.log(
+                    "tracks_ort/3d/shapecast",
+                    &LineStrips3D::new(shapecast_3d)
+                        .with_colors([Color::from_rgb(col[0], col[1], col[2])])
+                        .with_radii([Radius::new_ui_points(1.2)]),
+                );
+            }
+        } else {
+            let _ = self.log(
+                "tracks_ort/3d/centerline",
+                &LineStrips3D::new([] as [Vec<[f32; 3]>; 0]),
+            );
+            let _ = self.log(
+                "tracks_ort/3d/left_rail",
+                &LineStrips3D::new([] as [Vec<[f32; 3]>; 0]),
+            );
+            let _ = self.log(
+                "tracks_ort/3d/right_rail",
+                &LineStrips3D::new([] as [Vec<[f32; 3]>; 0]),
+            );
+            let _ = self.log(
+                "tracks_ort/3d/shapecast",
+                &LineStrips3D::new([] as [Vec<[f32; 3]>; 0]),
+            );
+        }
     }
 
     fn log_rail_detection_2d(

@@ -31,6 +31,13 @@ path = "src/bin/test_error_listener.rs"
 name = "diagnose_detector"
 path = "src/bin/diagnose_detector.rs"
 
+[[bin]]
+name = "rail_live_tuner"
+path = "src/bin/rail_live_tuner.rs"
+
+[profile.release]
+debug = true
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
@@ -38,6 +45,7 @@ anyhow = "1"
 rerun = "0.37.2"
 eframe = "0.36.2"
 egui = "0.36.2"
+rfd = "0.15"
 image = { version = "0.25", default-features = false, features = ["png"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 cdr = "0.2"

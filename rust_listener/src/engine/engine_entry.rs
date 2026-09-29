@@ -1,17 +1,18 @@
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
-use rerun::{Color, Points3D, Radius, RecordingStream, TimeCell};
+use rerun::{Color, LineStrips3D, Points3D, Radius, RecordingStream, TimeCell};
 use ros2_data_extraction::PointCloudStream;
 use serde_json::json;
 use shared::error::AppError;
 use shared::rail_detection::{LidarGeometry, RailTrackDetector};
-use shared::range_image::{RangeImage, turbo_rgb};
+use shared::rail_ort::{RailOrtConfig, RailOrtDetector};
+use shared::range_image::{turbo_rgb, RangeImage};
 use shared::types::{AppPointCloud, ProcessingQueue};
 use tracing::*;
 
-use crate::ENV;
 use crate::debug::helper::DebugStream;
+use crate::ENV;
 
 pub async fn entry(
     mut point_cloud_stream: PointCloudStream,
@@ -19,10 +20,15 @@ pub async fn entry(
     point_cloud: Arc<RwLock<AppPointCloud>>,
 ) -> Result<(), AppError> {
     let recording_stream = Arc::new(recording_stream);
-    let error_publisher = point_cloud_stream.error_publisher();
 
     let initial_detector: RailTrackDetector = ENV.DETECTION_PRESET.into();
     let rail_detector = Arc::new(Mutex::new(initial_detector));
+
+    // Параллельный ортографический детектор по кольцам и интенсивности (RailOrt)
+    let ort_detector = Arc::new(Mutex::new(RailOrtDetector::new(
+        LidarGeometry::default(),
+        RailOrtConfig::default(),
+    )));
 
     let mut processed_frames: u64 = 0;
     let mut begin_lock = ENV.BEGIN_TIMESTAMP > 0;
@@ -60,6 +66,7 @@ pub async fn entry(
         let point_cloud_lock = point_cloud.clone();
         let recording_stream = recording_stream.clone();
         let rail_detector_lock = rail_detector.clone();
+        let ort_detector_lock = ort_detector.clone();
 
         let err_payload = tokio::task::spawn_blocking(move || -> Option<String> {
             let frame_start = Instant::now();
@@ -72,9 +79,7 @@ pub async fn entry(
             }
             let swap_dur = swap_start.elapsed();
 
-            // 2. строим RangeImage и производим детекцию рельсов с прямым доступом
-            //    к облаку точек (zero-copy) ПОД READ-ЛОКОМ, после чего НЕМЕДЛЕННО освобождаем лок.
-            let compute_start = std::time::Instant::now();
+            // 2. Строим RangeImage и производим параллельную детекцию двух методов ПОД READ-ЛОКОМ
             let (
                 timestamp_ns,
                 crop_raw,
@@ -82,17 +87,16 @@ pub async fn entry(
                 geo,
                 c_z,
                 bent_result,
+                ort_result,
                 warp_dur,
                 detect_dur,
+                ort_dur,
+                t_rerun
             ) = {
                 let point_cloud = point_cloud_lock.read().expect("Mutex poisoned");
                 let number = ProcessingQueue::READ;
                 let timestamp_ns: i64 = point_cloud.timestamp[number];
-                let ri = RangeImage::from_pandar128_organized(
-                    &point_cloud,
-                    number,
-                    1,
-                );
+                let ri = RangeImage::from_pandar128_organized(&point_cloud, number, 1);
 
                 // Подготовка 2D карты глубины (Range Image) и геометрии лидара
                 let crop_raw = ri.crop_fov(ENV.PREVIEW_FOV_X_DEG);
@@ -152,44 +156,92 @@ pub async fn entry(
             }
             let restore_dur = t_restore.elapsed();
 
-            // 4. Отправка в Rerun
-            let t_rerun = Instant::now();
-            recording_stream.set_time("ros_time", TimeCell::from_duration_nanos(timestamp_ns));
-            recording_stream.set_time_sequence("frame", frame_id as i64);
+                // 4. Отправка в Rerun
+                let t_rerun = Instant::now();
+                recording_stream.set_time("ros_time", TimeCell::from_duration_nanos(timestamp_ns));
+                recording_stream.set_time_sequence("frame", frame_id as i64);
 
-            // ─── ОКНО 1: 3D сцена ───
-            let total = geo.height * geo.width;
-            let mut pts_real = Vec::with_capacity(total);
-            let mut pts_bent = Vec::with_capacity(total);
-            let mut colors = Vec::with_capacity(total);
+                // ─── ОКНО 1: 3D сцена перспективного вида ───
+                let total = geo.height * geo.width;
+                let mut pts_real = Vec::with_capacity(total);
+                let mut pts_bent = Vec::with_capacity(total);
+                let mut colors = Vec::with_capacity(total);
 
-            for row in 0..geo.height {
-                let r_off = row * geo.width;
-                for col in 0..geo.width {
-                    let r = crop_raw.data[r_off + col];
-                    if r > 0.5 && r < 200.0 {
-                        let (x, y, z) = geo.row_col_range_to_xyz(row, col, r);
-                        pts_real.push([x, y, z]);
-                        let z_bent = z + c_z * x * x;
-                        pts_bent.push([x, y, z_bent]);
+                for row in 0..geo.height {
+                    let r_off = row * geo.width;
+                    for col in 0..geo.width {
+                        let r = crop_raw.data[r_off + col];
+                        if r > 0.5 && r < 200.0 {
+                            let (x, y, z) = geo.get_point_xyz(&crop_raw, Some((&point_cloud, number)), row, col, 0.0);
+                            pts_real.push([x, y, z]);
+                            let z_bent = z + c_z * x * x;
+                            pts_bent.push([x, y, z_bent]);
 
-                        let norm = (r / 200.0).clamp(0.0, 1.0);
-                        let c = turbo_rgb(norm);
-                        colors.push(Color::from_rgb(c[0], c[1], c[2]));
+                            let norm = (r / 200.0).clamp(0.0, 1.0);
+                            let c = turbo_rgb(norm);
+                            colors.push(Color::from_rgb(c[0], c[1], c[2]));
+                        }
                     }
                 }
+
+                // Истинные физические точки лидара в реальном мире:
+                let _ = recording_stream.log(
+                    "lidar/point_cloud",
+                    &Points3D::new(&pts_real)
+                        .with_colors(colors.clone())
+                        .with_radii([Radius::new_ui_points(1.2)]),
+                );
+
+                // ─── ОКНО 2: 3D сцена ортографического вида (Обрезанный тоннель) ───
+                let total_cropped: usize = cropped_tunnel.iter().map(|r| r.len()).sum();
+                let mut pts_tunnel = Vec::with_capacity(total_cropped);
+                let mut colors_tunnel = Vec::with_capacity(total_cropped);
+
+                for pt in cropped_tunnel.iter().flatten() {
+                    let (x, y, z, intensity) = pt.get_xyzi(&point_cloud, number);
+                    pts_tunnel.push([-y, x, z]);
+
+                    // Нормализация интенсивности (0..100 для диффузных поверхностей тоннеля)
+                    let norm = (intensity / 100.0).clamp(0.0, 1.0);
+                    let gray = (norm.sqrt() * 255.0) as u8;
+                    colors_tunnel.push(Color::from_rgb(gray, gray, gray));
+                }
+
+                let _ = recording_stream.log(
+                    "lidar/cropped_tunnel",
+                    &Points3D::new(&pts_tunnel)
+                        .with_colors(colors_tunnel)
+                        .with_radii([Radius::new_ui_points(1.2)]),
+                );
+
+                (
+                    timestamp_ns,
+                    ri,
+                    crop_raw,
+                    active_ri,
+                    geo,
+                    c_z,
+                    bent_result,
+                    ort_result,
+                    warp_dur,
+                    detect_dur,
+                    ort_dur,
+                    t_rerun
+                )
+            }; // <--- read-lock освобожден!
+
+            // 3. Восстановление истинных координат для Rerun и 3D сцены: Z_real = Z_bent - c_z * X^2
+            let mut real_result = bent_result.clone();
+            let ort_res = ort_result.clone();
+            if let Some(ref mut r) = real_result {
+                r.restore_real_coordinates();
             }
 
-            // Истинные физические точки лидара в реальном мире:
-            let _ = recording_stream.log(
-                "lidar/point_cloud",
-                &Points3D::new(&pts_real)
-                    .with_colors(colors.clone())
-                    .with_radii([Radius::new_ui_points(1.2)]),
-            );
-
-            // 3D рельсы с ВОССТАНОВЛЕННЫМ реальным положением:
+            // 3D рельсы МЕТОД 1: RangeImage (зеленый/бирюзовый/оранжевый)
             let _ = recording_stream.log_rail_detection(real_result.as_ref());
+
+            // 3D рельсы МЕТОД 2: RailOrt (золотистый/янтарный/розовый)
+            let _ = recording_stream.log_ort_detection_3d(ort_res.as_ref());
 
             // ─── ОКНО 2: 2D Карта глубины, интенсивности, путей и Shapecast ───
             let _ = recording_stream.log_rail_detection_2d(&active_ri, &geo, bent_result.as_ref());
@@ -282,7 +334,6 @@ pub async fn entry(
                         (" | 🟢 CLEAR TRACK".to_string(), None)
                     };
 
-
                     (desc, err_json)
                 }
                 None => {
@@ -304,18 +355,27 @@ pub async fn entry(
                 None => "-".to_string(),
             };
 
+            let ort_str = match &ort_res {
+                Some(r) => format!(
+                    "gauge: {:.3}m, R: {:.1}m ({})",
+                    r.gauge, r.turn_radius, r.turn_direction
+                ),
+                None => "NONE".to_string(),
+            };
+
             info!(
-                "[FRAME {frame_id}] ⏱️ Pipeline: {:.2}ms (swap: {:.2}ms, warp: {:.2}ms, detect: {:.2}ms, rail: {:.2}ms, obs: {:.2}ms, restore: {:.2}ms, rerun: {:.2}ms) | gauge: {:.3}m, radius: {}, conf: {:.1}%{}",
+                "[FRAME {frame_id}] ⏱️ Pipeline: {:.2}ms (swap: {:.2}ms, warp: {:.2}ms, det_ri: {:.2}ms, det_ort: {:.2}ms, rail: {:.2}ms, obs: {:.2}ms, rerun: {:.2}ms) | RangeImg: [gauge: {:.3}m, radius: {}] | RailOrt: [{}] | conf: {:.1}%{}",
                 total_dur.as_secs_f64() * 1000.0,
                 swap_dur.as_secs_f64() * 1000.0,
                 warp_dur.as_secs_f64() * 1000.0,
                 detect_dur.as_secs_f64() * 1000.0,
+                ort_dur.as_secs_f64() * 1000.0,
                 rail_ms,
                 obs_ms,
-                restore_dur.as_secs_f64() * 1000.0,
                 rerun_dur.as_secs_f64() * 1000.0,
                 real_result.as_ref().map(|r| r.gauge).unwrap_or(0.0),
                 radius_str,
+                ort_str,
                 real_result.as_ref().map(|r| r.confidence * 100.0).unwrap_or(0.0),
                 obs_str
             );
@@ -326,20 +386,10 @@ pub async fn entry(
         .unwrap();
 
         // 10. Асинхронная публикация в топик ROS2 об ошибках/препятствиях
-        if let Some(payload_str) = err_payload {
-            let msg = shared::transport::StringMsg::new(payload_str);
-            if let Err(e) = error_publisher.async_publish(msg).await {
-                error!(
-                    "[ROS2] Ошибка публикации в топик {}: {:?}",
-                    ENV.ROS_ERROR_TOPIC, e
-                );
-            } else {
-                info!(
-                    "📢 [ROS2 ALERT] Опубликовано в топик {} (кадр {})",
-                    ENV.ROS_ERROR_TOPIC, frame_id
-                );
-            }
+        if let Some(payload) = err_payload {
+            point_cloud_stream.publish_error(payload);
         }
     }
+
     Ok(())
 }
