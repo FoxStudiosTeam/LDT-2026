@@ -22,7 +22,7 @@ services:
     command: >
       bash -c "
         echo '► [DATASET] Поехали!' &&
-        ros2 bag play /app/dataset/cloud_with_fake_obj --loop --read-ahead-queue-size 30
+        ros2 bag play /app/dataset --loop --read-ahead-queue-size 30
       "
   ros2_stream_player:
     image: ghcr.io/foxstudiosteam/ldt-2026/ros2_stream_player:latest

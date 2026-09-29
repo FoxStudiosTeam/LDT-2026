@@ -4,7 +4,7 @@ use crate::error::{AppError, ErrCtx};
 use crate::types::{AppPointCloud, CloudStats, ProcessingQueue, is_zero_point};
 use rerun::blueprint::{Blueprint, BlueprintActivation, Horizontal, Spatial2DView, Spatial3DView};
 use rerun::{
-    Boxes2D, Boxes3D, Color, DepthImage, LineStrips2D, LineStrips3D, Points2D, Points3D, Radius,
+    Boxes2D, Boxes3D, Color, LineStrips2D, LineStrips3D, Points2D, Points3D, Radius,
     RecordingStream,
 };
 
@@ -260,7 +260,7 @@ impl DebugStream for RecordingStream {
     /// Логируем отладочные оверлеи
     fn log_debug_overlays(
         &self,
-        point_cloud: &AppPointCloud,
+        _point_cloud: &AppPointCloud,
         stats: &CloudStats,
     ) -> Result<(), AppError> {
         self.log_debug_centroid(stats)?;

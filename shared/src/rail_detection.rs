@@ -2274,7 +2274,7 @@ mod tests {
         let poly_y = [0.0_f32, 0.0_f32, 0.0_f32];
         let poly_z = [0.0_f32, 0.0_f32];
 
-        let mut res = DetectionResult {
+        let res = DetectionResult {
             frame_idx: 0,
             points: Vec::new(),
             gauge: 1.52,

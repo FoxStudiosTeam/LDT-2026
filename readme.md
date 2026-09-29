@@ -2,6 +2,20 @@
 
 Высокопроизводительный программный комплекс на базе **Rust** и **ROS 2 Humble** для миллисекундного обнаружения рельсовой колеи, аналитического моделирования геометрии пути и выявления критических препятствий по данным 128-лучевого лидара (**Hesai Pandar128**).
 
+
+---
+
+# (временно) Запуск
+1) Поместите датасет в папку /dataset
+2) Поменяйте volumes 
+1) docker compose up --build --
+3) Измените кома
+docker run --rm -v bag_data:/to -v "${PWD}/dataset/doubleT_obstacle:/from:ro" alpine sh -c "mkdir -p /to/doubleT_obstacle && cp -rv /from/* /to/doubleT_obstacle/"
+
+
+
+
+
 ---
 
 ## Содержание ⚠️
