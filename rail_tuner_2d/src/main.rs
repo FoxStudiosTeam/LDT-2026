@@ -3096,11 +3096,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let app = RailTuner2DApp::new(available_tracks, initial_track_idx, dataset, rec);
+
+    let win_w: f32 = std::env::var("WINDOW_WIDTH")
+        .or_else(|_| std::env::var("SCREEN_WIDTH"))
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1600.0);
+
+    let win_h: f32 = std::env::var("WINDOW_HEIGHT")
+        .or_else(|_| std::env::var("SCREEN_HEIGHT"))
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(900.0);
+
+    let is_maximized: bool = std::env::var("WINDOW_MAXIMIZED")
+        .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([win_w, win_h])
+        .with_position([0.0, 0.0])
+        .with_min_inner_size([800.0, 600.0])
+        .with_title("Rail Tuner 2D — LiDAR Track Extrapolation");
+
+    if is_maximized {
+        viewport = viewport.with_maximized(true);
+    }
+
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1200.0, 800.0])
-            .with_min_inner_size([800.0, 600.0])
-            .with_title("Rail Tuner 2D — LiDAR Track Extrapolation"),
+        viewport,
         ..Default::default()
     };
 

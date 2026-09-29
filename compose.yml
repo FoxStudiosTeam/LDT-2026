@@ -96,6 +96,9 @@ services:
       - RERUN_URL=rerun+http://host.docker.internal:9876/proxy
       - SCREEN_WIDTH=1600
       - SCREEN_HEIGHT=900
+      - WINDOW_WIDTH=1600
+      - WINDOW_HEIGHT=900
+      - WINDOW_MAXIMIZED=false
       - XDG_RUNTIME_DIR=/tmp/runtime-root
       - WINIT_UNIX_BACKEND=x11
 
