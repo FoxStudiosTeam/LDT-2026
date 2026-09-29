@@ -55,8 +55,7 @@ ENV CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
 ENV CARGO_PROFILE_RELEASE_STRIP=true
 ENV CARGO_PROFILE_RELEASE_OPT_LEVEL=3
 
-RUN cargo build -p rail_tuner_2d
- #  --release 
+RUN cargo build -p rail_tuner_2d --release 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 📦 РЕАЛЬНЫЙ ИСХОДНЫЙ КОД

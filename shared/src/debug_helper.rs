@@ -714,17 +714,7 @@ impl DebugStream for RecordingStream {
 
             // 7. Obstacles in 3D (Boxes3D)
             if !r.obstacles.is_empty() {
-                let centers: Vec<[f32; 3]> = r
-                    .obstacles
-                    .iter()
-                    .map(|o| {
-                        [
-                            (o.bbox_3d_min[0] + o.bbox_3d_max[0]) * 0.5,
-                            (o.bbox_3d_min[1] + o.bbox_3d_max[1]) * 0.5,
-                            (o.bbox_3d_min[2] + o.bbox_3d_max[2]) * 0.5,
-                        ]
-                    })
-                    .collect();
+                let mins: Vec<[f32; 3]> = r.obstacles.iter().map(|o| o.bbox_3d_min).collect();
                 let sizes: Vec<[f32; 3]> = r.obstacles.iter().map(|o| o.size_m).collect();
                 let colors: Vec<Color> = r
                     .obstacles
@@ -759,7 +749,7 @@ impl DebugStream for RecordingStream {
 
                 self.log(
                     "world/tracks/obstacles",
-                    &Boxes3D::from_centers_and_sizes(centers, sizes)
+                    &Boxes3D::from_mins_and_sizes(mins, sizes)
                         .with_colors(colors)
                         .with_labels(labels),
                 )
