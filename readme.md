@@ -3,7 +3,6 @@
 [![Deploy GHCR](https://github.com/FoxStudiosTeam/LDT-2026/actions/workflows/deploy-ghcr.yml/badge.svg)](https://github.com/FoxStudiosTeam/LDT-2026/actions/workflows/deploy-ghcr.yml)
 [![Release Binary](https://github.com/FoxStudiosTeam/LDT-2026/actions/workflows/release-binary.yml/badge.svg)](https://github.com/FoxStudiosTeam/LDT-2026/actions/workflows/release-binary.yml)
 [![GitHub release](https://img.shields.io/github/v/release/FoxStudiosTeam/LDT-2026)](https://github.com/FoxStudiosTeam/LDT-2026/releases/latest)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Rust](https://img.shields.io/badge/Rust-2024-orange?logo=rust)
 ![ROS2](https://img.shields.io/badge/ROS%202-Humble-22314E?logo=ros)
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey)
