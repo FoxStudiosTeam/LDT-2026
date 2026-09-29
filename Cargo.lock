@@ -9956,6 +9956,7 @@ dependencies = [
  "kaiv_utils",
  "rerun",
  "ros2_data_extraction",
+ "serde",
  "serde_json",
  "shared",
  "tokio",
