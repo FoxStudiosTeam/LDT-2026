@@ -59,6 +59,16 @@ make up-58m    # Пресет QuietPlus (расширенная перспект
 🌐 **Веб-визуализатор Rerun (без установки на ПК):** **[http://localhost:9090](http://localhost:9090)**  
 *(3D неискривлённое облако Pandar128, рельсовые нити, полиномы, динамический габарит Boxcast3D и препятствия)*
 
+> [!TIP]
+> **При запуске на удалённом сервере / стенде жюри (`<SERVER_IP>`):**
+> - **Rerun Web Viewer**: `http://<SERVER_IP>:9090/?url=rerun+http://<SERVER_IP>:9876/proxy`  
+>   *(Важно: IP сервера указывается в обоих местах — для загрузки веб-интерфейса и для gRPC-потока данных).*
+> - **Веб-панель тюнера**: `http://<SERVER_IP>:6080`
+> - **Настройка Firewall (UFW на Linux)**: если на удалённом сервере включен фаервол, разрешите порты входящего TCP-трафика:
+>   ```bash
+>   sudo ufw allow 9090/tcp && sudo ufw allow 9876/tcp && sudo ufw allow 6080/tcp
+>   ```
+
 **2. Запуск слушателя алертов топика `/rail/error` (в отдельном терминале):**
 ```bash
 make listen
@@ -396,21 +406,23 @@ docker compose run --rm error_listener
 
 В соответствии с регламентом демонстрации на предоставленном лидарном bag-файле:
 
-1. **Запуск визуализатора на хосте**:
+1. **Запуск детектора и веб-визуализатора**:
    ```bash
-   rerun --serve
+   make up
+   # Или с выбором конкретного пресета:
+   make up-50m    # Quiet (стабильный режим до 50 м)
+   make up-58m    # QuietPlus (расширенный режим до 58 м)
    ```
-   Откройте браузер по адресу `http://localhost:9876` или локальный Rerun GUI.
+   Откройте веб-интерфейс визуализатора в браузере: **`http://localhost:9090`** (при удалённом запуске: `http://<SERVER_IP>:9090/?url=rerun+http://<SERVER_IP>:9876/proxy`). Установка ПО на компьютер жюри не требуется!
 
-2. **Запуск решения в Docker**:
+2. **Запуск слушателя алертов `/rail/error`** (в отдельном терминале):
    ```bash
-   docker compose up -d rust_viewer
-   docker compose run --rm rust_error_listener
+   make listen
    ```
 
 3. **Воспроизведение предоставленного bag-файла**:
    ```bash
-   docker compose up ros2_dataset_player
+   make play BAG=doubleT_obstacle
    ```
 
 4. **Демонстрация результатов экспертам**:
