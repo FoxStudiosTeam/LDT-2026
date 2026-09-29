@@ -144,7 +144,7 @@ services:
     env_file:
       - .env
     environment:
-      - RERUN_URL=rerun+http://host.docker.internal:9876/proxy
+      - RERUN_URL=${RERUN_URL:-}
       - SCREEN_WIDTH=1600
       - SCREEN_HEIGHT=900
       - WINDOW_WIDTH=1600
