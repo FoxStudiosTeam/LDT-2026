@@ -439,7 +439,7 @@ docker compose run --rm error_listener
 
 | Параметр | Значение по умолчанию | Описание |
 | :--- | :--- | :--- |
-| `ROS_DOMAIN_ID` | `42` | Номер домена ROS 2 для изоляции трафика DDS |
+| `ROS_DOMAIN_ID` | `0` | Номер домена ROS 2 для изоляции трафика DDS |
 | `ROS_ERROR_TOPIC` | `/rail/error` | Топик публикации сообщений об инцидентах |
 | `RERUN_URL` | `rerun+http://host.docker.internal:9876/proxy` | URL для передачи телеметрии в визуализатор |
 | `PREVIEW_FOV_X_DEG` | `40.0` | Горизонтальный сектор обзора лидара (градусы) |
