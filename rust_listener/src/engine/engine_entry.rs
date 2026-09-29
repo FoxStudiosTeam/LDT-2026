@@ -178,13 +178,6 @@ pub async fn entry(
             let _ = recording_stream.log_rail_detection_2d(&active_ri, &geo, bent_result.as_ref());
             let rerun_dur = t_rerun.elapsed();
 
-            // 5. Сохранение сырых кадров без интерполяции для прототипирования на Python
-            if !ENV.RENDER_PATH.is_empty() {
-                let _ = std::fs::create_dir_all(&ENV.RENDER_PATH);
-                let file_path = format!("{}/frame_{frame_id:06}.npy", ENV.RENDER_PATH);
-                let _ = crop_raw.save_npy(&file_path);
-            }
-
             // 6. Формирование логов профилирования и статуса в консоль
             let rail_ms = real_result.as_ref().map(|r| r.timing_rail_ms).unwrap_or(0.0);
             let obs_ms = real_result.as_ref().map(|r| r.timing_obstacles_ms).unwrap_or(0.0);

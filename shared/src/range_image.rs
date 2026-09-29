@@ -4,14 +4,7 @@ use rerun::DepthImage;
 
 const PANDAR128_CHANNELS: usize = 128;
 
-// Вертикальные интервалы между каналами.
-const PANDAR128_VERTICAL_STEP_EDGE_DEG: f32 = 1.0;
-const PANDAR128_VERTICAL_STEP_STANDARD_DEG: f32 = 0.5;
 const PANDAR128_VERTICAL_STEP_HIGH_RES_DEG: f32 = 0.125;
-
-// Границы high-resolution области.
-const PANDAR128_HR_FIRST_CHANNEL: usize = 26;
-const PANDAR128_HR_LAST_CHANNEL: usize = 89;
 
 // Вертикальный FOV.
 const PANDAR128_FOV_UP_DEG: f32 = 15.0;
@@ -46,10 +39,10 @@ pub struct RangeImageConfig {
 impl Default for RangeImageConfig {
     fn default() -> Self {
         Self {
-            width: 3600,
+            width: PANDAR128_RANGE_IMAGE_WIDTH,
             height: (VERTICAL_FOV_DEG / PANDAR128_VERTICAL_STEP_HIGH_RES_DEG) as usize + 1,
-            fov_up_rad: 15.0_f32.to_radians(),
-            fov_down_rad: -25.0_f32.to_radians(),
+            fov_up_rad: PANDAR128_FOV_UP_DEG.to_radians(),
+            fov_down_rad: PANDAR128_FOV_DOWN_DEG.to_radians(),
             min_range_m: 0.5,
             max_range_m: 250.0,
         }
@@ -816,96 +809,6 @@ impl RangeImage {
         }
     }
 
-    /// Сохранение матрицы дальности (и интенсивности, если доступна) в стандартном формате NumPy `.npy` (v1.0, float32, C-order).
-    /// Если доступна интенсивность, сохраняется 3D тензор формы (height, width, 2),
-    /// где [:, :, 0] — range (дальность в метрах), а [:, :, 1] — intensity (интенсивность).
-    /// Если интенсивности нет — стандартная 2D матрица формы (height, width).
-    pub fn save_npy<P: AsRef<std::path::Path>>(&self, path: P) -> std::io::Result<()> {
-        use std::io::Write;
-        let mut file = std::fs::File::create(path)?;
-        // Magic NPY v1.0
-        file.write_all(b"\x93NUMPY\x01\x00")?;
-
-        let has_intensity = !self.intensity.is_empty() && self.intensity.len() == self.data.len();
-        let dict = if has_intensity {
-            format!(
-                "{{'descr': '<f4', 'fortran_order': False, 'shape': ({}, {}, 2)}}",
-                self.height, self.width
-            )
-        } else {
-            format!(
-                "{{'descr': '<f4', 'fortran_order': False, 'shape': ({}, {})}}",
-                self.height, self.width
-            )
-        };
-        let prefix_len = 10 + dict.len() + 1; // 10 bytes prefix + dict + '\n'
-        let pad_len = ((prefix_len + 63) / 64) * 64 - prefix_len;
-        let mut header = dict;
-        for _ in 0..pad_len {
-            header.push(' ');
-        }
-        header.push('\n');
-        let total_header_len = header.len() as u16;
-        file.write_all(&total_header_len.to_le_bytes())?;
-        file.write_all(header.as_bytes())?;
-
-        if has_intensity {
-            let mut interleaved = Vec::with_capacity(self.data.len() * 2);
-            for i in 0..self.data.len() {
-                interleaved.push(self.data[i]);
-                interleaved.push(self.intensity[i]);
-            }
-            let raw_bytes: &[u8] = unsafe {
-                std::slice::from_raw_parts(
-                    interleaved.as_ptr() as *const u8,
-                    interleaved.len() * std::mem::size_of::<f32>(),
-                )
-            };
-            file.write_all(raw_bytes)?;
-        } else {
-            let raw_bytes: &[u8] = unsafe {
-                std::slice::from_raw_parts(
-                    self.data.as_ptr() as *const u8,
-                    self.data.len() * std::mem::size_of::<f32>(),
-                )
-            };
-            file.write_all(raw_bytes)?;
-        }
-        Ok(())
-    }
-
-    /// Сохранение отдельной 2D матрицы интенсивности в `.npy` (v1.0, float32).
-    pub fn save_intensity_npy<P: AsRef<std::path::Path>>(&self, path: P) -> std::io::Result<()> {
-        use std::io::Write;
-        if self.intensity.is_empty() {
-            return Ok(());
-        }
-        let mut file = std::fs::File::create(path)?;
-        file.write_all(b"\x93NUMPY\x01\x00")?;
-        let dict = format!(
-            "{{'descr': '<f4', 'fortran_order': False, 'shape': ({}, {})}}",
-            self.height, self.width
-        );
-        let prefix_len = 10 + dict.len() + 1;
-        let pad_len = ((prefix_len + 63) / 64) * 64 - prefix_len;
-        let mut header = dict;
-        for _ in 0..pad_len {
-            header.push(' ');
-        }
-        header.push('\n');
-        let total_header_len = header.len() as u16;
-        file.write_all(&total_header_len.to_le_bytes())?;
-        file.write_all(header.as_bytes())?;
-        let raw_bytes: &[u8] = unsafe {
-            std::slice::from_raw_parts(
-                self.intensity.as_ptr() as *const u8,
-                self.intensity.len() * std::mem::size_of::<f32>(),
-            )
-        };
-        file.write_all(raw_bytes)?;
-        Ok(())
-    }
-
     /// Искривляет диапазонное изображение и карту интенсивности вдоль оси Z квадратично:
     /// Z' = Z + upward_curvature * X^2
     /// Переносит точки в искривленное пространство координат, выпрямляя профиль полотна
@@ -1187,7 +1090,7 @@ mod tests {
     }
 
     #[test]
-    fn test_crop_fov_and_save_npy() {
+    fn test_crop_fov() {
         let mut img = RangeImage::new(360, 10);
         // Заполним центр (col = 180, row = 5) значением 12.5м
         img.set(5, 180, 12.5);
@@ -1198,16 +1101,6 @@ mod tests {
         assert_eq!(cropped.width, 36);
         // Центр обрезанного изображения (col = 18) должен иметь 12.5м
         assert_eq!(cropped.get(5, 18), 12.5);
-
-        // Тестируем запись в .npy во временный файл
-        let tmp_path = std::env::temp_dir().join("test_frame.npy");
-        cropped.save_npy(&tmp_path).expect("Failed to save npy");
-        assert!(tmp_path.exists());
-
-        // Проверяем заголовок файла
-        let bytes = std::fs::read(&tmp_path).expect("Failed to read npy");
-        assert_eq!(&bytes[..6], b"\x93NUMPY");
-        let _ = std::fs::remove_file(&tmp_path);
     }
 
     #[test]

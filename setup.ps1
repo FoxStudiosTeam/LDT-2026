@@ -1,1 +1,0 @@
-./ros2/local_setup.ps1

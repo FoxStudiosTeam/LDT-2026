@@ -13,11 +13,6 @@ target
 **/*.rs.bk
 Cargo.lock
 
-# --- CMake & Нативные сборки ---
-# Если ты запускал cmake вручную внутри cuda-lib/
-/cuda-lib/build/
-/cuda-lib/.cmake/
-
 # Временные файлы компиляции (на случай, если запустил сборку в корне)
 /build/
 CMakeFiles/

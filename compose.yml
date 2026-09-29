@@ -21,7 +21,7 @@ services:
       - bag_data:/app/dataset:ro
     command: >
       bash -c "
-        echo '► [DATASET] Поехали!' &&
+        echo '► [DATASET] Старт проигрывания датасета' &&
         ros2 bag play /app/dataset --loop --read-ahead-queue-size 30
       "
   ros2_stream_player:
@@ -54,10 +54,6 @@ services:
     shm_size: '2gb'
     env_file:
       - .env
-    cap_add:
-      - NET_ADMIN
-    volumes:
-      - ./frames:/frames
     ulimits:
       nofile:
         soft: 1024
@@ -65,7 +61,7 @@ services:
     environment:
       - ROS_LOCALHOST_ONLY=1
       - ROS_ERROR_TOPIC=/rail/error
-      - RERUN_URL=rerun+http://host.docker.internal:9876/proxy
+      - RERUN_URL=rerun+http://127.0.0.1:9876/proxy
     deploy:
       resources:
         reservations:
@@ -73,6 +69,20 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+
+  # 3. Встроенный Rerun Web Viewer (3D/2D визуализация прямо в браузере: http://127.0.0.1:9090/?url=rerun+http://localhost:9876/proxy)
+  # Позволяет жюри и проверяющим просматривать облако точек, рельсы и препятствия без установки Rerun на хост
+  rerun_viewer:
+    build:
+      context: .
+      dockerfile: ./rerun_viewer/Dockerfile
+    container_name: rerun_viewer
+    ports:
+      - "9090:9090"
+      - "9876:9876"
+    environment:
+      - RERUN_LOG=info
+    restart: unless-stopped
 
   # 4. Интерактивный 2D Range Image тюнер детектора рельсов (egui Web Panel)
   # Веб-панель доступна в любом браузере: http://localhost:6080
@@ -127,4 +137,3 @@ services:
 volumes:
   bag_data:
     external: true
-

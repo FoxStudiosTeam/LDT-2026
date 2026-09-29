@@ -783,18 +783,6 @@ impl RailTrackDetector {
         )
     }
 
-    /// Analyzes a single range frame and returns DetectionResult or None if no track is found.
-    /// If point cloud is provided, points are extracted directly by indices.
-    /// Falls back to spherical trigonometry if point cloud is None.
-    pub fn detect(
-        &mut self,
-        frame: &RangeImage,
-        cloud: Option<(&AppPointCloud, ProcessingQueue)>,
-        frame_idx: usize,
-    ) -> Option<DetectionResult> {
-        self.detect_with_raw(frame, None, cloud, frame_idx)
-    }
-
     /// Analyzes range image for track detection (using active_frame, which may be curvature-warped)
     /// and performs obstacle detection (preferring raw_frame with true physical coordinates if provided).
     pub fn detect_with_raw(
