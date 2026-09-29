@@ -24,6 +24,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -448,6 +449,11 @@ impl FrameDataset {
 
     /// Получает кадр по индексу (сначала из кэша буфера, при cache-miss в режиме стриминга загружает синхронно)
     pub fn get_frame(&self, idx: usize) -> Option<TunerFrame> {
+        // В режиме стриминга всегда обновляем фоновый воркер для упреждающей (prefetch) загрузки
+        if self.is_streaming {
+            self.request_frame(idx);
+        }
+
         // 1. Быстрый поиск в кэше/буфере
         {
             let r = self.frames.read().unwrap();
@@ -456,11 +462,8 @@ impl FrameDataset {
             }
         }
 
-        // 2. В режиме стриминга сообщаем фоновому потоку о новом положении скролла
+        // 2. Синхронно загружаем запрошенный кадр при cache-miss, чтобы не моргать в UI
         if self.is_streaming {
-            self.request_frame(idx);
-
-            // 3. Синхронно загружаем запрошенный кадр при cache-miss, чтобы не моргать в UI
             if let Some(f) = self.load_single_frame(idx) {
                 let mut w = self.frames.write().unwrap();
                 w.insert(idx, f.clone());
@@ -475,11 +478,13 @@ impl FrameDataset {
     /// Оповещает фоновый воркер о текущем воспроизводимом кадре
     pub fn request_frame(&self, idx: usize) {
         if self.is_streaming {
-            self.req_frame_idx.store(idx, Ordering::Relaxed);
-            let (lock, cvar) = &*self.req_notify;
-            if let Ok(mut ready) = lock.lock() {
-                *ready = true;
-                cvar.notify_one();
+            let prev = self.req_frame_idx.swap(idx, Ordering::Relaxed);
+            if prev != idx {
+                let (lock, cvar) = &*self.req_notify;
+                if let Ok(mut ready) = lock.lock() {
+                    *ready = true;
+                    cvar.notify_one();
+                }
             }
         }
     }
@@ -643,19 +648,7 @@ impl FrameDataset {
                     // 1. Очистка старых кадров за пределами активного окна
                     {
                         let mut w = bg_frames.write().unwrap();
-                        if w.len() >= buffer_size {
-                            let to_remove: Vec<usize> = w
-                                .keys()
-                                .filter(|&&k| k < win_start || k >= win_end)
-                                .cloned()
-                                .collect();
-                            for k in to_remove {
-                                w.remove(&k);
-                                if w.len() < buffer_size {
-                                    break;
-                                }
-                            }
-                        }
+                        w.retain(|&k, _| k >= win_start && k < win_end);
                         bg_loaded_count.store(w.len(), Ordering::Relaxed);
                     }
 
@@ -957,19 +950,7 @@ impl FrameDataset {
                     // 1. Очистка старых кадров за пределами окна
                     {
                         let mut w = bg_frames.write().unwrap();
-                        if w.len() >= buffer_size {
-                            let to_remove: Vec<usize> = w
-                                .keys()
-                                .filter(|&&k| k < win_start || k >= win_end)
-                                .cloned()
-                                .collect();
-                            for k in to_remove {
-                                w.remove(&k);
-                                if w.len() < buffer_size {
-                                    break;
-                                }
-                            }
-                        }
+                        w.retain(|&k, _| k >= win_start && k < win_end);
                         bg_loaded_count.store(w.len(), Ordering::Relaxed);
                     }
 
@@ -1562,6 +1543,17 @@ impl PipelineProfiling {
     }
 }
 
+// Данные кадра для фоновой неблокирующей отправки в Rerun
+struct RerunFrameData {
+    frame_idx: usize,
+    pts_real: Vec<[f32; 3]>,
+    colors: Vec<Color>,
+    last_res: Option<DetectionResult>,
+    last_bent_res: Option<DetectionResult>,
+    active_ri: RangeImage,
+    geo: LidarGeometry,
+}
+
 /// Интерактивное приложение RailTuner2D
 pub struct RailTuner2DApp {
     available_tracks: Vec<TrackSource>,
@@ -1625,8 +1617,8 @@ pub struct RailTuner2DApp {
     turn_compression_min_scale: f32,
     turn_compression_max_scale: f32,
 
-    // Rerun
-    rec_stream: Option<RecordingStream>,
+    // Rerun (неблокирующая отправка через фоновый поток)
+    rerun_tx: Option<SyncSender<RerunFrameData>>,
     stream_to_rerun: bool,
 
     // UI state
@@ -1651,6 +1643,31 @@ impl RailTuner2DApp {
         rec_stream: Option<RecordingStream>,
     ) -> Self {
         let detector: RailTrackDetector = DetectionPreset::current().into();
+
+        let rerun_tx = rec_stream.map(|rec| {
+            let (tx, rx) = sync_channel::<RerunFrameData>(1);
+            std::thread::Builder::new()
+                .name("rerun_sender".into())
+                .spawn(move || {
+                    while let Ok(data) = rx.recv() {
+                        rec.set_time_sequence("frame", data.frame_idx as i64);
+                        let _ = rec.log(
+                            "world/point_cloud",
+                            &Points3D::new(&data.pts_real)
+                                .with_colors(data.colors)
+                                .with_radii([Radius::new_ui_points(1.2)]),
+                        );
+                        let _ = rec.log_rail_detection(data.last_res.as_ref());
+                        let _ = rec.log_rail_detection_2d(
+                            &data.active_ri,
+                            &data.geo,
+                            data.last_bent_res.as_ref(),
+                        );
+                    }
+                })
+                .expect("Failed to spawn rerun sender thread");
+            tx
+        });
 
         Self {
             available_tracks,
@@ -1705,8 +1722,8 @@ impl RailTuner2DApp {
             turn_compression_min_scale: detector.obstacle_config.turn_compression_min_scale,
             turn_compression_max_scale: detector.obstacle_config.turn_compression_max_scale,
 
-            rec_stream,
-            stream_to_rerun: true,
+            rerun_tx,
+            stream_to_rerun: false,
 
             detector: detector,
             last_res: None,
@@ -1886,15 +1903,13 @@ impl RailTuner2DApp {
         self.last_res = real_res;
         self.active_range_image = Some(active_ri);
 
-        // Отправка в Rerun (2 окна: 3D и 2D)
+        // Неблокирующая отправка в Rerun (2 окна: 3D и 2D)
         let t_rerun = Instant::now();
         if self.stream_to_rerun {
-            if let Some(ref rec) = self.rec_stream {
-                rec.set_time_sequence("frame", frame.idx as i64);
-
-                let geo = &self.detector.geometry;
+            if let Some(ref tx) = self.rerun_tx {
+                let geo = self.detector.geometry.clone();
                 let raw_ri = &frame.range_image;
-                let active_ri = self.active_range_image.as_ref().unwrap_or(raw_ri);
+                let active_ri = self.active_range_image.as_ref().unwrap_or(raw_ri).clone();
 
                 // ─── ОКНО 1: 3D сцена ───
                 // Точки реального физического неискривленного облака из RangeImage
@@ -1917,19 +1932,16 @@ impl RailTuner2DApp {
                     }
                 }
 
-                // ─── ОКНО 1: Истинные физические точки лидара в реальном мире (3D неискривленное облако) ───
-                let _ = rec.log(
-                    "world/point_cloud",
-                    &Points3D::new(&pts_real)
-                        .with_colors(colors)
-                        .with_radii([Radius::new_ui_points(1.2)]),
-                );
-
-                // 3D рельсы, шпалы, экстраполяция, шейпкаст и препятствия с ВОССТАНОВЛЕННЫМ реальным положением:
-                let _ = rec.log_rail_detection(self.last_res.as_ref());
-
-                // ─── ОКНО 2: 2D Карта глубины, путей, шейпкаста и препятствий ───
-                let _ = rec.log_rail_detection_2d(active_ri, geo, self.last_bent_res.as_ref());
+                let data = RerunFrameData {
+                    frame_idx: frame.idx,
+                    pts_real,
+                    colors,
+                    last_res: self.last_res.clone(),
+                    last_bent_res: self.last_bent_res.clone(),
+                    active_ri,
+                    geo,
+                };
+                let _ = tx.try_send(data);
             }
             self.profiling.rerun_stream_ms = t_rerun.elapsed().as_secs_f32() * 1000.0;
         } else {
@@ -1954,7 +1966,11 @@ impl RailTuner2DApp {
             self.profiling.egui_paint_ms = t_paint.elapsed().as_secs_f32() * 1000.0;
 
             let t_upload = Instant::now();
-            self.texture = Some(ctx.load_texture("range_view", color_img, TextureOptions::LINEAR));
+            if let Some(ref mut tex) = self.texture {
+                tex.set(color_img, TextureOptions::LINEAR);
+            } else {
+                self.texture = Some(ctx.load_texture("range_view", color_img, TextureOptions::LINEAR));
+            }
             self.profiling.texture_upload_ms = t_upload.elapsed().as_secs_f32() * 1000.0;
 
             self.profiling.total_pipeline_ms = self.profiling.calc_pipeline_ms
@@ -1991,7 +2007,8 @@ impl eframe::App for RailTuner2DApp {
         // Playback ticker
         if self.is_playing && max_frames > 0 {
             let interval = Duration::from_secs_f32(1.0 / self.fps.max(1.0));
-            if self.last_tick.elapsed() >= interval {
+            let elapsed = self.last_tick.elapsed();
+            if elapsed >= interval {
                 self.last_tick = Instant::now();
                 if self.current_frame_idx + 1 < max_frames {
                     self.current_frame_idx += 1;
@@ -1999,8 +2016,10 @@ impl eframe::App for RailTuner2DApp {
                     self.current_frame_idx = 0;
                     self.detector.reset();
                 }
+                ui.ctx().request_repaint_after(interval);
+            } else {
+                ui.ctx().request_repaint_after(interval.saturating_sub(elapsed));
             }
-            ui.ctx().request_repaint();
         }
 
         // Process frame if frame changed or not painted yet

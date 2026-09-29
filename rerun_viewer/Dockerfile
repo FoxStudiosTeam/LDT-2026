@@ -11,4 +11,4 @@ EXPOSE 9090
 # --serve-web хостит веб-клиент на порту 9090 и gRPC сервер на порту 9876
 # --bind 0.0.0.0 делает интерфейсы доступными на всех сетевых адресах
 ENTRYPOINT ["rerun"]
-CMD ["--serve-web", "--bind", "0.0.0.0", "--port", "9876", "--web-viewer-port", "9090"]
+CMD ["--serve-web", "--bind", "0.0.0.0", "--port", "9876", "--web-viewer-port", "9090", "--cors-allow-origin", "*"]

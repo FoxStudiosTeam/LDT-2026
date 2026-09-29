@@ -1,7 +1,7 @@
 .PHONY: help setup up up-50m up-58m up-quiet up-quietplus rerun down logs play interactive tuner listen listen-raw stream
 
 # Пресет детекции: Quiet (50m, высокая стабильность) или QuietPlus (58m, расширенная перспектива)
-PRESET ?= QuietPlus
+PRESET ?= Quiet
 
 # Значения по умолчанию для плеера датасетов
 BAG ?=
@@ -16,7 +16,7 @@ help:
 	@echo "Основные команды:"
 	@echo "  make setup         — Подготовить окружение (.env и папку dataset)"
 	@echo "  make tuner         — Запустить веб-панель тюнера (http://localhost:6080)"
-	@echo "  make up            — Запустить детектор + Rerun Web (пресет QuietPlus 58m)"
+	@echo "  make up            — Запустить детектор + Rerun Web (пресет Quiet 50m)"
 	@echo "  make up-50m        — Запустить детектор с пресетом Quiet (50m)"
 	@echo "  make up-58m        — Запустить детектор с пресетом QuietPlus (58m)"
 	@echo "  make rerun         — Запустить Rerun Web Viewer (http://localhost:9090)"
